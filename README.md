@@ -54,33 +54,3 @@ Smart_Running_Checkpoint_IoT/
 └── README.md
 ```
 
-## Chạy web quản trị
-
-**Yêu cầu:** Node.js 22.12+ hoặc Node.js 24, kèm npm.
-
-Tại thư mục gốc dự án, chạy các lệnh sau trong PowerShell:
-
-```powershell
-Set-Location apps/admin-web
-npm.cmd ci
-npm.cmd run dev
-```
-
-Truy cập [http://127.0.0.1:5173](http://127.0.0.1:5173). Nếu cổng đang được sử dụng, dùng địa chỉ được hiển thị trong terminal. Nhấn `Ctrl+C` để dừng ứng dụng.
-
-Ứng dụng mặc định sử dụng dữ liệu mô phỏng, không cần cấu hình `.env` hoặc khởi động các thành phần khác. Các lần chạy tiếp theo chỉ cần `npm.cmd run dev` nếu đã cài thư viện và không thay đổi dependency. Trên macOS/Linux, dùng `npm` thay cho `npm.cmd`.
-
-## Kiểm tra và build
-
-Chạy các lệnh tại `apps/admin-web`:
-
-| Lệnh | Chức năng |
-| --- | --- |
-| `npm.cmd run typecheck` | Kiểm tra TypeScript |
-| `npm.cmd run lint` | Kiểm tra quy tắc mã nguồn |
-| `npm.cmd run test` | Kiểm thử dữ liệu và mô phỏng |
-| `npm.cmd run build` | Tạo bản production trong `dist/` |
-| `npm.cmd run preview` | Xem bản production tại cổng 5174 |
-| `npm.cmd run test:ui` | Kiểm tra giao diện bằng Microsoft Edge |
-
-Để chạy kiểm tra giao diện, build ứng dụng và giữ `npm.cmd run preview` hoạt động, sau đó chạy `npm.cmd run test:ui` trong terminal khác. Ảnh chụp và báo cáo được lưu tại `apps/admin-web/test-results/`.
