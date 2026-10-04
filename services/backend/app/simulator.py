@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import time
 import urllib.error
@@ -48,80 +49,118 @@ def timestamp(value: datetime) -> str:
 
 def main() -> None:
     """Create a paired mock wearable and follow GPS coordinates through a LAP geofence."""
-    parser = argparse.ArgumentParser(description="Phát GPS/bước chân/lap giả lập vào backend NEU Smart Running.")
+    parser = argparse.ArgumentParser(description="Tạo 20 runner mô phỏng và phát GPS/bước chân; có thể mô phỏng cả Gateway Arduino.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Địa chỉ API backend")
-    parser.add_argument("--interval", type=float, default=8.0, help="Khoảng nghỉ giữa các GPS point, giây")
+    parser.add_argument("--interval", type=float, default=None, help="Khoảng nghỉ GPS, mặc định 5s GPS_ONLY hoặc 3.5s GPS_AND_ARDUINO")
     parser.add_argument("--laps", type=int, default=1, help="Số lap giả lập; mỗi lap đợi đủ thời gian tối thiểu")
+    parser.add_argument("--students", type=int, default=20, help="Số sinh viên giả lập, tối đa 100")
+    parser.add_argument("--mode", choices=("GPS_ONLY", "GPS_AND_ARDUINO"), default="GPS_ONLY", help="Chế độ tính vòng của race demo")
     args = parser.parse_args()
 
     admin_key = os.getenv("ADMIN_API_KEY", "dev-admin-key-change-me")
     simulator_key = os.getenv("SIMULATOR_API_KEY", "dev-simulator-key-change-me")
     lap_wait = int(os.getenv("MIN_LAP_INTERVAL_SECONDS", "30"))
-    if args.interval <= 0 or args.laps < 1:
-        parser.error("interval phải > 0 và laps phải >= 1")
-    if 4 * args.interval < lap_wait:
-        parser.error(f"interval phải >= {lap_wait / 4:g} giây để GPS đi vào checkpoint sau thời gian lap tối thiểu")
+    args.interval = args.interval or (3.5 if args.mode == "GPS_AND_ARDUINO" else 5.0)
+    if args.interval <= 0 or args.laps < 1 or not 1 <= args.students <= 100:
+        parser.error("interval phải > 0, laps phải >= 1 và students phải nằm trong 1..100")
+    if args.mode == "GPS_AND_ARDUINO" and args.interval >= 4.5:
+        parser.error("GPS_AND_ARDUINO cần interval < 4.5 giây để chừa khoảng cho độ trễ API trong max_sample_gap_seconds=5")
     run_tag = uuid.uuid4().hex[:8]
     admin_header, sim_header = "X-Admin-Key", "X-Simulator-Key"
 
-    # Provision an isolated demo race and synthetic student so the command works on a fresh database.
+    # Provision a dedicated demo race; each participant gets a stable 01..N bib for UI display.
     race = request_json(args.base_url, "/api/v1/races", "POST", {
-        "name": f"Demo mô phỏng {run_tag}", "status": "LIVE", "route_name": "Tuyến mô phỏng NEU", "total_laps": max(1, args.laps),
+        "name": f"Demo mô phỏng {run_tag}", "status": "LIVE", "route_name": "Tuyến mô phỏng NEU",
+        "total_laps": args.laps, "checkpoint_mode": args.mode,
     }, admin_key, admin_header)
     race_id = race["race_id"]
-    student = request_json(args.base_url, "/api/v1/students", "POST", {
-        "student_code": f"SIM{run_tag}", "full_name": "Sinh viên mô phỏng", "faculty": "Demo",
-    }, admin_key, admin_header)
-    student_id = student["student_id"]
-    device_id = f"sim-wearable-{run_tag}"
-    request_json(args.base_url, "/api/v1/runner-devices", "POST", {
-        "device_id": device_id, "student_id": student_id,
-        "name": "GPS + step counter (simulated)",
-    }, admin_key, admin_header)
+    mock_checkpoint_lat, mock_checkpoint_lon = 21.005, 105.843
     checkpoint = request_json(args.base_url, f"/api/v1/races/{race_id}/checkpoints", "POST", {
         "code": "SIM-LAP", "name": "Vùng checkpoint vòng chạy mô phỏng", "sequence_no": 1,
-        "kind": "LAP", "latitude": 21.005, "longitude": 105.843, "radius_m": 25,
+        "kind": "LAP", "latitude": mock_checkpoint_lat, "longitude": mock_checkpoint_lon,
+        "radius_m": 25 if args.mode == "GPS_ONLY" else 10,
     }, admin_key, admin_header)
     checkpoint_id = checkpoint["checkpoint_id"]
-    request_json(args.base_url, f"/api/v1/races/{race_id}/participants", "POST", {
-        "student_id": student_id, "bib_number": f"SIM-{run_tag}",
-    }, admin_key, admin_header)
-    run = request_json(args.base_url, "/api/v1/runs", "POST", {
-        "race_id": race_id, "student_id": student_id, "wearable_device_id": device_id, "source": "SIMULATOR",
-        "idempotency_key": f"sim-run-{run_tag}",
-    }, simulator_key, sim_header)
-    run_id = run["run_id"]
-    recorded_base = datetime.now(timezone.utc)
+    checkpoint_device_id = f"sim-arduino-{run_tag}"
+    gateway_key = os.getenv("GATEWAY_API_KEY", "dev-gateway-key-change-me")
+    if args.mode == "GPS_AND_ARDUINO":
+        request_json(args.base_url, f"/api/v1/checkpoints/{checkpoint_id}/devices", "POST",
+            {"device_id": checkpoint_device_id, "name": "Arduino gateway (simulated)"}, admin_key, admin_header)
 
-    print(f"Giải: {race_id} | Sinh viên: {student_id} | Phiên chạy: {run_id}")
-    # Approach from outside the geofence, enter it to count lap 1, then exit/re-enter per lap.
-    offsets_m = [-100, -80, -60, -40, -20]
-    for _ in range(args.laps - 1):
-        offsets_m.extend([30, 60, 30, -20])
+    runners = []
+    for number in range(1, args.students + 1):
+        display_id = f"{number:02d}"
+        student = request_json(args.base_url, "/api/v1/students", "POST", {
+            "student_code": f"SIM{run_tag}{display_id}", "full_name": f"Sinh viên mô phỏng {display_id}", "faculty": "Demo",
+        }, admin_key, admin_header)
+        student_id = student["student_id"]
+        wearable_id = f"sim-wearable-{run_tag}-{display_id}"
+        request_json(args.base_url, "/api/v1/runner-devices", "POST", {
+            "device_id": wearable_id, "student_id": student_id, "name": f"Wearable mô phỏng {display_id}",
+        }, admin_key, admin_header)
+        request_json(args.base_url, f"/api/v1/races/{race_id}/participants", "POST", {
+            "student_id": student_id, "bib_number": display_id,
+        }, admin_key, admin_header)
+        run = request_json(args.base_url, "/api/v1/runs", "POST", {
+            "race_id": race_id, "student_id": student_id, "wearable_device_id": wearable_id,
+            "source": "SIMULATOR", "idempotency_key": f"sim-run-{run_tag}-{display_id}",
+        }, simulator_key, sim_header)
+        runners.append({"display_id": display_id, "student_id": student_id, "wearable_id": wearable_id, "run_id": run["run_id"], "last_steps": 0})
 
-    print("Đang gửi GPS và bước chân giả lập từ cùng một thiết bị đeo...")
-    for index, offset_m in enumerate(offsets_m):
-        # These route points approach/cross the checkpoint circle; snapshots rise by 80 steps.
-        point_time = recorded_base + timedelta(seconds=index * args.interval)
-        body = {
-            "idempotency_key": f"sim-gps-{run_tag}-{index:04d}",
-            "race_id": race_id, "run_id": run_id, "student_id": student_id,
-            "wearable_device_id": device_id,
-            "latitude": 21.005 + (offset_m / 111_320), "longitude": 105.843,
-            "recorded_at": timestamp(point_time), "accuracy_m": 4.0 + (index % 3),
-            "speed_mps": min(8.0, abs(offset_m - (offsets_m[index - 1] if index else offset_m)) / args.interval),
-            "total_steps": 1000 + (index * 80), "source": "SIMULATOR",
-        }
-        accepted = request_json(args.base_url, "/api/v1/telemetry/gps", "POST", body, simulator_key, sim_header)
-        passed = accepted["checkpoint_crossings"]
-        pass_text = f", checkpoint={passed[0]['checkpoint_code']} lap={accepted['lap_count']}" if passed else ""
-        print(f"GPS {index + 1}/{len(offsets_m)}: distance={accepted['distance_total_m']} m, steps={accepted['total_steps']}{pass_text}")
-        if index < len(offsets_m) - 1:
-            time.sleep(args.interval)
+    min_cross_tick = max(1, int((lap_wait + args.interval) // args.interval))
+    # In combined mode stagger crossings beyond the ±3s match window so demo tracks do not collide.
+    crossing_stride = max(2, math.ceil(7 / args.interval)) if args.mode == "GPS_AND_ARDUINO" else 1
+    lap_stride = max(1, int((lap_wait + args.interval) // args.interval))
+    if args.mode == "GPS_AND_ARDUINO":
+        last_cross_tick = min_cross_tick + crossing_stride * (args.students * args.laps - 1)
+    else:
+        last_cross_tick = min_cross_tick + lap_stride * (args.laps - 1)
+    print(f"Giải: {race_id} | Chế độ: {args.mode} | Tạo {args.students} sinh viên, số hiển thị 01..{args.students:02d}")
+    print("Đang phát GPS và snapshot bước chân giả lập...")
+    gateway_events = []
+    for tick in range(last_cross_tick + 1):
+        cycle_started = time.monotonic()
+        for runner_index, runner in enumerate(runners):
+            # GPS_ONLY can process all runners together; combined mode assigns a unique time slot to every event.
+            crossings_for_runner = [min_cross_tick + crossing_stride * (lap_index * args.students + runner_index) for lap_index in range(args.laps)] if args.mode == "GPS_AND_ARDUINO" else [min_cross_tick + lap_index * max(1, int((lap_wait + args.interval) // args.interval)) for lap_index in range(args.laps)]
+            if tick > crossings_for_runner[-1]:
+                continue
+            entering = tick in crossings_for_runner
+            exiting = tick > 0 and (tick - 1) in crossings_for_runner
+            offset_m = 0.0 if entering else (20.0 if args.mode == "GPS_AND_ARDUINO" else 30.0)
+            point_time = datetime.now(timezone.utc)
+            runner["last_steps"] = 1000 + tick * 80
+            gps_body = {
+                "idempotency_key": f"sim-gps-{run_tag}-{runner['display_id']}-{tick:04d}",
+                "race_id": race_id, "run_id": runner["run_id"], "student_id": runner["student_id"],
+                "wearable_device_id": runner["wearable_id"],
+                "latitude": mock_checkpoint_lat + (offset_m / 111_320), "longitude": mock_checkpoint_lon,
+                "recorded_at": timestamp(point_time), "accuracy_m": 4.0,
+                "speed_mps": min(8.0, ((20.0 if args.mode == "GPS_AND_ARDUINO" else 30.0) if exiting or entering else 0.0) / args.interval),
+                "total_steps": runner["last_steps"], "source": "SIMULATOR",
+            }
+            accepted = request_json(args.base_url, "/api/v1/telemetry/gps", "POST", gps_body, simulator_key, sim_header)
+            crossings = accepted.get("checkpoint_crossings", [])
+            if args.mode == "GPS_AND_ARDUINO" and entering and crossings:
+                event_body = {"device_id": checkpoint_device_id, "device_event_id": f"sim-event-{run_tag}-{runner['display_id']}-{crossings_for_runner.index(tick) + 1:02d}",
+                    "checkpoint_id": checkpoint_id, "occurred_at": timestamp(point_time), "student_id": None}
+                gateway_event = request_json(args.base_url, "/api/v1/checkpoint-events", "POST", event_body, gateway_key, "X-Gateway-Key")
+                gateway_events.append(gateway_event["event_id"])
+                print(f"Runner {runner['display_id']} gửi passage GPS + Arduino event {gateway_event['event_id']}")
+            elif args.mode == "GPS_ONLY" and entering and crossings:
+                print(f"Runner {runner['display_id']} qua GPS checkpoint: lap={accepted['lap_count']} status={accepted.get('status', 'ACTIVE')}")
+        if tick < last_cross_tick:
+            time.sleep(max(0, args.interval - (time.monotonic() - cycle_started)))
 
-    print(f"Hoàn tất mô phỏng. GPS đã xác định {accepted['lap_count']} lap; run vẫn ACTIVE để Admin Web theo dõi.")
-    print(f"Race ID: {race_id}\nStudent ID: {student_id}\nWearable ID: {device_id}\nRun ID: {run_id}")
-    print("Dùng GET /api/v1/races/{race_id}/live và /runners để xem các số liệu vừa gửi.")
+    if gateway_events:
+        time.sleep(race.get("match_window_seconds", 3) + race.get("late_grace_seconds", 2) + 1)
+    dashboard = request_json(args.base_url, f"/api/v1/races/{race_id}/dashboard", "GET", None, admin_key, admin_header)
+    summary = dashboard["summary"]
+    print(f"Hoàn tất mô phỏng: {summary['completed_runners']}/{summary['participants']} phiên đã DONE; tổng lap={summary['laps_recorded']}.")
+    print(f"Race ID: {race_id}\nCheckpoint ID: {checkpoint_id}\nChế độ: {args.mode}")
+    print(f"Dashboard: GET /api/v1/races/{race_id}/dashboard")
+    if args.mode == "GPS_AND_ARDUINO":
+        print(f"Sự kiện chờ/mơ hồ: GET /api/v1/races/{race_id}/checkpoint-events")
 
 
 if __name__ == "__main__":
