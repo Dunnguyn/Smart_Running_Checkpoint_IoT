@@ -47,6 +47,7 @@ Smart_Running_Checkpoint_IoT/
 └── README.md
 ```
 
+<<<<<<< HEAD
 ## Chạy web quản trị
 
 **Yêu cầu:** Node.js 22.12+ hoặc Node.js 24, kèm npm.
@@ -146,3 +147,5 @@ Chạy các lệnh tại `apps/admin-web`:
 | `npm.cmd run test:ui` | Kiểm tra giao diện bằng Microsoft Edge |
 
 Để chạy kiểm tra giao diện, build ứng dụng và giữ `npm.cmd run preview` hoạt động, sau đó chạy `npm.cmd run test:ui` trong terminal khác. Ảnh chụp và báo cáo được lưu tại `apps/admin-web/test-results/`.
+=======
+>>>>>>> origin/main
