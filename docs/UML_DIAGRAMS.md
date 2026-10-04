@@ -5,7 +5,7 @@
 
 ```mermaid
 classDiagram
-  class Race { +UUID race_id; +string name; +datetime start_at; +datetime end_at; +string status; +int total_laps }
+  class Race { +UUID race_id; +string name; +datetime start_at; +datetime end_at; +string status; +int total_laps; +string checkpoint_mode; +float inner_radius_m; +float outer_radius_m; +int match_window_seconds; +int config_version }
   class Student { +UUID student_id; +string student_code; +string full_name; +string faculty; +string status }
   class RunnerWearable { +string device_id; +UUID student_id; +string name; +string status; +datetime last_seen_at }
   class RaceParticipant { +UUID id; +string bib_number; +string registration_status }
@@ -14,11 +14,15 @@ classDiagram
   class GpsPoint { +UUID gps_point_id; +UUID wearable_device_id; +float latitude; +float longitude; +datetime recorded_at; +datetime received_at; +int total_steps; +string source; +string idempotency_key }
   class LapEvent { +UUID lap_event_id; +datetime occurred_at; +int lap_no; +int duration_s; +string source; +string source_event_id; +string validation_status }
   class Device { +string device_id; +string name; +string status; +datetime last_seen_at }
-  class DeviceEvent { +UUID device_event_id; +datetime occurred_at; +datetime received_at; +string event_type; +string source_event_id; +UUID student_id_nullable; +string identity_status; +string raw_payload }
+  class DeviceEvent { +UUID device_event_id; +datetime occurred_at; +datetime received_at; +string event_type; +string source_event_id; +UUID student_id_nullable; +string match_status; +string lap_status; +string reason_code; +UUID passage_id; +int version }
+  class GPSPassage { +UUID passage_id; +UUID race_id; +UUID checkpoint_id; +UUID run_id; +UUID student_id; +datetime entry_at; +float entry_distance_m; +UUID consumed_by_event_id }
+  class GeofenceState { +UUID run_id; +UUID checkpoint_id; +string region; +datetime last_sample_at; +int config_version }
+  class MatchAudit { +UUID audit_id; +UUID event_id; +string action; +string reason; +string idempotency_key; +datetime created_at }
   class RaceService { +create_race(); +overview(); +runners(); +live_snapshot() }
   class RunService { +start_run(); +accept_gps(); +record_lap(); +finish_run() }
   class DeviceService { +accept_passage(); +mark_unassigned() }
-  class GeofenceDetector { +detect_entry(previous_gps, current_gps, checkpoint); +validate_lap_time() }
+  class GeofenceDetector { +update_region(previous_state, gps, checkpoint); +create_passage_on_outside_to_inside(); +validate_lap_time() }
+  class MatchingWorker { +scan_due_events(); +find_eligible_passages(); +mark_ambiguous(); +auto_match_one_candidate() }
   class EventHub { +connect(); +disconnect(); +publish() }
   Race "1" --> "0..*" Checkpoint
   Race "1" --> "0..*" RaceParticipant
@@ -29,16 +33,25 @@ classDiagram
   RunnerWearable "1" --> "0..*" RunSession : bound device
   RunSession "1" --> "0..*" GpsPoint
   RunnerWearable "1" --> "0..*" GpsPoint : provides GPS and steps
+  RunSession "1" --> "0..*" GPSPassage : emits geofence evidence
+  Checkpoint "1" --> "0..*" GPSPassage : geofence
+  GPSPassage "0..1" --> "0..1" DeviceEvent : consumed by at most one event
+  RunSession "1" --> "0..*" GeofenceState : state per checkpoint
+  Checkpoint "1" --> "0..*" GeofenceState : state per run
   RunSession "1" --> "0..*" LapEvent
   Checkpoint "1" --> "0..*" LapEvent
   Device "1" --> "0..*" DeviceEvent
   Checkpoint "1" --> "0..*" DeviceEvent
   Student "0..1" --> "0..*" DeviceEvent : optional identity
+  DeviceEvent "1" --> "0..*" MatchAudit : resolution history
   RaceService ..> Race
   RunService ..> RunSession
   DeviceService ..> DeviceEvent
   GeofenceDetector ..> Checkpoint : checks radius
   GeofenceDetector ..> LapEvent : creates assigned GPS lap
+  MatchingWorker ..> GPSPassage : correlates checkpoint and time
+  MatchingWorker ..> DeviceEvent : MATCHED / AMBIGUOUS / UNASSIGNED
+  MatchingWorker ..> LapEvent : count only validated Arduino match
   EventHub ..> RunService : publishes committed events
 ```
 
@@ -76,8 +89,11 @@ flowchart LR
   GW -->|REST + X-Gateway-Key| API
   API --> AUTH[API key / role checks]
   API --> DOMAIN[Race, Run, GPS geofence, Steps, Lap, Device logic]
+  API --> MATCH[Checkpoint correlation worker]
   DOMAIN --> DB[(SQL Server)]
-  DOMAIN --> HUB[WebSocket Event Hub]
+  MATCH --> DB
+  MATCH --> HUB[WebSocket Event Hub]
+  DOMAIN --> HUB
   HUB --> FE
 ```
 
@@ -92,16 +108,30 @@ flowchart LR
     AUTH --> VALID[Run ACTIVE + paired wearable + identity + timestamp + steps validation]
     VALID --> IDEM[Idempotency check]
     IDEM --> DIST[Haversine distance calculator]
-    DIST --> GEO[Outside-to-inside LAP checkpoint geofence]
-    GEO --> LAP[Create LapEvent and update lap_count]
-    LAP --> REPO[RunSession + GpsPoint + LapEvent repository]
+    DIST --> MODE{Race checkpoint mode?}
+    MODE -->|GPS_ONLY| GPSLAP[Validate and create GPS lap]
+    MODE -->|GPS_AND_ARDUINO| GEO[Hysteresis state and durable GPS passage]
+    GEO --> REPO[RunSession + GpsPoint + GPSPassage + GeofenceState repository]
+    GPSLAP --> REPO
     REPO --> COMMIT[Database transaction commit]
     COMMIT --> OUT[Accepted response port]
+  end
     COMMIT --> PUB[EventHub publish port]
+  subgraph MatchingWorker[Durable checkpoint matching worker]
+    EV[Pending Arduino event] --> WINDOW[Wait until saved match deadline]
+    WINDOW --> CAND[Find eligible passages by race, checkpoint and time]
+    CAND --> DECIDE{Candidate count / conflict}
+    DECIDE -->|0| UNASSIGNED[UNASSIGNED]
+    DECIDE -->|1| MATCHED[MATCHED then validate lap]
+    DECIDE -->|Many or competing| AMBIG[AMBIGUOUS for Admin]
+    MATCHED --> MATCHDB[Commit event, passage, lap and run]
+    UNASSIGNED --> MATCHDB
+    AMBIG --> MATCHDB
   end
   SIM[GPS and steps from paired wearable] --> IN
   AUTH --> KEY[(SIMULATOR_API_KEY)]
   REPO --> SQL[(SQL Server)]
+  MATCHDB --> SQL
   PUB --> WS[Admin WebSocket clients]
 ```
 
@@ -256,7 +286,9 @@ flowchart LR
   UC6 --> UC7((Phát hiện vào vùng checkpoint bằng GPS))
   UC7 --> UC8((Ghi lap hợp lệ))
   Gateway[Arduino Gateway] --> UC9((Gửi sự kiện phát hiện người qua))
-  UC9 --> UC10((Lưu sự kiện UNASSIGNED))
+  UC9 --> UC10((Chờ ghép GPS hoặc lưu UNASSIGNED ở GPS_ONLY))
+  UC10 --> UC11((Giữ AMBIGUOUS nếu có nhiều ứng viên))
+  Admin --> UC12((Xác nhận hoặc loại sự kiện mơ hồ))
   UC3 --> Backend[Backend FastAPI]
   UC4 --> Backend
   UC5 --> Backend
@@ -334,12 +366,13 @@ stateDiagram-v2
   FINISHED --> [*]
   note right of ACTIVE
     Chỉ phiên ACTIVE mới nhận telemetry.
-    Sự kiện Arduino không định danh vẫn là
-    UNASSIGNED và không tự tăng lap.
+    GPS_ONLY tính lap từ GPS hợp lệ.
+    GPS_AND_ARDUINO cần event được ghép;
+    Arduino không gửi danh tính runner.
   end note
 ```
 
-## 12. Sequence Diagram — Sự kiện checkpoint Arduino không định danh
+## 12. Sequence Diagram — Sự kiện Arduino ghép với GPS
 
 ```mermaid
 sequenceDiagram
@@ -353,11 +386,30 @@ sequenceDiagram
   Arduino->>Gateway: Gửi event ID, device ID, thời điểm
   Gateway->>API: POST /api/v1/checkpoint-events
   API->>API: Xác thực gateway key và payload
-  API->>API: Đặt identity_status=UNASSIGNED, student_id=null
-  API->>DB: Lưu DeviceEvent
-  API->>DB: COMMIT
-  API-->>Gateway: 202 Accepted
-  API-->>Web: Thông báo sự kiện thiết bị (nếu có kết nối live)
+  API->>API: Bắt buộc student_id=null; lấy checkpoint từ device mapping
+  alt Race GPS_ONLY
+    API->>DB: Lưu DeviceEvent UNASSIGNED, không cộng vòng
+  else Race GPS_AND_ARDUINO
+    API->>DB: Lưu DeviceEvent PENDING_MATCH + deadline + version
+    API-->>Gateway: 202 Accepted, event_id
+    Note over API,DB: Worker quét database sau deadline; restart vẫn phục hồi
+    API->>DB: Tìm GPSPassage cùng race/checkpoint trong ±3 giây
+    alt Không có ứng viên
+      API->>DB: UNASSIGNED / NO_ELIGIBLE_PASSAGE
+    else Một ứng viên duy nhất
+      API->>DB: MATCHED; kiểm tra run, checkpoint và min lap interval
+      opt Đủ điều kiện tính lap
+        API->>DB: Lưu LapEvent, tăng lap_count, tự COMPLETED khi đạt total_laps
+      end
+    else Nhiều ứng viên hoặc cùng passage cạnh tranh
+      API->>DB: AMBIGUOUS; không tự chọn người gần nhất
+      Web->>API: POST /checkpoint-events/{event_id}/resolve
+      API->>DB: Xác nhận passage hoặc DISMISS + audit
+    end
+  end
+  API->>DB: COMMIT trước realtime publish
+  API-->>Gateway: 202 Accepted / trạng thái đã lưu
+  API-->>Web: checkpoint.match.updated qua WebSocket
 ```
 
 ## 13. Communication Diagram — Sơ đồ giao tiếp
@@ -375,34 +427,74 @@ flowchart LR
   Wearable -->|1: POST GPS + steps + device_id| API
   API -->|2: load run, wearable, prior GPS, checkpoints| DB
   API -->|3: validate payload and ownership| API
-  API -->|4: detect outside-to-inside crossing| Geo
-  Geo -->|5: crossing result| API
-  API -->|6: save GPS and optional LapEvent| DB
+  API -->|4: update UNKNOWN/OUTSIDE/INSIDE; persist GPS passage in combined mode| Geo
+  Geo -->|5: passage_id and checkpoint/time evidence| API
+  API -->|6: commit GPS, region state and optional GPS-only lap| DB
   DB -->|7: commit success| API
-  API -->|8: publish gps.updated / checkpoint.passed| Hub
-  Hub -->|9: push live event| Admin
-  API -->|10: 202 Accepted| Wearable
+  Gateway[Arduino Gateway] -->|8: POST checkpoint event; student_id=null| API
+  API -->|9: save event PENDING_MATCH and deadline| DB
+  Worker[Matching worker] -->|10: query eligible passages after deadline| DB
+  Worker -->|11: auto match one; keep multiple candidates AMBIGUOUS| API
+  API -->|12: commit match/lap result, then publish| Hub
+  Hub -->|13: push committed event| Admin
+  API -->|14: 202 Accepted| Wearable
 ```
 
 ## 14. Interaction Overview Diagram — Tổng quan tương tác
 
-Sơ đồ này ghép luồng điều khiển nghiệp vụ với các tương tác chính. Các nhãn `I1` và `I2` tham chiếu lần lượt đến luồng GPS/lap ở sơ đồ tuần tự mục 9 và luồng Arduino ở mục 12.
+Sơ đồ này ghép luồng điều khiển nghiệp vụ với các tương tác chính. `I1` và `I2` lần lượt tham chiếu GPS ở mục 9 và Arduino/GPS matching ở mục 12.
 
 ```mermaid
 flowchart TD
   Start((Bắt đầu)) --> Choose{Nguồn dữ liệu?}
   Choose -->|Wearable GPS + steps| I1[[I1: GPS telemetry interaction<br/>Sequence Diagram mục 9]]
-  Choose -->|Arduino checkpoint| I2[[I2: Unassigned device event interaction<br/>Sequence Diagram mục 12]]
+  Choose -->|Arduino checkpoint| I2[[I2: Arduino GPS matching interaction<br/>Sequence Diagram mục 12]]
   I1 --> Accepted{Telemetry được chấp nhận?}
   Accepted -->|Không| Error[Trả lỗi hoặc bỏ qua bản tin trùng]
   Accepted -->|Có| Cross{Có crossing geofence đủ điều kiện?}
-  Cross -->|Có| Lap[Đã lưu LapEvent và tăng lap_count]
+  Cross -->|Có, GPS_ONLY| Lap[Đã lưu LapEvent nếu đủ điều kiện]
+  Cross -->|Có, GPS_AND_ARDUINO| Passage[Lưu GPSPassage chờ Arduino]
   Cross -->|Không| GpsOnly[Chỉ cập nhật GPS, quãng đường, bước chân]
   Lap --> Live[Commit rồi gửi WebSocket]
+  Passage --> Wait[Chờ match deadline]
+  I2 --> Wait
+  Wait --> Decision{Ứng viên hợp lệ?}
+  Decision -->|Không| Unassigned[UNASSIGNED]
+  Decision -->|Một ứng viên| Matched[MATCHED rồi kiểm tra tính vòng]
+  Decision -->|Nhiều hoặc tranh chấp| Ambiguous[AMBIGUOUS; Admin xử lý sau khi chốt]
+  Matched --> Live
+  Unassigned --> Live
+  Ambiguous --> AdminResolve[CONFIRM hoặc DISMISS + audit]
+  AdminResolve --> Live
   GpsOnly --> Live
-  I2 --> Unassigned[ Lưu DeviceEvent với identity UNASSIGNED ]
-  Unassigned --> DeviceLive[Commit rồi thông báo sự kiện thiết bị]
-  Live --> End((Kết thúc))
-  DeviceLive --> End
+  Live --> End
   Error --> End
 ```
+
+## 15. Timing Diagram — Sơ đồ thời gian
+
+Minh họa các mốc mặc định ở chế độ GPS_AND_ARDUINO; `t` là UTC. Event chỉ được chốt sau khi cửa sổ match đóng. Đây là timeline logic cho dữ liệu mô phỏng, không phải độ chính xác của cảm biến thật.
+
+```mermaid
+sequenceDiagram
+  participant W as Wearable / Simulator
+  participant G as Geofence state
+  participant A as Arduino Gateway
+  participant M as Matching worker
+  participant R as RunSession / LapEvent
+  participant H as WebSocket
+  Note over G: t0: UNKNOWN
+  W->>G: t1: GPS ngoài bán kính 15 m
+  Note over G: OUTSIDE
+  W->>G: t2: GPS trong bán kính 10 m; received trước deadline
+  G->>G: tạo GPSPassage(entry_at=t2)
+  A->>M: t3: checkpoint event (occurred_at gần t2)
+  M->>M: chờ đến max(received_at, occurred_at + 3s + 2s)
+  Note over M: candidate window = ±3s; sự kiện quá 10s tới trễ không tự ghép
+  M->>R: t4: một candidate thì MATCHED; kiểm tra min lap 30s
+  R-->>M: t5: COUNTED hoặc NOT_COUNTED với reason_code
+  M->>R: t6: commit match, passage consumption, lap/run status
+  M->>H: t7: publish checkpoint.match.updated sau commit
+```
+
+Mermaid chưa có ký pháp Timing UML đầy đủ; các mốc này dùng làm nội dung để vẽ lại bằng PlantUML hoặc diagrams.net khi cần trục trạng thái chuẩn.
