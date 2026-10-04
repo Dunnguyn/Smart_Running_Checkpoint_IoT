@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { dataMode } from "../../services";
 import { Link, useParams } from "react-router-dom";
 import {
   Plus,
@@ -11,8 +13,11 @@ import { useLive } from "../../app/LiveProvider";
 import { Badge, Panel, Empty } from "../../components/ui";
 import { datetime } from "../../utils/format";
 export function Races() {
-  const { snapshot, error } = useLive(),
+  const { snapshot, error, selectRace, races } = useLive(),
     { raceId } = useParams();
+  useEffect(() => {
+    if (raceId && races.some((r) => r.race_id === raceId)) selectRace(raceId);
+  }, [raceId, races, selectRace]);
   if (error)
     return <Empty title="Dữ liệu không khả dụng" description={error} />;
   if (!snapshot) return <div className="empty">Đang tải giải chạy…</div>;
@@ -35,17 +40,20 @@ export function Races() {
         <div>
           <div className="eyebrow">QUẢN LÝ SỰ KIỆN</div>
           <h1>{selected?.name ?? "Giải chạy"}</h1>
-          <p>Danh sách và thông tin giải chạy · Dữ liệu mô phỏng</p>
+          <p>
+            Danh sách và thông tin giải chạy ·{" "}
+            {dataMode === "api" ? "API thật" : "Mock frontend"}
+          </p>
         </div>
         <div className="disabled-action">
           <button
             className="button"
             disabled
-            title="Chưa có API contract tạo/sửa giải"
+            title="Chưa có form tạo/sửa giải; backend có POST tạo, chưa có API sửa"
           >
             <Plus size={16} /> {selected ? "Chỉnh sửa" : "Tạo giải chạy"}
           </button>
-          <small>Chờ API contract tạo / sửa</small>
+          <small>Chưa có form tạo / sửa</small>
         </div>
       </div>
       {selected ? (
@@ -61,25 +69,20 @@ export function Races() {
             <dt>Địa điểm</dt>
             <dd>{selected.location}</dd>
             <dt>Sinh viên đăng ký</dt>
-            <dd>
-              {
-                snapshot.runners.filter((r) => r.race_id === selected.race_id)
-                  .length
-              }
-            </dd>
+            <dd>{selected.participant_count ?? "—"}</dd>
             <dt>Số vòng</dt>
-            <dd>{selected.total_laps}</dd>
+            <dd>{selected.total_laps ?? "—"}</dd>
             <dt>Số checkpoint</dt>
             <dd>
-              {
-                snapshot.checkpoints.filter(
-                  (c) => c.race_id === selected.race_id,
-                ).length
-              }
+              {dataMode === "api"
+                ? "—"
+                : snapshot.checkpoints.filter(
+                    (c) => c.race_id === selected.race_id,
+                  ).length}
             </dd>
             <dt>Tuyến chạy</dt>
             <dd>
-              {selected.race_id === "neu-2026"
+              {dataMode === "mock" && selected.race_id === "neu-2026"
                 ? "Tuyến minh họa nội bộ · 1 km/vòng"
                 : "Chưa có tuyến minh họa"}
             </dd>
@@ -115,10 +118,8 @@ export function Races() {
               </p>
               <p>
                 <Users size={16} />
-                {
-                  snapshot.runners.filter((p) => p.race_id === r.race_id).length
-                }{" "}
-                sinh viên · {r.total_laps} vòng
+                {r.participant_count ?? "—"} sinh viên · {r.total_laps ?? "—"}{" "}
+                vòng
               </p>
               <span className="panel-link">Xem chi tiết giải chạy →</span>
             </Link>

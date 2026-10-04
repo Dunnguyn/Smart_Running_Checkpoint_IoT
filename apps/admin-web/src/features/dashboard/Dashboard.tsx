@@ -1,3 +1,4 @@
+import { dataMode } from "../../services";
 import { useState } from "react";
 import {
   CalendarDays,
@@ -21,6 +22,12 @@ import { RunnerTable } from "../runners/RunnerTable";
 import { datetime } from "../../utils/format";
 export function SimulationControls() {
   const { snapshot, start, pause, reset } = useLive();
+  if (dataMode === "api")
+    return (
+      <span className="simulation-tag">
+        API thật · nguồn GPS xem ở chi tiết runner
+      </span>
+    );
   return (
     <div className="simulation-controls">
       <span className="simulation-tag">
@@ -47,7 +54,7 @@ export function SimulationControls() {
   );
 }
 export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
-  const { snapshot, error } = useLive();
+  const { snapshot, error, raceId } = useLive();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   if (error)
     return <Empty title="Dữ liệu không khả dụng" description={error} />;
@@ -57,13 +64,17 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
         Đang tải không gian giải chạy…
       </div>
     );
-  const race = snapshot.races[0],
-    active = snapshot.runners.filter((r) => r.status === "ACTIVE").length,
-    completed = snapshot.runners.filter((r) => r.status === "COMPLETED").length;
+  const race = snapshot.races.find((r) => r.race_id === raceId)!,
+    active =
+      snapshot.overview?.active ??
+      snapshot.runners.filter((r) => r.status === "ACTIVE").length,
+    completed =
+      snapshot.overview?.completed ??
+      snapshot.runners.filter((r) => r.status === "COMPLETED").length;
   const kpis = [
     {
       label: "Tổng sinh viên tham gia",
-      value: snapshot.runners.length,
+      value: snapshot.overview?.total ?? snapshot.runners.length,
       icon: Users,
       color: "blue",
       note: "Đã đăng ký tham gia",
@@ -74,7 +85,7 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
       value: active,
       icon: Footprints,
       color: "teal",
-      note: `${Math.round((active / snapshot.runners.length) * 100)}% tổng sinh viên`,
+      note: `${Math.round((active / Math.max(1, snapshot.overview?.total ?? snapshot.runners.length)) * 100)}% tổng sinh viên`,
       suffix: "sinh viên",
     },
     {
@@ -82,15 +93,18 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
       value: completed,
       icon: CircleCheck,
       color: "purple",
-      note: "Hoàn thành 5 / 5 vòng",
+      note: "Kết quả phiên chạy",
       suffix: "sinh viên",
     },
     {
       label: "Sự kiện checkpoint",
-      value: snapshot.events.length,
+      value: snapshot.overview?.checkpoint_events ?? snapshot.events.length,
       icon: ScanLine,
       color: "orange",
-      note: `${snapshot.checkpoints.length} checkpoint trên tuyến`,
+      note:
+        dataMode === "api"
+          ? "Backend chưa cung cấp danh sách checkpoint"
+          : `${snapshot.checkpoints.length} checkpoint trên tuyến`,
       suffix: "sự kiện",
     },
   ];
@@ -101,9 +115,7 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
           <div className="eyebrow">TỔNG QUAN GIẢI CHẠY</div>
           <h1>
             {mapOnly ? "Bản đồ trực tiếp" : race.name}
-            <span className="year-pill">
-              {mapOnly ? "NEU RUN 2026" : "Mùa giải 2026"}
-            </span>
+            <span className="year-pill">{race.name}</span>
           </h1>
           <p>Chào mừng trở lại! Cùng theo dõi hành trình của sinh viên NEU.</p>
         </div>
@@ -115,7 +127,7 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
         </div>
         <div className="race-banner-info">
           <div>
-            <strong>Giải chạy sinh viên NEU 2026</strong>
+            <strong>{race.name}</strong>
             <Badge status={race.status} />
           </div>
           <p>
@@ -129,13 +141,15 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
             </span>
             <span>
               <Flag size={14} />
-              {snapshot.checkpoints.length} checkpoint · {race.total_laps} vòng
+              {dataMode === "api" ? "—" : snapshot.checkpoints.length}{" "}
+              checkpoint · {race.total_laps ?? "—"} vòng
             </span>
           </p>
         </div>
         <span className="race-distance">
           <strong>
-            5<span> km</span>
+            {dataMode === "api" ? "—" : "5"}
+            <span> km</span>
           </strong>
           <small>MỤC TIÊU MỖI SINH VIÊN</small>
         </span>
@@ -176,8 +190,9 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
         />
       </div>
       <p className="map-disclaimer">
-        Tuyến chạy minh họa, không phải tuyến chính thức của NEU. 8 sinh viên
-        được mô phỏng di chuyển; các vị trí còn lại có nhãn mất cập nhật.
+        {dataMode === "api"
+          ? "Backend chưa cung cấp geometry tuyến và API đọc checkpoint. Marker lấy từ GPS backend; không tự tính vòng. Mất cập nhật GPS sau 30 giây là nhãn hiển thị, không thay đổi trạng thái phiên."
+          : "Tuyến chạy minh họa, không phải tuyến chính thức của NEU. 8 sinh viên được mô phỏng di chuyển."}
       </p>
       {!mapOnly && <RunnerTable compact onSelect={setSelectedId} />}
     </>

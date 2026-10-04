@@ -1,3 +1,5 @@
+import { dataMode } from "../../services";
+import { validPosition } from "../../services/apiAdapter";
 import { useEffect, useState } from "react";
 import {
   MapContainer,
@@ -24,8 +26,11 @@ function MapActions({
 }) {
   const map = useMap();
   useEffect(() => {
-    if (route.length) map.fitBounds(latLngBounds(route), { padding: [45, 45] });
-  }, [map, route, fitRequest]);
+    if (route.length)
+      map.fitBounds(latLngBounds(route), { padding: [45, 45], maxZoom: 17 });
+    // Refit on first position / explicit action, not on every GPS point.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, route.length, fitRequest]);
   const id = selected?.student_id;
   useEffect(() => {
     if (selected?.last_latitude != null && selected.last_longitude != null)
@@ -56,10 +61,11 @@ export function LiveMap({
         r.status === "ACTIVE" &&
         r.connection === "ONLINE" &&
         r.last_latitude != null &&
-        r.last_longitude != null,
+        r.last_longitude != null &&
+        validPosition(r.last_latitude, r.last_longitude),
     ),
     selected = snapshot.runners.find((r) => r.student_id === selectedId);
-  const moving = runners.slice(0, 8);
+  const moving = dataMode === "api" ? runners : runners.slice(0, 8);
   return (
     <Panel
       title="Bản đồ trực tiếp"
@@ -98,36 +104,38 @@ export function LiveMap({
             }}
           />
           {showCheckpoints &&
-            snapshot.checkpoints.map((c) => (
-              <Marker
-                key={c.checkpoint_id}
-                title={`${c.code} · ${c.name}`}
-                position={[c.latitude, c.longitude]}
-                icon={divIcon({
-                  className: "checkpoint-marker",
-                  html: `<span>${c.order === 1 ? "⚑" : c.order}</span>`,
-                  iconSize: [30, 30],
-                  iconAnchor: [15, 15],
-                })}
-              >
-                <Popup>
-                  <strong>
-                    {c.code} · {c.name}
-                  </strong>
-                  <p>{c.device}</p>
-                </Popup>
-              </Marker>
-            ))}
+            snapshot.checkpoints
+              .filter((c) => validPosition(c.latitude, c.longitude))
+              .map((c) => (
+                <Marker
+                  key={c.checkpoint_id}
+                  title={`${c.code} · ${c.name}`}
+                  position={[c.latitude, c.longitude]}
+                  icon={divIcon({
+                    className: "checkpoint-marker",
+                    html: `<span>${c.order === 1 ? "⚑" : c.order}</span>`,
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15],
+                  })}
+                >
+                  <Popup>
+                    <strong>
+                      {c.code} · {c.name}
+                    </strong>
+                    <p>{c.device}</p>
+                  </Popup>
+                </Marker>
+              ))}
           {showRunners &&
             moving.map((r) => (
               <Marker
-                key={r.student_id}
+                key={r.run_id || r.student_id}
                 title={`Bib ${r.bib} · ${r.full_name}`}
                 position={[r.last_latitude!, r.last_longitude!]}
                 eventHandlers={{ click: () => onSelect(r.student_id) }}
                 icon={divIcon({
                   className: `runner-marker ${r.student_id === selectedId ? "selected" : ""}`,
-                  html: `<span style="background:${r.color}">${r.bib}</span>`,
+                  html: `<span style="background:${r.color}">${r.bib.replace(/[<>&"']/g, "")}</span>`,
                   iconSize: [38, 38],
                   iconAnchor: [19, 19],
                 })}
@@ -149,13 +157,14 @@ export function LiveMap({
             selected &&
             !moving.some((r) => r.student_id === selectedId) &&
             selected.last_latitude != null &&
-            selected.last_longitude != null && (
+            selected.last_longitude != null &&
+            validPosition(selected.last_latitude, selected.last_longitude) && (
               <Marker
                 title={`Bib ${selected.bib} · ${selected.full_name}`}
                 position={[selected.last_latitude, selected.last_longitude]}
                 icon={divIcon({
                   className: "runner-marker selected",
-                  html: `<span style="background:${selected.color}">${selected.bib}</span>`,
+                  html: `<span style="background:${selected.color}">${selected.bib.replace(/[<>&"']/g, "")}</span>`,
                   iconSize: [38, 38],
                 })}
               >
@@ -163,13 +172,23 @@ export function LiveMap({
               </Marker>
             )}
           <MapActions
-            route={snapshot.route}
+            route={
+              snapshot.route.length
+                ? snapshot.route
+                : runners.map(
+                    (r) =>
+                      [r.last_latitude!, r.last_longitude!] as [number, number],
+                  )
+            }
             selected={selected}
             fitRequest={fit}
           />
         </MapContainer>
         <div className="map-caption">
-          <span className="route-dot" /> Tuyến minh họa · 1 km / vòng
+          <span className="route-dot" />{" "}
+          {dataMode === "api"
+            ? "Chưa có geometry tuyến từ backend"
+            : "Tuyến minh họa · 1 km / vòng"}
         </div>
         <div className="map-buttons">
           <button

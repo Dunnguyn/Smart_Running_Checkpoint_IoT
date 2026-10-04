@@ -7,11 +7,13 @@ const errors = [],
 page.on("pageerror", (error) => errors.push(error.message));
 page.on("request", (request) => {
   if (/\/api\/v1\/|\/ws\/v1\//.test(request.url()))
-    backendRequests.push(request.url());
+    backendRequests.push(new URL(request.url()).pathname);
 });
-page.on("websocket", (socket) => backendRequests.push(socket.url()));
+page.on("websocket", (socket) =>
+  backendRequests.push(new URL(socket.url()).pathname),
+);
 await mkdir("test-results", { recursive: true });
-await page.goto("http://127.0.0.1:5174/");
+await page.goto("http://localhost:5174/");
 await expect(
   page.getByRole("heading", { name: "NEU RUN 2026", exact: false }),
 ).toBeVisible();
@@ -70,7 +72,7 @@ await expect(
   page.locator(".detail-metrics").getByRole("heading").nth(2),
 ).not.toHaveText("00:35:00");
 await page.screenshot({ path: "test-results/detail.png", fullPage: true });
-await page.goto("http://127.0.0.1:5174/runners");
+await page.goto("http://localhost:5174/runners");
 await page.getByLabel("Lọc trạng thái").selectOption("COMPLETED");
 await expect(page.locator(".pagination")).toContainText("32 sinh viên");
 await expect(page.locator("tbody .badge-completed")).toHaveCount(10);
@@ -79,22 +81,23 @@ await page.getByLabel("Tìm theo họ tên hoặc mã sinh viên").fill("khongti
 await expect(
   page.getByText("Không tìm thấy kết quả", { exact: true }),
 ).toBeVisible();
-await page.goto("http://127.0.0.1:5174/checkpoints/cp-2");
+await page.goto("http://localhost:5174/checkpoints/cp-2");
 await expect(
   page.getByText("Chưa xác định sinh viên", { exact: true }),
 ).toBeVisible();
-await page.goto("http://127.0.0.1:5174/races/neu-autumn");
+await page.goto("http://localhost:5174/races/neu-autumn");
 await expect(
   page.getByText("Chưa có tuyến minh họa", { exact: true }),
 ).toBeVisible();
-await page.goto("http://127.0.0.1:5174/");
+await page.goto("http://localhost:5174/");
+await page.getByLabel("Chọn giải chạy").selectOption("neu-2026");
 await page
   .getByRole("button", { name: "Đặt lại mô phỏng", exact: true })
   .click();
 await expect(
   page.getByRole("button", { name: "Bắt đầu", exact: true }),
 ).toBeVisible();
-await page.goto("http://127.0.0.1:5174/runners/student-1/runs/run-1");
+await page.goto("http://localhost:5174/runners/student-1/runs/run-1");
 await expect(
   page.locator(".detail-metrics").getByRole("heading").nth(2),
 ).toHaveText("00:35:00");
@@ -103,7 +106,7 @@ for (const [name, width, height] of [
   ["mobile", 390, 844],
 ]) {
   await page.setViewportSize({ width, height });
-  await page.goto("http://127.0.0.1:5174/");
+  await page.goto("http://localhost:5174/");
   await expect(page.locator(".runner-marker")).toHaveCount(8);
   await page.waitForTimeout(700);
   expect(

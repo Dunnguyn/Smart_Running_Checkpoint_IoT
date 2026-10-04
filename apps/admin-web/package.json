@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host localhost",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview --host 127.0.0.1 --port 5174",
+    "preview": "vite preview --host localhost --port 5174",
     "test:ui": "node scripts/verify-ui.mjs",
     "format": "prettier --write src scripts *.json *.ts *.js *.html *.md"
   },
