@@ -1756,3 +1756,73 @@ footer > span:last-child {
     transition: none !important;
   }
 }
+
+.connection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  background: #eff6ff;
+  border-bottom: 1px solid #dbeafe;
+}
+.connection-bar select {
+  max-width: 320px;
+  margin-left: 8px;
+}
+.connection-error {
+  padding: 12px 24px;
+  color: #991b1b;
+  background: #fee2e2;
+}
+.auth-panel {
+  max-width: 600px;
+  margin: 12vh auto;
+  padding: 32px;
+}
+.auth-panel form {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+.connection-bar,
+.connection-error {
+  margin-left: 208px;
+}
+.connection-bar label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.connection-bar select {
+  min-width: 0;
+  flex-shrink: 1;
+}
+@media (min-width: 1500px) {
+  .connection-bar,
+  .connection-error {
+    margin-left: 225px;
+  }
+}
+@media (max-width: 1250px) {
+  .connection-bar,
+  .connection-error {
+    margin-left: 175px;
+  }
+}
+@media (max-width: 1000px) {
+  .connection-bar,
+  .connection-error {
+    margin-left: 74px;
+  }
+}
+@media (max-width: 480px) {
+  .connection-bar,
+  .connection-error {
+    margin-left: 58px;
+    padding: 12px;
+    font-size: 11px;
+  }
+}

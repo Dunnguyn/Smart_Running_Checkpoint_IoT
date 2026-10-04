@@ -18,7 +18,7 @@ function RunnersPage() {
         <div>
           <div className="eyebrow">QUẢN LÝ SINH VIÊN</div>
           <h1>Sinh viên tham gia</h1>
-          <p>NEU RUN 2026 · Theo dõi tiến độ và chi tiết phiên chạy</p>
+          <p>Theo dõi tiến độ và chi tiết phiên chạy của giải đang chọn</p>
         </div>
         <SimulationControls />
       </div>

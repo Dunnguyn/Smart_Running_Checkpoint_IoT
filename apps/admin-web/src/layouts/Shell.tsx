@@ -1,3 +1,4 @@
+import { dataMode } from "../services";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
@@ -111,7 +112,8 @@ export function Shell() {
             </NavLink>
           </div>
           <div className="system">
-            <i /> Chế độ mô phỏng <span>v1.0</span>
+            <i /> {dataMode === "api" ? "Kết nối API" : "Chế độ mô phỏng"}{" "}
+            <span>v1.0</span>
           </div>
         </div>
       </aside>
@@ -197,7 +199,10 @@ export function Shell() {
         <footer>
           <span>© 2026 NEU RUN · Đại học Kinh tế Quốc dân</span>
           <span>
-            <i /> Dữ liệu mô phỏng · Không kết nối backend
+            <i />{" "}
+            {dataMode === "api"
+              ? "API thật · nguồn dữ liệu do backend cung cấp"
+              : "Mock frontend · Không kết nối backend"}
           </span>
         </footer>
       </div>

@@ -1,3 +1,4 @@
+import { dataMode } from "../../services";
 import { Link, useParams } from "react-router-dom";
 import { Plus, ArrowLeft } from "lucide-react";
 import { useLive } from "../../app/LiveProvider";
@@ -19,7 +20,11 @@ export function Checkpoints() {
     return (
       <Empty
         title="Không tìm thấy checkpoint"
-        description="Kiểm tra lại đường dẫn."
+        description={
+          dataMode === "api"
+            ? "Backend chưa có API đọc thông tin checkpoint."
+            : "Kiểm tra lại đường dẫn."
+        }
       />
     );
   return (
@@ -36,19 +41,20 @@ export function Checkpoints() {
             {selected ? `${selected.code} · ${selected.name}` : "Checkpoint"}
           </h1>
           <p>
-            {snapshot.checkpoints.length} điểm trên tuyến minh họa · Dữ liệu mô
-            phỏng
+            {dataMode === "api"
+              ? "Backend chưa cung cấp API đọc danh sách / vị trí checkpoint."
+              : `${snapshot.checkpoints.length} điểm trên tuyến minh họa · Mock frontend`}
           </p>
         </div>
         <div className="disabled-action">
           <button
             className="button"
             disabled
-            title="Chưa có API contract tạo/sửa checkpoint"
+            title="Chưa có form tạo checkpoint; backend có POST tạo, chưa có API sửa"
           >
             <Plus size={16} /> {selected ? "Chỉnh sửa" : "Thêm checkpoint"}
           </button>
-          <small>Chờ API contract tạo / sửa</small>
+          <small>Chưa có form tạo / sửa</small>
         </div>
       </div>
       {selected ? (
@@ -148,14 +154,12 @@ export function Checkpoints() {
                 <tr key={e.event_id}>
                   <td>{datetime(e.occurred_at)}</td>
                   <td>
-                    {
-                      snapshot.checkpoints.find(
-                        (c) => c.checkpoint_id === e.checkpoint_id,
-                      )?.code
-                    }
+                    {snapshot.checkpoints.find(
+                      (c) => c.checkpoint_id === e.checkpoint_id,
+                    )?.code ?? e.checkpoint_id}
                   </td>
                   <td>
-                    {e.student_id ? (
+                    {e.student_id && e.run_id ? (
                       <Link
                         className="text-link"
                         to={`/runners/${e.student_id}/runs/${e.run_id}`}
@@ -165,7 +169,7 @@ export function Checkpoints() {
                         )?.full_name ?? e.student_id}
                       </Link>
                     ) : (
-                      "Chưa xác định sinh viên"
+                      (e.student_id ?? "Chưa xác định sinh viên")
                     )}
                   </td>
                   <td>{e.source}</td>

@@ -2,13 +2,20 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Footprints, Timer, Flag, MapPin } from "lucide-react";
 import { useLive } from "../../app/LiveProvider";
-import { raceService } from "../../services";
+import { dataMode, raceService } from "../../services";
 import type { RunDetail as Detail } from "../../types/domain";
 import { Badge, Panel, Empty } from "../../components/ui";
 import { datetime, distance, duration } from "../../utils/format";
 export function RunDetail() {
   const { studentId = "", runId = "" } = useParams(),
-    { snapshot } = useLive();
+    { snapshot, mergeRunners } = useLive();
+  const [refresh, setRefresh] = useState(0);
+  const mockSnapshot = dataMode === "mock" ? snapshot : null;
+  useEffect(() => {
+    if (dataMode !== "api") return;
+    const timer = setInterval(() => setRefresh((n) => n + 1), 5000);
+    return () => clearInterval(timer);
+  }, []);
   const [detail, setDetail] = useState<Detail | null>(null),
     [error, setError] = useState("");
   useEffect(() => {
@@ -17,7 +24,10 @@ export function RunDetail() {
     raceService
       .getRunDetail(studentId, runId)
       .then((d) => {
-        if (!disposed) setDetail(d);
+        if (!disposed) {
+          setDetail(d);
+          if (dataMode === "api") mergeRunners([d.run]);
+        }
       })
       .catch((e) => {
         if (!disposed) {
@@ -28,16 +38,35 @@ export function RunDetail() {
     return () => {
       disposed = true;
     };
-  }, [studentId, runId, snapshot]);
+  }, [studentId, runId, mockSnapshot, refresh, mergeRunners]);
   if (error)
-    return <Empty title="Không tìm thấy phiên chạy" description={error} />;
-  if (!detail)
+    return (
+      <>
+        <Empty title="Không tải được phiên chạy" description={error} />
+        <button className="button" onClick={() => setRefresh((n) => n + 1)}>
+          Thử lại
+        </button>
+      </>
+    );
+  if (
+    !detail ||
+    detail.run.run_id !== runId ||
+    detail.run.student_id !== studentId
+  )
     return (
       <div className="empty" role="status">
         Đang tải phiên chạy…
       </div>
     );
-  const r = detail.run;
+  const shared = snapshot?.runners.find(
+    (r) => r.run_id === runId && r.student_id === studentId,
+  );
+  const r =
+    shared &&
+    detail.run.status !== "COMPLETED" &&
+    (shared.last_seen_at ?? "") >= (detail.run.last_seen_at ?? "")
+      ? { ...detail.run, ...shared }
+      : detail.run;
   return (
     <>
       <Link className="back-link" to="/runners">
@@ -45,7 +74,10 @@ export function RunDetail() {
       </Link>
       <div className="page-title">
         <div>
-          <div className="eyebrow">CHI TIẾT PHIÊN CHẠY · DỮ LIỆU MÔ PHỎNG</div>
+          <div className="eyebrow">
+            CHI TIẾT PHIÊN CHẠY ·{" "}
+            {dataMode === "api" ? "API THẬT" : "MOCK FRONTEND"}
+          </div>
           <h1>{r.full_name}</h1>
           <p>
             #{r.bib} · {r.student_code} · {r.faculty}
@@ -58,7 +90,7 @@ export function RunDetail() {
           {
             icon: Flag,
             label: "Số vòng",
-            value: `${r.lap_count} / ${r.total_laps}`,
+            value: `${r.lap_count} / ${r.total_laps || "—"}`,
           },
           {
             icon: MapPin,
@@ -87,7 +119,10 @@ export function RunDetail() {
         <Panel title="Thông tin phiên chạy">
           <dl className="info-list">
             <dt>Giải chạy</dt>
-            <dd>NEU RUN 2026</dd>
+            <dd>
+              {snapshot?.races.find((race) => race.race_id === r.race_id)
+                ?.name ?? r.race_id}
+            </dd>
             <dt>Mã phiên</dt>
             <dd>{r.run_id}</dd>
             <dt>Bắt đầu</dt>
@@ -113,12 +148,16 @@ export function RunDetail() {
                   : "Chưa có vị trí"}
             </dd>
             <dt>Nguồn dữ liệu</dt>
-            <dd>SIMULATOR</dd>
+            <dd>{r.source}</dd>
           </dl>
         </Panel>
         <Panel
           title="Các vòng đã hoàn thành"
-          subtitle="Kết quả mô phỏng, chưa phải kết quả chính thức"
+          subtitle={
+            dataMode === "api"
+              ? "Kết quả do backend ghi nhận"
+              : "Kết quả mock frontend"
+          }
         >
           {detail.laps.length ? (
             <div className="lap-list">
@@ -143,49 +182,84 @@ export function RunDetail() {
           )}
         </Panel>
       </div>
-      <Panel
-        title="Lịch sử sự kiện checkpoint"
-        subtitle="Chỉ hiển thị sự kiện đã gắn đúng sinh viên và phiên chạy"
-      >
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>SỰ KIỆN</th>
-                <th>CHECKPOINT</th>
-                <th>THỜI ĐIỂM</th>
-                <th>NGUỒN</th>
-                <th>TRẠNG THÁI</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.events.map((e) => (
-                <tr key={e.event_id}>
-                  <td>{e.event_id}</td>
-                  <td>
-                    {snapshot?.checkpoints.find(
-                      (c) => c.checkpoint_id === e.checkpoint_id,
-                    )?.name ?? e.checkpoint_id}
-                  </td>
-                  <td>{datetime(e.occurred_at)}</td>
-                  <td>{e.source}</td>
-                  <td>
-                    <span className="badge badge-completed">
-                      Đã gắn sinh viên
-                    </span>
-                  </td>
+      {detail.history && (
+        <Panel
+          title="Lịch sử GPS / LAP"
+          subtitle="Sự kiện của đúng sinh viên và phiên chạy từ backend"
+        >
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>LOẠI</th>
+                  <th>THỜI ĐIỂM</th>
+                  <th>VỊ TRÍ / VÒNG</th>
+                  <th>BƯỚC CHÂN</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {!detail.events.length && (
-          <Empty
-            title="Chưa có sự kiện checkpoint"
-            description="Không có sự kiện được ghi nhận cho phiên này."
-          />
-        )}
-      </Panel>
+              </thead>
+              <tbody>
+                {detail.history.map((e) => (
+                  <tr key={e.id}>
+                    <td>{e.type}</td>
+                    <td>{datetime(e.occurred_at)}</td>
+                    <td>
+                      {e.type === "LAP"
+                        ? `Vòng ${e.lap_no}`
+                        : `${e.latitude ?? "—"}, ${e.longitude ?? "—"}`}
+                    </td>
+                    <td>{e.total_steps ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+      {dataMode === "mock" && (
+        <Panel
+          title="Lịch sử sự kiện checkpoint"
+          subtitle="Chỉ hiển thị sự kiện đã gắn đúng sinh viên và phiên chạy"
+        >
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>SỰ KIỆN</th>
+                  <th>CHECKPOINT</th>
+                  <th>THỜI ĐIỂM</th>
+                  <th>NGUỒN</th>
+                  <th>TRẠNG THÁI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.events.map((e) => (
+                  <tr key={e.event_id}>
+                    <td>{e.event_id}</td>
+                    <td>
+                      {snapshot?.checkpoints.find(
+                        (c) => c.checkpoint_id === e.checkpoint_id,
+                      )?.name ?? e.checkpoint_id}
+                    </td>
+                    <td>{datetime(e.occurred_at)}</td>
+                    <td>{e.source}</td>
+                    <td>
+                      <span className="badge badge-completed">
+                        Đã gắn sinh viên
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!detail.events.length && (
+            <Empty
+              title="Chưa có sự kiện checkpoint"
+              description="Không có sự kiện được ghi nhận cho phiên này."
+            />
+          )}
+        </Panel>
+      )}
     </>
   );
 }

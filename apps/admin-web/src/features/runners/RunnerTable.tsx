@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Search,
@@ -8,7 +8,7 @@ import {
   Users,
 } from "lucide-react";
 import { useLive } from "../../app/LiveProvider";
-import { raceService } from "../../services";
+import { dataMode, raceService } from "../../services";
 import type {
   PaginatedResponse,
   RunSession,
@@ -24,7 +24,16 @@ export function RunnerTable({
   compact?: boolean;
   onSelect?: (id: string) => void;
 }) {
-  const { snapshot } = useLive();
+  const { snapshot, raceId, retry, mergeRunners } = useLive();
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    if (dataMode !== "api") return;
+    const timer = setInterval(() => setRefresh((n) => n + 1), 5000);
+    return () => clearInterval(timer);
+  }, []);
+  const hasSnapshot = !!snapshot;
+  const mockSnapshot = dataMode === "mock" ? snapshot : null;
+  const loadedQuery = useRef("");
   const [params, setParams] = useSearchParams();
   const query = params.get("q") ?? "",
     status = (params.get("status") ?? "") as RunStatus | "";
@@ -42,31 +51,60 @@ export function RunnerTable({
   };
   useEffect(() => {
     setPage(1);
-  }, [query, status]);
+  }, [query, status, raceId]);
   useEffect(() => {
     let disposed = false;
-    raceService
-      .listRunners("neu-2026", {
-        search: query,
-        status,
-        sort,
-        direction,
-        page,
-        page_size: compact ? 6 : 10,
-      })
-      .then((r) => {
-        if (!disposed) {
-          setResult(r);
-          setError("");
-        }
-      })
-      .catch(() => {
-        if (!disposed) setError("Không tải được danh sách sinh viên.");
-      });
+    if (!raceId || !snapshot) return;
+    const queryKey = JSON.stringify([
+      raceId,
+      query,
+      status,
+      sort,
+      direction,
+      page,
+      compact,
+    ]);
+    if (loadedQuery.current !== queryKey) setResult(null);
+    const timer = setTimeout(() => {
+      raceService
+        .listRunners(raceId, {
+          search: query,
+          status,
+          sort,
+          direction,
+          page,
+          page_size: compact ? 6 : 10,
+        })
+        .then((r) => {
+          if (!disposed) {
+            loadedQuery.current = queryKey;
+            setResult(r);
+            if (dataMode === "api") mergeRunners(r.items);
+            setError("");
+          }
+        })
+        .catch((e: Error) => {
+          if (!disposed) setError(e.message);
+        });
+    }, 300);
     return () => {
       disposed = true;
+      clearTimeout(timer);
     };
-  }, [snapshot, query, status, sort, direction, page, compact]);
+    // Live positions are merged below; server filters refresh at most once per 5 seconds.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mockSnapshot,
+    hasSnapshot,
+    raceId,
+    refresh,
+    query,
+    status,
+    sort,
+    direction,
+    page,
+    compact,
+  ]);
   function sorting(field: RunnerFilters["sort"]) {
     setDirection(sort === field && direction === "desc" ? "asc" : "desc");
     setSort(field);
@@ -106,7 +144,18 @@ export function RunnerTable({
         </div>
       </div>
       {error ? (
-        <Empty title="Dữ liệu không khả dụng" description={error} />
+        <>
+          <Empty title="Dữ liệu không khả dụng" description={error} />
+          <button
+            className="button"
+            onClick={() => {
+              setRefresh((n) => n + 1);
+              retry();
+            }}
+          >
+            Thử lại
+          </button>
+        </>
       ) : !result ? (
         <div className="empty" role="status">
           Đang tải sinh viên…
@@ -155,7 +204,15 @@ export function RunnerTable({
                         : "none"
                     }
                   >
-                    <button onClick={() => sorting("duration_total_s")}>
+                    <button
+                      disabled={dataMode === "api"}
+                      title={
+                        dataMode === "api"
+                          ? "Backend chưa hỗ trợ sắp xếp thời gian"
+                          : undefined
+                      }
+                      onClick={() => sorting("duration_total_s")}
+                    >
                       THỜI GIAN <ArrowDownUp size={12} />
                     </button>
                   </th>
@@ -166,78 +223,101 @@ export function RunnerTable({
                 </tr>
               </thead>
               <tbody>
-                {result.items.map((r) => (
-                  <tr
-                    key={r.run_id}
-                    onClick={(e) => {
-                      if ((e.target as HTMLElement).closest("a,button")) return;
-                      const link =
-                        e.currentTarget.querySelector<HTMLAnchorElement>("a");
-                      link?.click();
-                    }}
-                  >
-                    <td>
-                      <span
-                        className="table-bib"
-                        style={{ color: r.color, background: r.color + "12" }}
-                      >
-                        #{r.bib}
-                      </span>
-                    </td>
-                    <td>
-                      <Link
-                        className="student-link"
-                        to={`/runners/${r.student_id}/runs/${r.run_id}`}
-                      >
-                        <strong>{r.full_name}</strong>
-                        <small>{r.student_code}</small>
-                      </Link>
-                    </td>
-                    <td className="faculty-cell">{r.faculty}</td>
-                    <td>
-                      <strong>{r.lap_count}</strong>
-                      <span className="muted"> / {r.total_laps}</span>
-                      <div className="mini-progress">
-                        <i
-                          style={{
-                            width: `${(r.lap_count / r.total_laps) * 100}%`,
-                            background: r.color,
-                          }}
-                        />
-                      </div>
-                    </td>
-                    <td className="number-cell">
-                      {distance(r.distance_total_m)}
-                    </td>
-                    <td className="number-cell">
-                      {duration(r.duration_total_s)}
-                    </td>
-                    <td className="number-cell">
-                      {duration(r.last_lap_duration_s)}
-                    </td>
-                    <td>{r.total_steps?.toLocaleString("vi-VN") ?? "—"}</td>
-                    <td>
-                      <Badge status={r.status} />
-                      {r.connection === "STALE" && (
-                        <small className="stale">Mất cập nhật</small>
-                      )}
-                    </td>
-                    <td>
-                      {onSelect && r.last_latitude != null ? (
-                        <button
-                          className="icon-button"
-                          title={`Theo dõi ${r.full_name} trên bản đồ`}
-                          aria-label={`Theo dõi bib ${r.bib}`}
-                          onClick={() => onSelect(r.student_id)}
+                {result.items.map((item) => {
+                  const live = snapshot?.runners.find(
+                    (r) =>
+                      r.run_id === item.run_id &&
+                      r.student_id === item.student_id,
+                  );
+                  const r =
+                    live &&
+                    live.last_seen_at &&
+                    (!item.last_seen_at ||
+                      live.last_seen_at >= item.last_seen_at) &&
+                    item.status !== "COMPLETED"
+                      ? { ...item, ...live }
+                      : item;
+                  return (
+                    <tr
+                      key={r.run_id || r.student_id}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest("a,button"))
+                          return;
+                        const link =
+                          e.currentTarget.querySelector<HTMLAnchorElement>("a");
+                        link?.click();
+                      }}
+                    >
+                      <td>
+                        <span
+                          className="table-bib"
+                          style={{ color: r.color, background: r.color + "12" }}
                         >
-                          <Users size={16} />
-                        </button>
-                      ) : (
-                        <ChevronRight size={16} className="muted" />
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                          #{r.bib}
+                        </span>
+                      </td>
+                      <td>
+                        <Link
+                          className="student-link"
+                          to={
+                            r.run_id
+                              ? `/runners/${r.student_id}/runs/${r.run_id}`
+                              : "#"
+                          }
+                          onClick={(e) => {
+                            if (!r.run_id) e.preventDefault();
+                          }}
+                        >
+                          <strong>{r.full_name}</strong>
+                          <small>{r.student_code}</small>
+                        </Link>
+                      </td>
+                      <td className="faculty-cell">{r.faculty}</td>
+                      <td>
+                        <strong>{r.lap_count}</strong>
+                        <span className="muted"> / {r.total_laps || "—"}</span>
+                        <div className="mini-progress">
+                          <i
+                            style={{
+                              width: `${(r.lap_count / (r.total_laps || 1)) * 100}%`,
+                              background: r.color,
+                            }}
+                          />
+                        </div>
+                      </td>
+                      <td className="number-cell">
+                        {distance(r.distance_total_m)}
+                      </td>
+                      <td className="number-cell">
+                        {duration(r.duration_total_s)}
+                      </td>
+                      <td className="number-cell">
+                        {duration(r.last_lap_duration_s)}
+                      </td>
+                      <td>{r.total_steps?.toLocaleString("vi-VN") ?? "—"}</td>
+                      <td>
+                        <Badge status={r.status} />
+                        {r.connection === "STALE" && (
+                          <small className="stale">Mất cập nhật</small>
+                        )}
+                      </td>
+                      <td>
+                        {onSelect && r.last_latitude != null ? (
+                          <button
+                            className="icon-button"
+                            title={`Theo dõi ${r.full_name} trên bản đồ`}
+                            aria-label={`Theo dõi bib ${r.bib}`}
+                            onClick={() => onSelect(r.student_id)}
+                          >
+                            <Users size={16} />
+                          </button>
+                        ) : (
+                          <ChevronRight size={16} className="muted" />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -18,7 +18,7 @@ export function WatchList({
   return (
     <Panel
       title="Đang theo dõi"
-      subtitle={`${runners.length} sinh viên có vị trí mô phỏng`}
+      subtitle={`${runners.length} sinh viên có vị trí cập nhật`}
       action={<Radio size={19} className="teal" />}
       className="watch-panel"
     >
@@ -45,7 +45,7 @@ export function WatchList({
               <span className="progress">
                 <i
                   style={{
-                    width: `${r.distance_total_m / 50}%`,
+                    width: `${Math.min(100, (r.lap_count / (r.total_laps || 1)) * 100)}%`,
                     background: r.color,
                   }}
                 />
