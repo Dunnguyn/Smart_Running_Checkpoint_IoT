@@ -643,31 +643,3 @@ flowchart TD
   Live --> End
   Error --> End
 ```
-
-## 15. Timing Diagram — Sơ đồ thời gian
-
-Minh họa các mốc mặc định ở chế độ GPS_AND_ARDUINO; `t` là UTC. Event chỉ được chốt sau khi cửa sổ match đóng. Đây là timeline logic cho dữ liệu mô phỏng, không phải độ chính xác của cảm biến thật.
-
-```mermaid
-sequenceDiagram
-  participant W as Wearable / Simulator
-  participant G as Geofence state
-  participant A as Arduino Gateway
-  participant M as Matching worker
-  participant R as RunSession / LapEvent
-  participant H as WebSocket
-  Note over G: t0: UNKNOWN
-  W->>G: t1: GPS ngoài bán kính 15 m
-  Note over G: OUTSIDE
-  W->>G: t2: GPS trong bán kính 10 m; received trước deadline
-  G->>G: tạo GPSPassage(entry_at=t2)
-  A->>M: t3: checkpoint event (occurred_at gần t2)
-  M->>M: chờ đến max(received_at, occurred_at + 3s + 2s)
-  Note over M: candidate window = ±3s; sự kiện quá 10s tới trễ không tự ghép
-  M->>R: t4: một candidate thì MATCHED; kiểm tra min lap 30s
-  R-->>M: t5: COUNTED hoặc NOT_COUNTED với reason_code
-  M->>R: t6: commit match, passage consumption, lap/run status
-  M->>H: t7: publish checkpoint.match.updated sau commit
-```
-
-Mermaid chưa có ký pháp Timing UML đầy đủ; các mốc này dùng làm nội dung để vẽ lại bằng PlantUML hoặc diagrams.net khi cần trục trạng thái chuẩn.
