@@ -12,6 +12,7 @@ classDiagram
     +datetime end_at
     +string status
     +int total_laps
+    +int min_lap_interval_seconds
     +string checkpoint_mode
     +float inner_radius_m
     +float outer_radius_m
