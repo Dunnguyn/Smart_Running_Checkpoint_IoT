@@ -1,3 +1,4 @@
+import type { DashboardDto } from "../services/matchingContract";
 export type RaceStatus =
   "DRAFT" | "SCHEDULED" | "LIVE" | "COMPLETED" | "CANCELLED";
 export type RunStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "ABANDONED";
@@ -9,6 +10,7 @@ export interface Race {
   status: RaceStatus;
   total_laps: number | null;
   participant_count: number | null;
+  checkpoint_mode?: "GPS_ONLY" | "GPS_AND_ARDUINO";
 }
 export interface Student {
   student_id: string;
@@ -25,7 +27,7 @@ export interface RunnerLiveStatus {
   last_latitude: number | null;
   last_longitude: number | null;
   last_seen_at: string | null;
-  connection: "ONLINE" | "STALE" | "UNAVAILABLE";
+  connection: "ONLINE" | "STALE" | "UNAVAILABLE" | "FINISHED";
 }
 export interface RunSession extends RaceParticipant, RunnerLiveStatus {
   run_id: string;
@@ -122,4 +124,7 @@ export interface LiveSnapshot {
   updated_at: string;
   running: boolean;
   overview?: RaceOverview;
+  dashboard?: DashboardDto;
+  eventRevision?: number;
+  pendingPassages?: string[];
 }

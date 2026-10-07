@@ -58,8 +58,9 @@ export function LiveMap({
     [tileError, setTileError] = useState(false);
   const runners = snapshot.runners.filter(
       (r) =>
-        r.status === "ACTIVE" &&
-        r.connection === "ONLINE" &&
+        (dataMode === "mock"
+          ? r.status === "ACTIVE" && r.connection === "ONLINE"
+          : r.status === "ACTIVE" || r.status === "COMPLETED") &&
         r.last_latitude != null &&
         r.last_longitude != null &&
         validPosition(r.last_latitude, r.last_longitude),
@@ -74,7 +75,11 @@ export function LiveMap({
       action={
         <span className="live-label">
           <i />
-          {snapshot.running ? "ĐANG CẬP NHẬT" : "ĐÃ TẠM DỪNG"}
+          {snapshot.dashboard?.race.status === "COMPLETED"
+            ? "ĐÃ HOÀN THÀNH"
+            : snapshot.running
+              ? "ĐANG CẬP NHẬT"
+              : "ĐÃ TẠM DỪNG"}
         </span>
       }
     >
@@ -146,6 +151,8 @@ export function LiveMap({
                   </strong>
                   <p>
                     {statusLabels[r.status]} · {distance(r.distance_total_m)}
+                    {r.connection === "STALE" && " · GPS đã cũ"}
+                    {r.connection === "FINISHED" && " · Vị trí cuối phiên"}
                   </p>
                   <Link to={`/runners/${r.student_id}/runs/${r.run_id}`}>
                     Xem phiên chạy →

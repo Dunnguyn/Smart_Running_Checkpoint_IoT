@@ -1,3 +1,4 @@
+import { DashboardDetails } from "./DashboardDetails";
 import { dataMode } from "../../services";
 import { useState } from "react";
 import {
@@ -176,6 +177,12 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
             </section>
           ))}
         </div>
+      )}
+      {!mapOnly && snapshot.dashboard && (
+        <DashboardDetails
+          data={snapshot.dashboard}
+          pending={snapshot.pendingPassages?.length ?? 0}
+        />
       )}
       <div className={`live-grid ${mapOnly ? "expanded-map" : ""}`}>
         <LiveMap

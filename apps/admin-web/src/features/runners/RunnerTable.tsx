@@ -54,6 +54,7 @@ export function RunnerTable({
   }, [query, status, raceId]);
   useEffect(() => {
     let disposed = false;
+    const controller = new AbortController();
     if (!raceId || !snapshot) return;
     const queryKey = JSON.stringify([
       raceId,
@@ -67,14 +68,18 @@ export function RunnerTable({
     if (loadedQuery.current !== queryKey) setResult(null);
     const timer = setTimeout(() => {
       raceService
-        .listRunners(raceId, {
-          search: query,
-          status,
-          sort,
-          direction,
-          page,
-          page_size: compact ? 6 : 10,
-        })
+        .listRunners(
+          raceId,
+          {
+            search: query,
+            status,
+            sort,
+            direction,
+            page,
+            page_size: compact ? 6 : 10,
+          },
+          controller.signal,
+        )
         .then((r) => {
           if (!disposed) {
             loadedQuery.current = queryKey;
@@ -89,6 +94,7 @@ export function RunnerTable({
     }, 300);
     return () => {
       disposed = true;
+      controller.abort();
       clearTimeout(timer);
     };
     // Live positions are merged below; server filters refresh at most once per 5 seconds.

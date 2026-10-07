@@ -2,7 +2,6 @@ import type { RaceService } from "./interface";
 import type {
   Race,
   LiveSnapshot,
-  DeviceEvent,
   RunnerFilters,
   PaginatedResponse,
 } from "../types/domain";
@@ -16,6 +15,8 @@ import {
   type LiveRow,
   type HistoryRow,
 } from "./contract";
+import type { DashboardDto } from "./matchingContract";
+import { normalizeEvent } from "./matchingService";
 import { subscribeLive } from "./liveService";
 export { validPosition, normalizeRunner } from "./contract";
 const segment = encodeURIComponent;
@@ -39,22 +40,21 @@ export async function loadSnapshot(
   id: string,
   signal?: AbortSignal,
 ): Promise<LiveSnapshot> {
-  const [rows, live, overview, events] = await Promise.all([
-    allPages<BackendRunner>(`${racePath(id)}/runners`, signal),
-    request<{ race_id: string; server_time: string; runners: LiveRow[] }>(
-      `${racePath(id)}/live`,
-      { signal },
-    ),
-    request<Overview>(`${racePath(id)}/overview`, { signal }),
-    loadDeviceEvents(id, signal),
+  const [dashboard, live] = await Promise.all([
+    request<DashboardDto>(`${racePath(id)}/dashboard`, { signal }),
+    request<{
+      race_id: string;
+      server_time: string;
+      runners: (BackendRunner & LiveRow)[];
+    }>(`${racePath(id)}/live`, { signal }),
   ]);
-  const runners = rows.map((row) => {
+  const runners = dashboard.runners.map((row) => {
     const point = live.runners.find(
       (p) => p.run_id === row.run_id && p.student_id === row.student_id,
     );
     return normalizeRunner(
       point &&
-        row.status === "ACTIVE" &&
+        row.status !== "COMPLETED" &&
         (utc(point.last_seen_at) ?? "") >= (utc(row.last_seen_at) ?? "")
         ? {
             ...row,
@@ -66,55 +66,39 @@ export async function loadSnapshot(
       id,
     );
   });
-  const race = {
+  const race: Race = {
     ...(races.find((r) => r.race_id === id) ?? {
-      race_id: id,
-      name: id,
       started_at: null,
       location: "—",
     }),
-    status: overview.status,
-    participant_count: overview.participants,
-    total_laps: rows[0]?.total_laps ?? null,
+    ...dashboard.race,
+    participant_count: dashboard.summary.participants,
   };
   return {
     races: races.map((r) => (r.race_id === id ? race : r)),
     runners,
     route: [],
     checkpoints: [],
-    events,
+    events: [],
     laps: [],
-    updated_at: utc(live.server_time)!,
-    running: true,
+    updated_at: utc(dashboard.server_time)!,
+    running: dashboard.race.status === "LIVE",
+    dashboard: {
+      ...dashboard,
+      recent_checkpoint_events:
+        dashboard.recent_checkpoint_events.map(normalizeEvent),
+    },
     overview: {
       race,
-      total: overview.participants,
-      active: overview.active_runners,
-      completed: overview.completed_runners,
-      checkpoint_events: overview.checkpoint_events,
+      total: dashboard.summary.participants,
+      active: dashboard.summary.active_runners,
+      completed: dashboard.summary.completed_runners,
+      checkpoint_events: dashboard.summary.checkpoint_events,
     },
   };
 }
-async function loadDeviceEvents(
-  id: string,
-  signal?: AbortSignal,
-): Promise<DeviceEvent[]> {
-  const rows = await allPages<{
-    device_event_id: string;
-    checkpoint_id: string;
-    student_id: string | null;
-    occurred_at: string;
-    identity_status: "MATCHED" | "UNASSIGNED";
-  }>(`${racePath(id)}/device-events`, signal);
-  return rows.map((e) => ({
-    event_id: e.device_event_id,
-    checkpoint_id: e.checkpoint_id,
-    student_id: e.student_id,
-    run_id: null,
-    occurred_at: utc(e.occurred_at)!,
-    status: e.identity_status,
-    source: "—",
-  }));
+export function clearApiCache() {
+  races = [];
 }
 export function runnerQuery(filters: RunnerFilters) {
   const query = new URLSearchParams({
@@ -132,9 +116,11 @@ export function runnerQuery(filters: RunnerFilters) {
   return query;
 }
 export const apiAdapter: RaceService = {
-  async listRaces() {
+  async listRaces(signal) {
     const version = keyGeneration();
-    const result = await request<{ items: BackendRace[] }>("/races");
+    const result = await request<{ items: BackendRace[] }>("/races", {
+      signal,
+    });
     const mapped = result.items.map((r) => ({
       ...r,
       started_at: utc(r.start_at),
@@ -157,9 +143,10 @@ export const apiAdapter: RaceService = {
       checkpoint_events: data.checkpoint_events,
     };
   },
-  async listRunners(id, filters) {
+  async listRunners(id, filters, signal) {
     const result = await request<PaginatedResponse<BackendRunner>>(
       `${racePath(id)}/runners?${runnerQuery(filters)}`,
+      { signal },
     );
     return {
       ...result,
@@ -167,11 +154,11 @@ export const apiAdapter: RaceService = {
     };
   },
   getRaceLiveSnapshot: loadSnapshot,
-  async getRunDetail(studentId, runId) {
+  async getRunDetail(studentId, runId, signal) {
     const path = `/runners/${segment(studentId)}/runs/${segment(runId)}`;
     const [row, history] = await Promise.all([
-      request<BackendRunner>(path),
-      allPages<HistoryRow>(`${path}/events`),
+      request<BackendRunner>(path, { signal }),
+      allPages<HistoryRow>(`${path}/events`, signal),
     ]);
     if (row.student_id !== studentId || row.run_id !== runId)
       throw new RequestError(404, "Phiên chạy không thuộc sinh viên này.");

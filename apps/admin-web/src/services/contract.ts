@@ -6,6 +6,8 @@ export interface BackendRace {
   start_at: string | null;
 }
 export interface BackendRunner {
+  display_id?: string | null;
+  bib_number?: string | null;
   student_id: string;
   run_id: string | null;
   race_id?: string;
@@ -84,7 +86,7 @@ export function normalizeRunner(
     student_code: row.student_code ?? "—",
     full_name: row.full_name ?? "—",
     faculty: "—",
-    bib: "—",
+    bib: row.bib_number ?? row.display_id ?? "—",
     color: ["#2563eb", "#0d9488", "#9333ea", "#ea580c", "#db2777"][hash % 5],
     status:
       row.status === "REGISTERED"
@@ -101,10 +103,12 @@ export function normalizeRunner(
     last_latitude: valid ? row.last_latitude! : null,
     last_longitude: valid ? row.last_longitude! : null,
     connection:
-      !valid || !lastSeen
-        ? "UNAVAILABLE"
-        : Date.now() - Date.parse(lastSeen) > 30000
-          ? "STALE"
-          : "ONLINE",
+      row.status === "COMPLETED"
+        ? "FINISHED"
+        : !valid || !lastSeen
+          ? "UNAVAILABLE"
+          : Date.now() - Date.parse(lastSeen) > 30000
+            ? "STALE"
+            : "ONLINE",
   };
 }

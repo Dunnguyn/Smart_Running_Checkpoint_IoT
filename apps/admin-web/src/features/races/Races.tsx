@@ -1,3 +1,4 @@
+import { MatchingSettings } from "./MatchingSettings";
 import { useEffect } from "react";
 import { dataMode } from "../../services";
 import { Link, useParams } from "react-router-dom";
@@ -56,6 +57,7 @@ export function Races() {
           <small>Chưa có form tạo / sửa</small>
         </div>
       </div>
+      {selected && dataMode === "api" && <MatchingSettings />}
       {selected ? (
         <Panel
           title="Thông tin giải chạy"

@@ -11,6 +11,6 @@ Hệ thống quản lý giải chạy và theo dõi sinh viên NEU bằng GPS, w
 
 Frontend mặc định kết nối API thật bằng Admin key nhập trong bộ nhớ phiên. Có thể đổi sang mock frontend để thử độc lập. Tổng quan, chọn giải, bảng runner, chi tiết GPS/LAP, bản đồ live và sự kiện checkpoint đã dùng REST/WebSocket; backend là nguồn kết quả vòng, cự ly và bước chân.
 
-Chạy backend tại localhost:8000, frontend tại localhost:5173. Xem [README frontend](apps/admin-web/README.md) để cấu hình môi trường, CORS, khóa demo, chạy kiểm thử và biết contract/UI còn thiếu. Chưa có API đọc geometry tuyến/checkpoint; bản đồ API không trộn tuyến mock. Chưa có form tạo/sửa hoặc gán wearable. Không tự tạo dữ liệu khi mở dashboard.
+Chạy backend tại localhost:8000, frontend tại localhost:5173. Xem [README frontend](apps/admin-web/README.md) để cấu hình môi trường, CORS, khóa demo, chạy kiểm thử và biết contract/UI còn thiếu. Chưa có API đọc geometry tuyến/checkpoint; bản đồ API không trộn tuyến mock. Đã có nhật ký ghép GPS/Arduino, xác nhận ứng viên, cấu hình matching và đăng ký thiết bị Gateway. Chưa có form tạo giải hoặc gán wearable. Không tự tạo dữ liệu khi mở dashboard.
 
 Không commit `.env`, API key; không kết nối database trực tiếp từ frontend.

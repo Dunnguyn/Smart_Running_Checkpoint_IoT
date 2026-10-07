@@ -4,11 +4,20 @@ import {
   useContext,
   useEffect,
   useState,
+  useRef,
   type ReactNode,
 } from "react";
 import { raceService, dataMode } from "../services";
 import { simulator } from "../mocks/liveSimulator";
-import { setAdminKey, RequestError } from "../services/client";
+import { refreshRaceLive } from "../services/liveService";
+import { clearApiCache } from "../services/apiAdapter";
+import {
+  setAdminKey,
+  RequestError,
+  request,
+  onSessionExpired,
+  cancelRequests,
+} from "../services/client";
 import type { LiveSnapshot, Race, RunSession } from "../types/domain";
 interface LiveContextValue {
   snapshot: LiveSnapshot | null;
@@ -18,6 +27,7 @@ interface LiveContextValue {
   mergeRunners: (rows: RunSession[]) => void;
   selectRace: (id: string) => void;
   retry: () => void;
+  refreshData: () => void;
   connection: string;
   start: () => void;
   pause: () => void;
@@ -32,10 +42,38 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     () => sessionStorage.getItem("neu-race-id") ?? "",
   );
   const [ready, setReady] = useState(dataMode === "mock");
+  const [authBusy, setAuthBusy] = useState(false);
+  const authGuard = useRef(false);
   const [keyInput, setKeyInput] = useState("");
   const [revision, setRevision] = useState(0);
   const [connection, setConnection] = useState("disconnected");
   const [listed, setListed] = useState(false);
+  const logout = useCallback(() => {
+    setAdminKey("");
+    clearApiCache();
+    sessionStorage.removeItem("neu-race-id");
+    selectRace("");
+    setReady(false);
+    setSnapshot(null);
+    setRaces([]);
+    setListed(false);
+    setKeyInput("");
+    setConnection("disconnected");
+  }, []);
+  useEffect(
+    () =>
+      onSessionExpired(() => {
+        logout();
+        setError("Phiên demo không còn hợp lệ. Hãy nhập lại Admin key.");
+      }),
+    [logout],
+  );
+  useEffect(
+    () => () => {
+      cancelRequests();
+    },
+    [],
+  );
   const mergeRunners = useCallback((rows: RunSession[]) => {
     setSnapshot((previous) => {
       if (!previous) return previous;
@@ -68,10 +106,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     let disposed = false;
+    const controller = new AbortController();
     setListed(false);
     setError("");
     raceService
-      .listRaces()
+      .listRaces(controller.signal)
       .then((items) => {
         if (disposed) return;
         setRaces(items);
@@ -87,6 +126,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       });
     return () => {
       disposed = true;
+      controller.abort();
     };
   }, [ready, revision]);
   useEffect(() => {
@@ -159,13 +199,6 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       unsubscribe();
     };
   }, [raceId, ready, listed, revision]);
-  const changeKey = () => {
-    setAdminKey("");
-    setReady(false);
-    setSnapshot(null);
-    setListed(false);
-    setConnection("disconnected");
-  };
   return (
     <Context.Provider
       value={{
@@ -176,6 +209,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         selectRace,
         mergeRunners,
         retry,
+        refreshData: () => refreshRaceLive(raceId),
         connection,
         start: dataMode === "mock" ? simulator.start : () => {},
         pause: dataMode === "mock" ? simulator.pause : () => {},
@@ -190,12 +224,23 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             cần nhập lại.
           </p>
           <form
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
-              if (keyInput.trim()) {
-                setAdminKey(keyInput.trim());
+              if (authGuard.current || !keyInput.trim()) return;
+              authGuard.current = true;
+              setAuthBusy(true);
+              setError("");
+              setAdminKey(keyInput.trim());
+              try {
+                await request("/auth/admin-key", { method: "POST" });
                 setKeyInput("");
                 setReady(true);
+              } catch (error) {
+                setAdminKey("");
+                setError((error as Error).message);
+              } finally {
+                authGuard.current = false;
+                setAuthBusy(false);
               }
             }}
           >
@@ -209,10 +254,15 @@ export function LiveProvider({ children }: { children: ReactNode }) {
                 onChange={(e) => setKeyInput(e.target.value)}
               />
             </label>
-            <button className="button primary" type="submit">
-              Kết nối
+            <button
+              className="button primary"
+              type="submit"
+              disabled={authBusy}
+            >
+              {authBusy ? "Đang xác thực…" : "Kết nối"}
             </button>
           </form>
+          {error && <p role="alert">{error}</p>}
         </main>
       ) : (
         <>
@@ -240,8 +290,14 @@ export function LiveProvider({ children }: { children: ReactNode }) {
               Thử lại / Làm mới
             </button>
             {dataMode === "api" && (
-              <button className="button" onClick={changeKey}>
-                Nhập lại Admin key
+              <button
+                className="button"
+                onClick={() => {
+                  logout();
+                  setError("");
+                }}
+              >
+                Đăng xuất
               </button>
             )}
           </div>
