@@ -10,14 +10,19 @@ import type {
   LiveEvent,
 } from "../types/domain";
 export interface RaceService {
-  listRaces(): Promise<Race[]>;
+  listRaces(signal?: AbortSignal): Promise<Race[]>;
   getRaceOverview(raceId: string): Promise<RaceOverview>;
   listRunners(
     raceId: string,
     filters: RunnerFilters,
+    signal?: AbortSignal,
   ): Promise<PaginatedResponse<RunSession>>;
   getRaceLiveSnapshot(raceId: string): Promise<LiveSnapshot>;
-  getRunDetail(studentId: string, runId: string): Promise<RunDetail>;
+  getRunDetail(
+    studentId: string,
+    runId: string,
+    signal?: AbortSignal,
+  ): Promise<RunDetail>;
   getRunEvents(
     studentId: string,
     runId: string,

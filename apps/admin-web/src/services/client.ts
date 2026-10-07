@@ -1,6 +1,21 @@
 // Demo credentials live only in memory. Never persist or log them.
 let adminKey = "";
 let generation = 0;
+const expiredListeners = new Set<() => void>();
+export function onSessionExpired(listener: () => void) {
+  expiredListeners.add(listener);
+  return () => {
+    expiredListeners.delete(listener);
+  };
+}
+export function expireSession() {
+  if (!adminKey) return;
+  setAdminKey("");
+  expiredListeners.forEach((listener) => listener());
+}
+export function cancelRequests() {
+  requests.forEach((controller) => controller.abort());
+}
 const requests = new Set<AbortController>();
 export function setAdminKey(value: string) {
   requests.forEach((controller) => controller.abort());
@@ -14,6 +29,7 @@ export class RequestError extends Error {
     public status: number,
     message: string,
     public fields: Record<string, string> = {},
+    public code?: string,
   ) {
     super(message);
   }
@@ -26,6 +42,7 @@ export async function request<T>(
 ): Promise<T> {
   if (!adminKey)
     throw new RequestError(401, "Hãy nhập Admin key để kết nối backend.");
+  const requestGeneration = generation;
   const controller = new AbortController();
   requests.add(controller);
   const abort = () => controller.abort();
@@ -46,7 +63,11 @@ export async function request<T>(
         options.body === undefined ? undefined : JSON.stringify(options.body),
     });
     const body = await response.json().catch(() => null);
+    if (requestGeneration !== generation)
+      throw new RequestError(0, "Phiên đã thay đổi; bỏ qua yêu cầu cũ.");
     if (!response.ok) {
+      if (response.status === 401 && path !== "/auth/admin-key")
+        expireSession();
       const fields: Record<string, string> = {};
       if (Array.isArray(body?.detail))
         for (const item of body.detail)
@@ -62,6 +83,7 @@ export async function request<T>(
         response.status,
         messages[response.status] ?? "Backend gặp lỗi. Hãy thử lại.",
         fields,
+        typeof body?.detail?.code === "string" ? body.detail.code : undefined,
       );
     }
     return body as T;

@@ -1,3 +1,5 @@
+import { CheckpointJournal } from "./CheckpointJournal";
+import { RegisterDevice } from "./RegisterDevice";
 import { dataMode } from "../../services";
 import { Link, useParams } from "react-router-dom";
 import { Plus, ArrowLeft } from "lucide-react";
@@ -5,11 +7,32 @@ import { useLive } from "../../app/LiveProvider";
 import { Panel, Empty } from "../../components/ui";
 import { datetime } from "../../utils/format";
 export function Checkpoints() {
-  const { snapshot, error } = useLive(),
+  const { snapshot, error, raceId } = useLive(),
     { checkpointId } = useParams();
   if (error)
     return <Empty title="Dữ liệu không khả dụng" description={error} />;
   if (!snapshot) return <div className="empty">Đang tải checkpoint…</div>;
+  if (dataMode === "api")
+    return (
+      <>
+        <div className="page-title">
+          <div>
+            <div className="eyebrow">ĐIỂM GHI NHẬN</div>
+            <h1>Checkpoint · {snapshot.dashboard?.race.checkpoint_mode}</h1>
+            <p>
+              {snapshot.dashboard?.race.checkpoint_mode === "GPS_ONLY"
+                ? "Arduino được lưu UNASSIGNED và không cộng vòng trong chế độ này."
+                : "GPS passage chờ Arduino; chỉ backend quyết định ghép và tính vòng."}
+            </p>
+          </div>
+        </div>
+        <CheckpointJournal />
+        <RegisterDevice
+          key={`${raceId}:${checkpointId ?? ""}`}
+          checkpointId={checkpointId}
+        />
+      </>
+    );
   const selected = snapshot.checkpoints.find(
       (c) => c.checkpoint_id === checkpointId,
     ),

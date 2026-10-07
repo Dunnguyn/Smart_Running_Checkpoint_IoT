@@ -20,9 +20,10 @@ export function RunDetail() {
     [error, setError] = useState("");
   useEffect(() => {
     let disposed = false;
+    const controller = new AbortController();
     setError("");
     raceService
-      .getRunDetail(studentId, runId)
+      .getRunDetail(studentId, runId, controller.signal)
       .then((d) => {
         if (!disposed) {
           setDetail(d);
@@ -37,6 +38,7 @@ export function RunDetail() {
       });
     return () => {
       disposed = true;
+      controller.abort();
     };
   }, [studentId, runId, mockSnapshot, refresh, mergeRunners]);
   if (error)
@@ -141,11 +143,13 @@ export function RunDetail() {
             <dd>{datetime(r.last_seen_at)}</dd>
             <dt>Kết nối</dt>
             <dd>
-              {r.connection === "ONLINE"
-                ? "Trực tuyến"
-                : r.connection === "STALE"
-                  ? "Mất cập nhật"
-                  : "Chưa có vị trí"}
+              {r.connection === "FINISHED"
+                ? "Vị trí cuối phiên đã hoàn thành"
+                : r.connection === "ONLINE"
+                  ? "Trực tuyến"
+                  : r.connection === "STALE"
+                    ? "Mất cập nhật"
+                    : "Chưa có vị trí"}
             </dd>
             <dt>Nguồn dữ liệu</dt>
             <dd>{r.source}</dd>

@@ -1,7 +1,11 @@
+import { isCheckpointEvent } from "./matchingContract";
+import { normalizeEvent } from "./matchingService";
 import type { LiveSnapshot, RunSession } from "../types/domain";
 import type { RaceService } from "./interface";
-import { keyGeneration, liveUrl, RequestError } from "./client";
+import { keyGeneration, liveUrl, RequestError, expireSession } from "./client";
 import { utc, validPosition, type WireEvent } from "./contract";
+const refreshListeners = new Map<string, () => void>();
+export const refreshRaceLive = (id: string) => refreshListeners.get(id)?.();
 export function applyLive(
   snapshot: LiveSnapshot,
   event: WireEvent,
@@ -9,6 +13,49 @@ export function applyLive(
 ): LiveSnapshot {
   if (event.race_id && event.race_id !== id) return snapshot;
   const data = event.data;
+  if (event.type === "checkpoint.match.updated") {
+    if (typeof data.event_id !== "string" || typeof data.version !== "number")
+      return snapshot;
+    const current = snapshot.dashboard?.recent_checkpoint_events.find(
+      (e) => e.event_id === data.event_id,
+    );
+    if (current && current.version >= data.version) return snapshot;
+    return {
+      ...snapshot,
+      eventRevision: (snapshot.eventRevision ?? 0) + 1,
+      dashboard:
+        snapshot.dashboard && isCheckpointEvent(data)
+          ? {
+              ...snapshot.dashboard,
+              recent_checkpoint_events: [
+                normalizeEvent(data),
+                ...snapshot.dashboard.recent_checkpoint_events.filter(
+                  (e) => e.event_id !== data.event_id,
+                ),
+              ]
+                .sort(
+                  (a, b) =>
+                    Date.parse(b.received_at) - Date.parse(a.received_at),
+                )
+                .slice(0, 10),
+            }
+          : snapshot.dashboard,
+    };
+  }
+  if (
+    event.type === "checkpoint.passed" &&
+    data.identity_status === "GPS_PASSAGE_PENDING_ARDUINO"
+  ) {
+    return {
+      ...snapshot,
+      pendingPassages: [
+        ...new Set([
+          ...(snapshot.pendingPassages ?? []),
+          String(data.passage_id ?? data.run_id ?? ""),
+        ]),
+      ],
+    };
+  }
   if (
     !data ||
     typeof data.run_id !== "string" ||
@@ -48,9 +95,11 @@ export function applyLive(
         next[field] = data[field] as number;
       }
     }
-    if (validPosition(data.latitude, data.longitude)) {
-      next.last_latitude = data.latitude as number;
-      next.last_longitude = data.longitude as number;
+    const latitude = data.latitude ?? data.last_latitude;
+    const longitude = data.longitude ?? data.last_longitude;
+    if (validPosition(latitude, longitude)) {
+      next.last_latitude = latitude as number;
+      next.last_longitude = longitude as number;
     }
     if (timestamp) {
       next.last_seen_at = timestamp;
@@ -59,7 +108,10 @@ export function applyLive(
     if (typeof data.source === "string") next.source = data.source;
     if (["ACTIVE", "COMPLETED", "ABANDONED"].includes(String(data.status)))
       next.status = data.status as RunSession["status"];
+    if (typeof data.ended_at === "string") next.ended_at = utc(data.ended_at);
+    if (typeof data.bib_number === "string") next.bib = data.bib_number;
     if (event.type === "runner.completed") next.status = "COMPLETED";
+    if (next.status === "COMPLETED") next.connection = "FINISHED";
     return next;
   });
   return {
@@ -82,6 +134,8 @@ export function subscribeLive(
   let loading = false,
     dirty = false;
   let buffer: WireEvent[] = [];
+  const eventVersions = new Map<string, number>();
+  let lastSync = 0;
   const controller = new AbortController();
   const version = keyGeneration();
   const alive = () => !stopped && version === keyGeneration();
@@ -95,6 +149,7 @@ export function subscribeLive(
       stopped = true;
       controller.abort();
       socket?.close();
+      expireSession();
       handlers.onStatus?.("disconnected");
     }
   };
@@ -105,12 +160,16 @@ export function subscribeLive(
       return;
     }
     loading = true;
+    lastSync = Date.now();
     buffer = [];
     try {
       const fresh = await load(id, controller.signal);
       if (!alive()) return;
       // No global backend sequence: buffer committed deltas during REST reads, then reconcile periodically.
-      state = buffer.reduce((s, e) => applyLive(s, e, id), fresh);
+      state = buffer.reduce<LiveSnapshot>((s, e) => applyLive(s, e, id), {
+        ...fresh,
+        eventRevision: (state?.eventRevision ?? 0) + 1,
+      });
       emit();
     } catch (error) {
       fail(error);
@@ -125,10 +184,13 @@ export function subscribeLive(
   };
   const schedule = () => {
     if (!refreshTimer && alive())
-      refreshTimer = setTimeout(() => {
-        refreshTimer = undefined;
-        void sync();
-      }, 1500);
+      refreshTimer = setTimeout(
+        () => {
+          refreshTimer = undefined;
+          void sync();
+        },
+        Math.max(1500, 5000 - (Date.now() - lastSync)),
+      );
   };
   const connect = () => {
     if (!alive()) return;
@@ -160,10 +222,22 @@ export function subscribeLive(
             "runner.updated",
             "runner.completed",
             "checkpoint.detected",
+            "checkpoint.match.updated",
             "checkpoint.passed",
           ].includes(event.type)
         )
           return;
+        if (event.type === "checkpoint.match.updated") {
+          const eventId = event.data.event_id,
+            eventVersion = event.data.version;
+          if (
+            typeof eventId !== "string" ||
+            typeof eventVersion !== "number" ||
+            (eventVersions.get(eventId) ?? 0) >= eventVersion
+          )
+            return;
+          eventVersions.set(eventId, eventVersion);
+        }
         if (loading) {
           if (buffer.length < 2000) buffer.push(event);
           else dirty = true;
@@ -172,11 +246,7 @@ export function subscribeLive(
           state = applyLive(state, event, id);
           emit();
         }
-        if (
-          event.type !== "runner.updated" ||
-          !state?.runners.some((r) => r.run_id === event.data.run_id)
-        )
-          schedule();
+        schedule();
       } catch {
         /* Ignore malformed frames; never log URLs or credentials. */
       }
@@ -206,14 +276,22 @@ export function subscribeLive(
       /* onclose owns bounded retry, including opaque 1006 handshake failures */
     };
   };
+  const refresh = () => {
+    void sync();
+  };
+  refreshListeners.set(id, refresh);
   handlers.onStatus?.("connecting");
   void sync().then(() => {
     if (alive() && state) connect();
   });
   const poll = setInterval(() => {
-    if (alive()) void sync();
+    if (alive() && socket?.readyState !== 1)
+      void sync().then(() => {
+        if (alive() && state && !socket) connect();
+      });
   }, 15000);
   return () => {
+    if (refreshListeners.get(id) === refresh) refreshListeners.delete(id);
     stopped = true;
     controller.abort();
     clearInterval(poll);

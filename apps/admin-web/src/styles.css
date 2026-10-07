@@ -1826,3 +1826,37 @@ footer > span:last-child {
     font-size: 11px;
   }
 }
+.matching-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: end;
+  padding: 20px;
+}
+.matching-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 1 1 200px;
+  max-width: 100%;
+}
+.matching-form input,
+.matching-form select,
+.matching-form textarea {
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 100%;
+}
+.matching-form textarea {
+  min-height: 80px;
+}
+.form-message {
+  padding: 14px 20px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.info-list dd,
+td code {
+  overflow-wrap: anywhere;
+}
