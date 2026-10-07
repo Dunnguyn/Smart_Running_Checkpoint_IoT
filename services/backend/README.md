@@ -36,7 +36,7 @@
    Copy-Item .env.example .env
    ```
 
-   Để chạy thử không cần SQL Server, đặt `DATABASE_URL=sqlite:///./running_demo.db` trong `.env`. Để dùng SQL Server, tạo database `iot_running`, cài Microsoft ODBC Driver 18, rồi cấu hình chuỗi kết nối mẫu trong `.env`.
+   Để chạy thử không cần SQL Server, đặt `DATABASE_URL=sqlite:///./running_demo.db` trong `.env`. File database được đặt trong thư mục backend kể cả khi khởi chạy từ thư mục làm việc khác. Các bảng được tạo tự động và dữ liệu tồn tại sau khi tắt/mở lại server. Để dùng SQL Server, tạo database `iot_running`, cài Microsoft ODBC Driver 18, rồi cấu hình chuỗi kết nối mẫu trong `.env`.
 
 3. Khởi động web API:
 
@@ -63,7 +63,9 @@
 
    Chế độ kết hợp dùng để minh họa ghép Arduino với GPS. Khi nhiều runner đi sát nhau, backend có thể trả `AMBIGUOUS` theo rule an toàn; dùng mặc định `GPS_ONLY` để demo 20 người cùng hoàn tất trong thời gian ngắn. Mở race dashboard sau khi chương trình báo kết quả.
 
-Các bảng demo được tạo tự động khi ứng dụng khởi động. Với dữ liệu cần bảo toàn hoặc triển khai production, hãy chuyển sang Alembic migration và không dùng `create_all` làm quy trình nâng cấp schema.
+SQLite lưu tại `running_demo.db` trong thư mục backend. Các bảng lưu giải chạy, sinh viên, đăng ký/bib, wearable và thiết bị checkpoint, checkpoint/tọa độ/thứ tự, phiên chạy, điểm GPS/bước chân, GPS passage, sự kiện Arduino và vòng chạy hợp lệ. SQLite bật khóa ngoại và WAL; tắt backend trước khi sao lưu database. File `.db`, WAL/SHM và `.env` bị loại khỏi Git.
+
+Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trường; không lưu các key này vào bảng và không commit `.env`. Dùng khóa riêng của bạn thay giá trị mẫu. Các bảng demo được tạo tự động khi ứng dụng khởi động. Với dữ liệu cần bảo toàn hoặc triển khai production, hãy chuyển sang Alembic migration và không dùng `create_all` làm quy trình nâng cấp schema.
 
 ## Liên kết frontend
 

@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import math
+from pathlib import Path
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -39,7 +40,38 @@ class Settings(BaseSettings):
 
 settings = Settings()
 logger = logging.getLogger("uvicorn.error")
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+
+
+def resolve_database_url(database_url: str) -> str:
+    """Resolve local SQLite files beside the backend, independent of shell cwd."""
+    if not database_url.startswith("sqlite:") or ":memory:" in database_url:
+        return database_url
+    prefix = "sqlite:///"
+    raw_path = database_url[len(prefix):] if database_url.startswith(prefix) else None
+    if raw_path is None or raw_path.startswith("/") or (len(raw_path) > 1 and raw_path[1] == ":"):
+        return database_url
+    backend_root = Path(__file__).resolve().parent.parent
+    absolute_path = (backend_root / raw_path).resolve()
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{absolute_path.as_posix()}"
+
+
+database_url = resolve_database_url(settings.database_url)
+sqlite_options = {"check_same_thread": False} if database_url.startswith("sqlite:") else {}
+engine = create_engine(database_url, pool_pre_ping=True, connect_args=sqlite_options)
+
+if database_url.startswith("sqlite:"):
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+        """Enforce foreign keys and durable, concurrent-friendly local writes."""
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
