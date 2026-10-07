@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import math
+from pathlib import Path
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -21,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, select, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -39,7 +40,38 @@ class Settings(BaseSettings):
 
 settings = Settings()
 logger = logging.getLogger("uvicorn.error")
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+
+
+def resolve_database_url(database_url: str) -> str:
+    """Resolve local SQLite files beside the backend, independent of shell cwd."""
+    if not database_url.startswith("sqlite:") or ":memory:" in database_url:
+        return database_url
+    prefix = "sqlite:///"
+    raw_path = database_url[len(prefix):] if database_url.startswith(prefix) else None
+    if raw_path is None or raw_path.startswith("/") or (len(raw_path) > 1 and raw_path[1] == ":"):
+        return database_url
+    backend_root = Path(__file__).resolve().parent.parent
+    absolute_path = (backend_root / raw_path).resolve()
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{absolute_path.as_posix()}"
+
+
+database_url = resolve_database_url(settings.database_url)
+sqlite_options = {"check_same_thread": False} if database_url.startswith("sqlite:") else {}
+engine = create_engine(database_url, pool_pre_ping=True, connect_args=sqlite_options)
+
+if database_url.startswith("sqlite:"):
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+        """Enforce foreign keys and durable, concurrent-friendly local writes."""
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
@@ -66,7 +98,8 @@ class Race(Base):
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="DRAFT")
     route_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    total_laps: Mapped[int] = mapped_column(Integer, default=5)
+    total_laps: Mapped[int] = mapped_column(Integer, default=4)
+    min_lap_interval_seconds: Mapped[int] = mapped_column(Integer, default=30)
     checkpoint_mode: Mapped[str] = mapped_column(String(30), default="GPS_ONLY")
     inner_radius_m: Mapped[float] = mapped_column(Float, default=10)
     outer_radius_m: Mapped[float] = mapped_column(Float, default=15)
@@ -156,7 +189,7 @@ class GpsPoint(Base):
 
 
 class GPSPassage(Base):
-    """Durable outside-to-inside GPS evidence, used only in combined mode."""
+    """Durable outside-to-inside GPS evidence for route checkpoints."""
     __tablename__ = "gps_passages"
     __table_args__ = (UniqueConstraint("run_id", "checkpoint_id", "entry_at", name="uq_passage_run_checkpoint_entry"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -278,7 +311,8 @@ class RaceIn(BaseModel):
     end_at: datetime | None = None
     status: str = "DRAFT"
     route_name: str | None = None
-    total_laps: int = Field(default=5, ge=1, le=100)
+    total_laps: int = Field(default=4, ge=1, le=100)
+    min_lap_interval_seconds: int | None = Field(default=None, ge=1, le=3600)
     checkpoint_mode: str = "GPS_ONLY"
 
 
@@ -501,7 +535,8 @@ def record_lap(db: Session, run: RunSession, checkpoint: Checkpoint, crossed_at:
     occurred = aware(crossed_at)
     anchor = aware(run.last_lap_at or run.started_at)
     duration = int((occurred - anchor).total_seconds())
-    if occurred <= anchor or duration < settings.min_lap_interval_seconds:
+    minimum_lap_seconds = race.min_lap_interval_seconds if race else settings.min_lap_interval_seconds
+    if occurred <= anchor or duration < minimum_lap_seconds:
         return False, duration
     if race and run.lap_count >= race.total_laps:
         return False, duration
@@ -703,9 +738,11 @@ def verify_admin_key():
 def create_race(data: RaceIn, db: Session = Depends(db_session)):
     if data.checkpoint_mode not in {"GPS_ONLY", "GPS_AND_ARDUINO"}:
         envelope_error("INVALID_CHECKPOINT_MODE", "checkpoint_mode phải là GPS_ONLY hoặc GPS_AND_ARDUINO.", 422)
-    race = Race(**data.model_dump())
+    race_values = data.model_dump(exclude={"min_lap_interval_seconds"})
+    race_values["min_lap_interval_seconds"] = data.min_lap_interval_seconds or settings.min_lap_interval_seconds
+    race = Race(**race_values)
     db.add(race); db.commit(); db.refresh(race)
-    return {"race_id": race.id, "name": race.name, "status": race.status, "total_laps": race.total_laps, **race_matching_config(race)}
+    return {"race_id": race.id, "name": race.name, "status": race.status, "total_laps": race.total_laps, "min_lap_interval_seconds": race.min_lap_interval_seconds, **race_matching_config(race)}
 
 
 @app.get("/api/v1/races", dependencies=[Depends(admin)])
@@ -862,35 +899,48 @@ async def receive_gps(data: GpsIn, db: Session = Depends(db_session)):
     # The telemetry already belongs to a student through the registered wearable/run.
     crossings: list[dict[str, Any]] = []
     if race.checkpoint_mode == "GPS_ONLY" and previous_latitude is not None and previous_longitude is not None:
-        lap_checkpoints = db.scalars(
+        route_checkpoints = db.scalars(
             select(Checkpoint)
             .where(
                 Checkpoint.race_id == run.race_id,
-                Checkpoint.kind == "LAP",
                 Checkpoint.latitude.is_not(None),
                 Checkpoint.longitude.is_not(None),
             )
             .order_by(Checkpoint.sequence_no)
         ).all()
-        for checkpoint in lap_checkpoints:
+        for checkpoint in route_checkpoints:
             current_distance = haversine_m(data.latitude, data.longitude, checkpoint.latitude, checkpoint.longitude)
             previous_distance = haversine_m(previous_latitude, previous_longitude, checkpoint.latitude, checkpoint.longitude)
             if previous_distance <= checkpoint.radius_m or current_distance > checkpoint.radius_m:
                 continue
-            source_event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{data.idempotency_key}:{checkpoint.id}"))
-            counted, lap_duration = record_lap(db, run, checkpoint, recorded, telemetry_source, source_event_id)
-            crossing = {"checkpoint_id": checkpoint.id, "checkpoint_code": checkpoint.code, "student_id": run.student_id, "run_id": run.id, "identity_status": "ASSIGNED", "lap_updated": counted, "lap_no": run.lap_count if counted else None, "lap_duration_s": lap_duration}
-            if not counted:
-                crossing["rejection_reason"] = "MIN_LAP_INTERVAL_NOT_MET" if lap_duration is not None and lap_duration >= 0 else "NON_MONOTONIC_CROSSING_TIME"
-            else:
-                crossing["is_done"] = run.status == "COMPLETED"
+            passage = GPSPassage(
+                race_id=race.id, checkpoint_id=checkpoint.id, run_id=run.id, student_id=run.student_id,
+                wearable_device_id=wearable.id, entry_gps_point_id=point.id, entry_at=recorded,
+                received_at=received, entry_distance_m=current_distance,
+                telemetry_source=telemetry_source, config_version=race.config_version,
+            )
+            db.add(passage)
+            db.flush()
+            crossing = {
+                "checkpoint_id": checkpoint.id, "checkpoint_code": checkpoint.code,
+                "sequence_no": checkpoint.sequence_no, "checkpoint_kind": checkpoint.kind,
+                "student_id": run.student_id, "run_id": run.id, "identity_status": "ASSIGNED",
+                "passage_id": passage.id, "lap_updated": False, "lap_no": None,
+                "lap_duration_s": None,
+            }
+            if checkpoint.kind == "LAP":
+                source_event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{data.idempotency_key}:{checkpoint.id}"))
+                counted, lap_duration = record_lap(db, run, checkpoint, recorded, telemetry_source, source_event_id)
+                crossing.update({"lap_updated": counted, "lap_no": run.lap_count if counted else None, "lap_duration_s": lap_duration})
+                if not counted:
+                    crossing["rejection_reason"] = "MIN_LAP_INTERVAL_NOT_MET" if lap_duration is not None and lap_duration >= 0 else "NON_MONOTONIC_CROSSING_TIME"
+                else:
+                    crossing["is_done"] = run.status == "COMPLETED"
             crossings.append(crossing)
-            # A single GPS fix counts at most one checkpoint to avoid overlapping geofences.
-            break
 
     elif race.checkpoint_mode == "GPS_AND_ARDUINO":
         checkpoints = db.scalars(select(Checkpoint).where(
-            Checkpoint.race_id == run.race_id, Checkpoint.kind == "LAP",
+            Checkpoint.race_id == run.race_id,
             Checkpoint.latitude.is_not(None), Checkpoint.longitude.is_not(None),
         ).order_by(Checkpoint.sequence_no)).all()
         for checkpoint in checkpoints:
@@ -1136,17 +1186,26 @@ def race_dashboard(race_id: str, db: Session = Depends(db_session)):
     ranked = sorted(runner_rows, key=lambda r: (-r["lap_count"], r["duration_total_s"], r["display_id"]))
     return {
         "race": {"race_id": race.id, "name": race.name, "status": race.status, "checkpoint_mode": race.checkpoint_mode,
-            "total_laps": race.total_laps, "config_version": race.config_version},
+            "total_laps": race.total_laps, "min_lap_interval_seconds": race.min_lap_interval_seconds,
+            "config_version": race.config_version},
         "summary": {"participants": len(participant_rows), "started_runners": sum(r["run_id"] is not None for r in runner_rows),
             "active_runners": len(active), "completed_runners": len(completed),
             "not_started_runners": sum(r["run_id"] is None for r in runner_rows),
-            "runners_at_lap_target": sum(r["lap_count"] >= race.total_laps for r in runner_rows),
+        "runners_at_lap_target": sum(r["lap_count"] >= race.total_laps for r in runner_rows),
             "laps_recorded": sum(r["lap_count"] for r in runner_rows),
             "distance_total_m": round(sum(r["distance_total_m"] for r in runner_rows), 2),
             "steps_total": sum(r["total_steps"] for r in runner_rows),
             "average_duration_s": round(sum(r["duration_total_s"] for r in completed) / len(completed), 1) if completed else 0,
             "checkpoint_events": len(event_rows), "checkpoint_events_by_status": status_counts,
             "pending_matches": status_counts.get("PENDING_MATCH", 0), "ambiguous_matches": status_counts.get("AMBIGUOUS", 0)},
+        "checkpoints": [{"checkpoint_id": cp.id, "code": cp.code, "name": cp.name,
+            "sequence_no": cp.sequence_no, "kind": cp.kind, "latitude": cp.latitude,
+            "longitude": cp.longitude, "radius_m": cp.radius_m}
+            for cp in db.scalars(select(Checkpoint).where(Checkpoint.race_id == race_id).order_by(Checkpoint.sequence_no)).all()],
+        "checkpoint_progress": [{"checkpoint_id": cp.id, "code": cp.code, "sequence_no": cp.sequence_no,
+            "kind": cp.kind, "passes": db.scalar(select(func.count(GPSPassage.id)).where(
+                GPSPassage.race_id == race_id, GPSPassage.checkpoint_id == cp.id)) or 0}
+            for cp in db.scalars(select(Checkpoint).where(Checkpoint.race_id == race_id).order_by(Checkpoint.sequence_no)).all()],
         "top_runners": ranked[:10], "runners": runner_rows,
         "recent_checkpoint_events": [checkpoint_event_dict(db, e) for e in sorted(event_rows, key=lambda x: aware(x.received_at), reverse=True)[:10]],
         "server_time": now_utc(),
@@ -1242,6 +1301,7 @@ def migrate_demo_schema() -> None:
         "idempotency_records": {"request_hash": "VARCHAR(64) NULL"},
         "races": {
             "checkpoint_mode": "VARCHAR(30) NOT NULL DEFAULT 'GPS_ONLY'",
+            "min_lap_interval_seconds": "INTEGER NOT NULL DEFAULT 30",
             "inner_radius_m": "FLOAT NOT NULL DEFAULT 10",
             "outer_radius_m": "FLOAT NOT NULL DEFAULT 15",
             "match_window_seconds": "INTEGER NOT NULL DEFAULT 3",

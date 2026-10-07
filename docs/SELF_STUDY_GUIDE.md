@@ -123,7 +123,7 @@ Terminal 1:
 uvicorn app.main:app --reload
 ```
 
-Mở `http://127.0.0.1:8000/docs`. Terminal 2 tạo 20 sinh viên, GPS/bước chân giả và hoàn tất một lap:
+Mở `http://127.0.0.1:8000/docs`. Terminal 2 tạo 20 sinh viên có bib `01`–`20`, GPS/bước chân di chuyển liên tục trên tuyến quanh tòa Thế Kỷ NEU. Mỗi vòng qua bốn checkpoint; checkpoint thứ tư mới tăng số vòng. Pace runner khác nhau 21–27 giây/vòng, race demo yêu cầu 4 vòng và thường mất khoảng 90–120 giây:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -133,10 +133,10 @@ python -m app.simulator
 Để minh họa quy tắc ghép GPS + Arduino:
 
 ```powershell
-python -m app.simulator --mode GPS_AND_ARDUINO --students 20 --laps 1
+python -m app.simulator --mode GPS_AND_ARDUINO --students 4 --laps 4
 ```
 
-Simulator tạo race mới, participant bib `01`–`20`, wearable, run và event demo. Chế độ kết hợp chạy lâu hơn do giới hạn thời gian lap và giãn các crossing để tránh event cạnh tranh. Lấy `race_id` simulator in ở cuối rồi gọi `GET /api/v1/races/{race_id}/dashboard` trong `/docs` với `X-Admin-Key`.
+Simulator tạo race mới, bốn checkpoint, participant, wearable và run. Mặc định `GPS_ONLY` là chế độ phù hợp để demo đủ 20 runner hoàn thành nhanh. Chế độ `GPS_AND_ARDUINO` có thể trả `AMBIGUOUS` khi nhiều runner qua checkpoint gần nhau, đúng theo rule không tự gán danh tính trong đám đông. Tọa độ tuyến là điểm minh họa gần tòa nhà, không phải khảo sát đường chạy an toàn ngoài thực địa. Lấy `race_id` simulator in ở cuối rồi gọi `GET /api/v1/races/{race_id}/dashboard` trong `/docs` với `X-Admin-Key`.
 
 ## 11. Tự nối frontend và thiết bị thật sau này
 
@@ -153,12 +153,14 @@ Simulator tạo race mới, participant bib `01`–`20`, wearable, run và event
 
 | Phần | Tệp và dòng | Mục đích |
 |---|---|---|
-| Xác thực Admin và endpoint kiểm tra key | [`app/main.py`](../app/main.py:427), [`app/main.py`](../app/main.py:696) | Sai key trả 401; không khóa sau số lần nhập sai. |
-| Kết thúc phiên và chốt giờ | [`app/main.py`](../app/main.py:484), [`app/main.py`](../app/main.py:496), [`app/main.py`](../app/main.py:792) | Đủ vòng thì hoàn tất, đồng hồ dùng thời lượng đóng băng. |
-| API dashboard / danh sách runner | [`app/main.py`](../app/main.py:1112), [`app/main.py`](../app/main.py:1157) | Tổng hợp chỉ số; hiển thị bib và giữ UUID làm định danh. |
-| Gán wearable / tạo run / nhận GPS | [`app/main.py`](../app/main.py:726), [`app/main.py`](../app/main.py:798), [`app/main.py`](../app/main.py:824) | FE/device gửi đúng runner và wearable đã gán. |
-| Mapping Arduino / event / xử lý tay | [`app/main.py`](../app/main.py:744), [`app/main.py`](../app/main.py:944), [`app/main.py`](../app/main.py:1029) | Gateway gửi event; admin giải quyết ambiguity. |
-| Worker ghép bền vững | [`app/main.py`](../app/main.py:1283) | Tìm candidates từ dữ liệu database đã lưu. |
-| Tạo 20 người và phát dữ liệu giả | [`app/simulator.py`](../app/simulator.py:50), [`app/simulator.py`](../app/simulator.py:91) | Chạy bằng `python -m app.simulator`. |
+| Xác thực Admin và endpoint kiểm tra key | [`app/main.py`](../app/main.py:429), [`app/main.py`](../app/main.py:698) | Sai key trả 401; không khóa sau số lần nhập sai. |
+| Hoàn tất phiên và chốt đồng hồ | [`app/main.py`](../app/main.py:486), [`app/main.py`](../app/main.py:498), [`app/main.py`](../app/main.py:793) | Đủ 4 vòng thì hoàn tất; thời lượng đóng băng. |
+| Cấu hình ngưỡng vòng cho từng race | [`app/main.py`](../app/main.py:276), [`app/main.py`](../app/main.py:706) | Demo dùng 15 giây/vòng; race thường lấy giá trị môi trường. |
+| Ghi bốn checkpoint GPS mỗi vòng | [`app/main.py`](../app/main.py:829), [`app/main.py`](../app/main.py:1130) | Lưu passage từng điểm; chỉ checkpoint `LAP` số 4 tăng bộ đếm vòng; dashboard trả tọa độ/tổng lượt qua. |
+| API dashboard / danh sách runner | [`app/main.py`](../app/main.py:1130), [`app/main.py`](../app/main.py:1184) | Tổng hợp chỉ số; hiển thị bib và giữ UUID làm định danh. |
+| Gán wearable / tạo run / nhận GPS | [`app/main.py`](../app/main.py:731), [`app/main.py`](../app/main.py:803), [`app/main.py`](../app/main.py:829) | FE/device gửi đúng runner và wearable đã gán. |
+| Mapping Arduino / event / xử lý tay | [`app/main.py`](../app/main.py:749), [`app/main.py`](../app/main.py:962), [`app/main.py`](../app/main.py:1047) | Gateway gửi event; admin giải quyết ambiguity. |
+| Worker ghép bền vững | [`app/main.py`](../app/main.py:1311) | Tìm candidates từ dữ liệu database đã lưu. |
+| Tạo 20 runner di chuyển và phát GPS/steps | [`app/simulator.py`](../app/simulator.py:25), [`app/simulator.py`](../app/simulator.py:92), [`app/simulator.py`](../app/simulator.py:137) | Chạy bằng `python -m app.simulator`; pace 21–27 giây/vòng. |
 
 Số dòng tham chiếu áp dụng cho phiên bản hiện tại; VS Code có thể mở trực tiếp file theo các link tương đối trên.

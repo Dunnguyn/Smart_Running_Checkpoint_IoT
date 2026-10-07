@@ -5,25 +5,157 @@
 
 ```mermaid
 classDiagram
-  class Race { +UUID race_id; +string name; +datetime start_at; +datetime end_at; +string status; +int total_laps; +string checkpoint_mode; +float inner_radius_m; +float outer_radius_m; +int match_window_seconds; +int config_version }
-  class Student { +UUID student_id; +string student_code; +string full_name; +string faculty; +string status }
-  class RunnerWearable { +string device_id; +UUID student_id; +string name; +string status; +datetime last_seen_at }
-  class RaceParticipant { +UUID id; +string bib_number; +string registration_status }
-  class Checkpoint { +UUID checkpoint_id; +string code; +int sequence_no; +string kind; +float latitude; +float longitude; +float radius_m }
-  class RunSession { +UUID run_id; +UUID wearable_device_id; +datetime started_at; +datetime ended_at; +string status; +float distance_total_m; +int duration_total_s; +int lap_count; +int total_steps; +float last_latitude; +float last_longitude }
-  class GpsPoint { +UUID gps_point_id; +UUID wearable_device_id; +float latitude; +float longitude; +datetime recorded_at; +datetime received_at; +int total_steps; +string source; +string idempotency_key }
-  class LapEvent { +UUID lap_event_id; +datetime occurred_at; +int lap_no; +int duration_s; +string source; +string source_event_id; +string validation_status }
-  class Device { +string device_id; +string name; +string status; +datetime last_seen_at }
-  class DeviceEvent { +UUID device_event_id; +datetime occurred_at; +datetime received_at; +string event_type; +string source_event_id; +UUID student_id_nullable; +string match_status; +string lap_status; +string reason_code; +UUID passage_id; +int version }
-  class GPSPassage { +UUID passage_id; +UUID race_id; +UUID checkpoint_id; +UUID run_id; +UUID student_id; +datetime entry_at; +float entry_distance_m; +UUID consumed_by_event_id }
-  class GeofenceState { +UUID run_id; +UUID checkpoint_id; +string region; +datetime last_sample_at; +int config_version }
-  class MatchAudit { +UUID audit_id; +UUID event_id; +string action; +string reason; +string idempotency_key; +datetime created_at }
-  class RaceService { +create_race(); +overview(); +runners(); +live_snapshot() }
-  class RunService { +start_run(); +accept_gps(); +record_lap(); +finish_run() }
-  class DeviceService { +accept_passage(); +mark_unassigned() }
-  class GeofenceDetector { +update_region(previous_state, gps, checkpoint); +create_passage_on_outside_to_inside(); +validate_lap_time() }
-  class MatchingWorker { +scan_due_events(); +find_eligible_passages(); +mark_ambiguous(); +auto_match_one_candidate() }
-  class EventHub { +connect(); +disconnect(); +publish() }
+  class Race {
+    +UUID race_id
+    +string name
+    +datetime start_at
+    +datetime end_at
+    +string status
+    +int total_laps
+    +int min_lap_interval_seconds
+    +string checkpoint_mode
+    +float inner_radius_m
+    +float outer_radius_m
+    +int match_window_seconds
+    +int config_version
+  }
+  class Student {
+    +UUID student_id
+    +string student_code
+    +string full_name
+    +string faculty
+    +string status
+  }
+  class RunnerWearable {
+    +string device_id
+    +UUID student_id
+    +string name
+    +string status
+    +datetime last_seen_at
+  }
+  class RaceParticipant {
+    +UUID id
+    +string bib_number
+    +string registration_status
+  }
+  class Checkpoint {
+    +UUID checkpoint_id
+    +string code
+    +int sequence_no
+    +string kind
+    +float latitude
+    +float longitude
+    +float radius_m
+  }
+  class RunSession {
+    +UUID run_id
+    +UUID wearable_device_id
+    +datetime started_at
+    +datetime ended_at
+    +string status
+    +float distance_total_m
+    +int duration_total_s
+    +int lap_count
+    +int total_steps
+    +float last_latitude
+    +float last_longitude
+  }
+  class GpsPoint {
+    +UUID gps_point_id
+    +UUID wearable_device_id
+    +float latitude
+    +float longitude
+    +datetime recorded_at
+    +datetime received_at
+    +int total_steps
+    +string source
+    +string idempotency_key
+  }
+  class LapEvent {
+    +UUID lap_event_id
+    +datetime occurred_at
+    +int lap_no
+    +int duration_s
+    +string source
+    +string source_event_id
+    +string validation_status
+  }
+  class Device {
+    +string device_id
+    +string name
+    +string status
+    +datetime last_seen_at
+  }
+  class DeviceEvent {
+    +UUID device_event_id
+    +datetime occurred_at
+    +datetime received_at
+    +string event_type
+    +string source_event_id
+    +UUID student_id_nullable
+    +string match_status
+    +string lap_status
+    +string reason_code
+    +UUID passage_id
+    +int version
+  }
+  class GPSPassage {
+    +UUID passage_id
+    +UUID race_id
+    +UUID checkpoint_id
+    +UUID run_id
+    +UUID student_id
+    +datetime entry_at
+    +float entry_distance_m
+    +UUID consumed_by_event_id
+  }
+  class GeofenceState {
+    +UUID run_id
+    +UUID checkpoint_id
+    +string region
+    +datetime last_sample_at
+    +int config_version
+  }
+  class MatchAudit {
+    +UUID audit_id
+    +UUID event_id
+    +string action
+    +string reason
+    +string idempotency_key
+    +datetime created_at
+  }
+  class RaceService {
+    +create_race()
+    +overview()
+    +runners()
+    +live_snapshot()
+  }
+  class RunService {
+    +start_run()
+    +accept_gps()
+    +record_lap()
+    +finish_run()
+  }
+  class DeviceService {
+    +accept_passage()
+    +mark_unassigned()
+  }
+  class GeofenceDetector {
+    +update_region(previous_state, gps, checkpoint)
+    +create_passage_on_outside_to_inside()
+    +validate_lap_time()
+  }
+  class MatchingWorker {
+    +scan_due_events()
+    +find_eligible_passages()
+    +mark_ambiguous()
+    +auto_match_one_candidate()
+  }
+  class EventHub {
+    +connect()
+    +disconnect()
+    +publish()
+  }
   Race "1" --> "0..*" Checkpoint
   Race "1" --> "0..*" RaceParticipant
   Student "1" --> "0..*" RaceParticipant
@@ -61,13 +193,55 @@ Snapshot minh họa một thời điểm giữa giải: GPS/steps wearable đã 
 
 ```mermaid
 classDiagram
-  class race_NEURUN { race_id="race-01"; name="NEU Run"; status="LIVE"; total_laps=5 }
-  class student_11223344 { student_id="stu-01"; student_code="11223344"; full_name="Nguyen Minh Anh" }
-  class wearable_01 { device_id="wearable-01"; status="ACTIVE"; sensors="GPS + steps" }
-  class checkpoint_LAP { checkpoint_id="cp-01"; code="LAP-01"; kind="LAP"; radius_m=25 }
-  class run_1024 { run_id="run-01"; wearable_device_id="wearable-01"; status="ACTIVE"; lap_count=2; distance_total_m=812.5; total_steps=1240 }
-  class gps_0002 { gps_point_id="gps-02"; latitude=21.005; longitude=105.843; total_steps=1240; source="SIMULATOR" }
-  class lap_02 { lap_no=2; duration_s=320; source="SIMULATOR" }
+  class race_NEURUN {
+    <<instance>>
+    race_id = race-01
+    name = NEU Run
+    status = LIVE
+    total_laps = 5
+  }
+  class student_11223344 {
+    <<instance>>
+    student_id = stu-01
+    student_code = 11223344
+    full_name = Nguyen Minh Anh
+  }
+  class wearable_01 {
+    <<instance>>
+    device_id = wearable-01
+    status = ACTIVE
+    sensors = GPS + steps
+  }
+  class checkpoint_LAP {
+    <<instance>>
+    checkpoint_id = cp-01
+    code = LAP-01
+    kind = LAP
+    radius_m = 25
+  }
+  class run_1024 {
+    <<instance>>
+    run_id = run-01
+    wearable_device_id = wearable-01
+    status = ACTIVE
+    lap_count = 2
+    distance_total_m = 812.5
+    total_steps = 1240
+  }
+  class gps_0002 {
+    <<instance>>
+    gps_point_id = gps-02
+    latitude = 21.005
+    longitude = 105.843
+    total_steps = 1240
+    source = SIMULATOR
+  }
+  class lap_02 {
+    <<instance>>
+    lap_no = 2
+    duration_s = 320
+    source = SIMULATOR
+  }
   race_NEURUN --> checkpoint_LAP
   race_NEURUN --> run_1024
   student_11223344 --> run_1024
@@ -470,31 +644,3 @@ flowchart TD
   Live --> End
   Error --> End
 ```
-
-## 15. Timing Diagram — Sơ đồ thời gian
-
-Minh họa các mốc mặc định ở chế độ GPS_AND_ARDUINO; `t` là UTC. Event chỉ được chốt sau khi cửa sổ match đóng. Đây là timeline logic cho dữ liệu mô phỏng, không phải độ chính xác của cảm biến thật.
-
-```mermaid
-sequenceDiagram
-  participant W as Wearable / Simulator
-  participant G as Geofence state
-  participant A as Arduino Gateway
-  participant M as Matching worker
-  participant R as RunSession / LapEvent
-  participant H as WebSocket
-  Note over G: t0: UNKNOWN
-  W->>G: t1: GPS ngoài bán kính 15 m
-  Note over G: OUTSIDE
-  W->>G: t2: GPS trong bán kính 10 m; received trước deadline
-  G->>G: tạo GPSPassage(entry_at=t2)
-  A->>M: t3: checkpoint event (occurred_at gần t2)
-  M->>M: chờ đến max(received_at, occurred_at + 3s + 2s)
-  Note over M: candidate window = ±3s; sự kiện quá 10s tới trễ không tự ghép
-  M->>R: t4: một candidate thì MATCHED; kiểm tra min lap 30s
-  R-->>M: t5: COUNTED hoặc NOT_COUNTED với reason_code
-  M->>R: t6: commit match, passage consumption, lap/run status
-  M->>H: t7: publish checkpoint.match.updated sau commit
-```
-
-Mermaid chưa có ký pháp Timing UML đầy đủ; các mốc này dùng làm nội dung để vẽ lại bằng PlantUML hoặc diagrams.net khi cần trục trạng thái chuẩn.
