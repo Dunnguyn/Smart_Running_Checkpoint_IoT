@@ -31,10 +31,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./running_demo.db"
     admin_api_key: str = "dev-admin-key-change-me"
     simulator_api_key: str = "dev-simulator-key-change-me"
+    wearable_api_key: str = "dev-wearable-key-change-me"
     gateway_api_key: str = "dev-gateway-key-change-me"
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     min_lap_interval_seconds: int = 30
     max_gps_speed_mps: float = 12.0
+    max_simulator_speed_mps: float = 18.0
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
@@ -112,6 +114,7 @@ class Race(Base):
     matching_locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     participants: Mapped[list["RaceParticipant"]] = relationship(back_populates="race", cascade="all, delete-orphan")
     checkpoints: Mapped[list["Checkpoint"]] = relationship(back_populates="race", cascade="all, delete-orphan")
+    route_points: Mapped[list["RaceRoutePoint"]] = relationship(back_populates="race", cascade="all, delete-orphan", order_by="RaceRoutePoint.sequence_no")
 
 
 class Student(Base):
@@ -146,6 +149,19 @@ class Checkpoint(Base):
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     radius_m: Mapped[float] = mapped_column(Float, default=25)
     race: Mapped[Race] = relationship(back_populates="checkpoints")
+
+
+class RaceRoutePoint(Base):
+    """Ordered GPS polyline used by the map and the moving demo simulator."""
+    __tablename__ = "race_route_points"
+    __table_args__ = (UniqueConstraint("race_id", "sequence_no", name="uq_route_point_sequence"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    race_id: Mapped[str] = mapped_column(ForeignKey("races.id", ondelete="CASCADE"), index=True)
+    sequence_no: Mapped[int] = mapped_column(Integer)
+    latitude: Mapped[float] = mapped_column(Float)
+    longitude: Mapped[float] = mapped_column(Float)
+    checkpoint_id: Mapped[str | None] = mapped_column(ForeignKey("checkpoints.id"), nullable=True, index=True)
+    race: Mapped[Race] = relationship(back_populates="route_points")
 
 
 class RunSession(Base):
@@ -339,6 +355,28 @@ class CheckpointIn(BaseModel):
     radius_m: float = Field(default=25, gt=0)
 
 
+class CheckpointPatch(BaseModel):
+    """Partial Admin edit for a checkpoint marker and its geofence radius."""
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    sequence_no: int | None = Field(default=None, ge=1)
+    kind: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_m: float | None = Field(default=None, gt=0)
+
+
+class RoutePointIn(BaseModel):
+    """A route vertex; checkpoint_id marks a vertex that must coincide with a checkpoint."""
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    checkpoint_id: str | None = None
+
+
+class RouteReplaceIn(BaseModel):
+    """Closed, ordered map polyline with every checkpoint represented as an anchor."""
+    points: list[RoutePointIn] = Field(min_length=5, max_length=500)
+
+
 class ParticipantIn(BaseModel):
     student_id: str
     bib_number: str | None = None
@@ -443,7 +481,7 @@ class EventHub:
 
 
 hub = EventHub()
-app = FastAPI(title="NEU Smart Running Backend", version="1.0.0", description="Backend cho giải chạy IoT: REST, SQL Server và WebSocket.")
+app = FastAPI(title="NEU Smart Running Backend", version="1.0.0", description="Backend web cho giải chạy NEU: REST, SQLite và WebSocket.")
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",") if x.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -464,6 +502,28 @@ def admin(x_admin_key: str | None = Header(default=None)) -> None:
 
 def simulator(x_simulator_key: str | None = Header(default=None)) -> None:
     require_key(settings.simulator_api_key, x_simulator_key, "simulator")
+
+
+def gps_ingest_auth(
+    x_simulator_key: str | None = Header(default=None),
+    x_wearable_key: str | None = Header(default=None),
+) -> str:
+    """Return the authenticated telemetry source so demo and hardware limits differ."""
+    if x_simulator_key and x_simulator_key == settings.simulator_api_key:
+        return "SIMULATOR"
+    if x_wearable_key and x_wearable_key == settings.wearable_api_key:
+        return "WEARABLE"
+    raise HTTPException(401, detail={"code": "UNAUTHORIZED", "message": "Thiếu hoặc sai simulator/wearable API key.", "details": [], "trace_id": new_id()})
+
+
+def run_create_auth(
+    x_admin_key: str | None = Header(default=None),
+    x_simulator_key: str | None = Header(default=None),
+) -> None:
+    """Allow Admin Web or the demo simulator to start an already-registered run."""
+    if x_admin_key == settings.admin_api_key or x_simulator_key == settings.simulator_api_key:
+        return
+    raise HTTPException(401, detail={"code": "UNAUTHORIZED", "message": "Cần Admin key hoặc Simulator key để tạo phiên chạy.", "details": [], "trace_id": new_id()})
 
 
 def gateway(x_gateway_key: str | None = Header(default=None)) -> None:
@@ -488,6 +548,20 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def route_length_m(points: list[Any]) -> float:
+    """Measure an ordered route polyline using Haversine distance per segment."""
+    return sum(haversine_m(a.latitude, a.longitude, b.latitude, b.longitude) for a, b in zip(points, points[1:]))
+
+
+def race_route_dict(db: Session, race_id: str) -> dict[str, Any]:
+    points = db.scalars(select(RaceRoutePoint).where(RaceRoutePoint.race_id == race_id).order_by(RaceRoutePoint.sequence_no)).all()
+    return {
+        "points": [{"sequence_no": p.sequence_no, "latitude": p.latitude, "longitude": p.longitude,
+                    "checkpoint_id": p.checkpoint_id} for p in points],
+        "distance_m": round(route_length_m(points), 2) if len(points) > 1 else 0,
+    }
 
 
 def aware(value: datetime) -> datetime:
@@ -777,6 +851,79 @@ def create_checkpoint(race_id: str, data: CheckpointIn, db: Session = Depends(db
     return {"checkpoint_id": checkpoint.id, **data.model_dump()}
 
 
+# [FE LINK: ROUTE EDITOR] Store an ordered map polyline; checkpoint anchors must lie on it.
+@app.get("/api/v1/races/{race_id}/route", dependencies=[Depends(admin)])
+def get_race_route(race_id: str, db: Session = Depends(db_session)):
+    get_or_404(db, Race, race_id, "giải chạy")
+    return {"race_id": race_id, **race_route_dict(db, race_id)}
+
+
+@app.put("/api/v1/races/{race_id}/route", dependencies=[Depends(admin)])
+def replace_race_route(race_id: str, data: RouteReplaceIn, db: Session = Depends(db_session)):
+    """Replace a race's map route before runs start; supports map-service/editor coordinates."""
+    race = get_or_404(db, Race, race_id, "giải chạy")
+    if db.scalar(select(RunSession.id).where(RunSession.race_id == race_id).limit(1)):
+        envelope_error("ROUTE_LOCKED", "Không thể đổi tuyến sau khi đã tạo phiên chạy.")
+    first, last = data.points[0], data.points[-1]
+    if haversine_m(first.latitude, first.longitude, last.latitude, last.longitude) > 2.0:
+        envelope_error("ROUTE_NOT_CLOSED", "Tuyến vòng phải kết thúc tại điểm xuất phát (sai lệch tối đa 2 m).", 422)
+    checkpoints = db.scalars(select(Checkpoint).where(Checkpoint.race_id == race_id)).all()
+    checkpoint_map = {cp.id: cp for cp in checkpoints}
+    anchors = [point.checkpoint_id for point in data.points if point.checkpoint_id]
+    if len(anchors) != len(set(anchors)):
+        envelope_error("DUPLICATE_ROUTE_CHECKPOINT", "Mỗi checkpoint chỉ được gắn một lần vào tuyến; điểm khép vòng cuối không gắn checkpoint_id.", 422)
+    if set(anchors) != set(checkpoint_map):
+        envelope_error("ROUTE_CHECKPOINT_MISMATCH", "Polyline phải có một điểm neo cho từng checkpoint của giải.", 422)
+    for point in data.points:
+        if point.checkpoint_id and point.checkpoint_id not in checkpoint_map:
+            envelope_error("CHECKPOINT_RACE_MISMATCH", "Checkpoint neo không thuộc giải này.", 422)
+    distance = route_length_m(data.points)
+    if not 400.0 <= distance <= 450.0:
+        envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Tuyến phải dài 400–450 m; tuyến gửi lên dài {distance:.1f} m.", 422)
+    db.query(RaceRoutePoint).filter(RaceRoutePoint.race_id == race_id).delete(synchronize_session=False)
+    for sequence_no, point in enumerate(data.points, start=1):
+        db.add(RaceRoutePoint(race_id=race_id, sequence_no=sequence_no, latitude=point.latitude,
+                              longitude=point.longitude, checkpoint_id=point.checkpoint_id))
+        if point.checkpoint_id:
+            checkpoint = checkpoint_map[point.checkpoint_id]
+            checkpoint.latitude, checkpoint.longitude = point.latitude, point.longitude
+    race.config_version += 1
+    db.commit()
+    return {"race_id": race_id, "route": race_route_dict(db, race_id), "config_version": race.config_version}
+
+
+@app.patch("/api/v1/checkpoints/{checkpoint_id}", dependencies=[Depends(admin)])
+def patch_checkpoint(checkpoint_id: str, data: CheckpointPatch, db: Session = Depends(db_session)):
+    """Update a checkpoint marker and keep its route anchor synchronized."""
+    checkpoint = get_or_404(db, Checkpoint, checkpoint_id, "checkpoint")
+    if db.scalar(select(RunSession.id).where(RunSession.race_id == checkpoint.race_id).limit(1)):
+        envelope_error("CHECKPOINT_LOCKED", "Không thể sửa checkpoint sau khi đã tạo phiên chạy.")
+    values = data.model_dump(exclude_unset=True, exclude_none=True)
+    if "kind" in values and values["kind"] not in {"CHECKPOINT", "LAP"}:
+        envelope_error("INVALID_CHECKPOINT_KIND", "kind phải là CHECKPOINT hoặc LAP.", 422)
+    route_points = db.scalars(select(RaceRoutePoint).where(RaceRoutePoint.race_id == checkpoint.race_id).order_by(RaceRoutePoint.sequence_no)).all()
+    was_closed = len(route_points) > 1 and haversine_m(route_points[0].latitude, route_points[0].longitude,
+                                                        route_points[-1].latitude, route_points[-1].longitude) <= 2.0
+    for name, value in values.items():
+        setattr(checkpoint, name, value)
+    point = next((p for p in route_points if p.checkpoint_id == checkpoint_id), None)
+    if point:
+        point.latitude, point.longitude = checkpoint.latitude, checkpoint.longitude
+        if was_closed and point.sequence_no == route_points[0].sequence_no:
+            route_points[-1].latitude, route_points[-1].longitude = checkpoint.latitude, checkpoint.longitude
+        elif was_closed and point.sequence_no == route_points[-1].sequence_no:
+            route_points[0].latitude, route_points[0].longitude = checkpoint.latitude, checkpoint.longitude
+        distance = route_length_m(route_points)
+        if not 400.0 <= distance <= 450.0:
+            envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Vị trí này làm tuyến dài {distance:.1f} m; cần giữ trong 400–450 m.", 422)
+    db.get(Race, checkpoint.race_id).config_version += 1
+    db.commit()
+    return {"checkpoint_id": checkpoint.id, "race_id": checkpoint.race_id, "code": checkpoint.code,
+            "name": checkpoint.name, "sequence_no": checkpoint.sequence_no, "kind": checkpoint.kind,
+            "latitude": checkpoint.latitude, "longitude": checkpoint.longitude, "radius_m": checkpoint.radius_m,
+            "route": race_route_dict(db, checkpoint.race_id) if point else None}
+
+
 @app.post("/api/v1/checkpoints/{checkpoint_id}/devices", status_code=201, dependencies=[Depends(admin)])
 def register_checkpoint_device(checkpoint_id: str, data: CheckpointDeviceIn, db: Session = Depends(db_session)):
     """Bind an Arduino/Gateway ID to a server-owned checkpoint mapping."""
@@ -831,7 +978,7 @@ def run_dict(db: Session, run: RunSession) -> dict[str, Any]:
 
 
 # [DEVICE LINK: GPS + STEPS] A run is bound to the wearable already paired to this student.
-@app.post("/api/v1/runs", status_code=201, dependencies=[Depends(simulator)])
+@app.post("/api/v1/runs", status_code=201, dependencies=[Depends(run_create_auth)])
 def create_run(data: RunIn, db: Session = Depends(db_session)):
     request_hash = hashlib.sha256(json.dumps(data.model_dump(mode="json"), sort_keys=True).encode("utf-8")).hexdigest()
     record = db.get(IdempotencyRecord, data.idempotency_key)
@@ -857,8 +1004,8 @@ def create_run(data: RunIn, db: Session = Depends(db_session)):
 
 
 # [DEVICE LINK: GPS + STEPS] One message carries position and step snapshot from the same wearable.
-@app.post("/api/v1/telemetry/gps", status_code=202, dependencies=[Depends(simulator)])
-async def receive_gps(data: GpsIn, db: Session = Depends(db_session)):
+@app.post("/api/v1/telemetry/gps", status_code=202)
+async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), db: Session = Depends(db_session)):
     """Accept telemetry from the runner's paired GPS/step wearable.
 
     An outside-to-inside transition across a LAP checkpoint geofence identifies
@@ -887,9 +1034,10 @@ async def receive_gps(data: GpsIn, db: Session = Depends(db_session)):
         delta = haversine_m(previous_latitude, previous_longitude, data.latitude, data.longitude)
         if run.last_gps_recorded_at is not None:
             seconds = (recorded - aware(run.last_gps_recorded_at)).total_seconds()
-            if delta / seconds > settings.max_gps_speed_mps: envelope_error("GPS_JUMP_REJECTED", "Điểm GPS vượt ngưỡng tốc độ hợp lệ.", 422)
+            max_speed = settings.max_simulator_speed_mps if auth_source == "SIMULATOR" else settings.max_gps_speed_mps
+            if delta / seconds > max_speed: envelope_error("GPS_JUMP_REJECTED", f"Điểm GPS vượt ngưỡng {max_speed:g} m/s của nguồn {auth_source}.", 422)
     received = now_utc()
-    telemetry_source = "SIMULATED_GPS"  # Source is derived from this authenticated demo telemetry channel.
+    telemetry_source = "SIMULATED_GPS" if auth_source == "SIMULATOR" else "WEARABLE_GPS"
     point = GpsPoint(run_id=run.id, wearable_device_id=wearable.id, latitude=data.latitude, longitude=data.longitude, recorded_at=recorded, received_at=received, accuracy_m=data.accuracy_m, speed_mps=data.speed_mps, total_steps=data.total_steps, source=telemetry_source, idempotency_key=data.idempotency_key, payload_hash=request_hash)
     db.add(point); run.distance_total_m += delta; run.total_steps = data.total_steps; run.last_latitude = data.latitude; run.last_longitude = data.longitude; run.last_seen_at = received; run.last_gps_recorded_at = recorded
     wearable.last_seen_at = received
@@ -1202,6 +1350,7 @@ def race_dashboard(race_id: str, db: Session = Depends(db_session)):
             "sequence_no": cp.sequence_no, "kind": cp.kind, "latitude": cp.latitude,
             "longitude": cp.longitude, "radius_m": cp.radius_m}
             for cp in db.scalars(select(Checkpoint).where(Checkpoint.race_id == race_id).order_by(Checkpoint.sequence_no)).all()],
+        "route": race_route_dict(db, race_id),
         "checkpoint_progress": [{"checkpoint_id": cp.id, "code": cp.code, "sequence_no": cp.sequence_no,
             "kind": cp.kind, "passes": db.scalar(select(func.count(GPSPassage.id)).where(
                 GPSPassage.race_id == race_id, GPSPassage.checkpoint_id == cp.id)) or 0}
@@ -1246,7 +1395,7 @@ def race_live(race_id: str, db: Session = Depends(db_session)):
         item = run_dict(db, run)
         item.update({"latitude": run.last_latitude, "longitude": run.last_longitude})
         runners.append(item)
-    return {"race_id": race_id, "server_time": now_utc(), "runners": runners}
+    return {"race_id": race_id, "server_time": now_utc(), "route": race_route_dict(db, race_id), "runners": runners}
 
 
 @app.get("/api/v1/runners/{student_id}/runs/{run_id}", dependencies=[Depends(admin)])

@@ -1,0 +1,909 @@
+' NEU Smart Running Backend UML — PlantUML source. Render each start/end block separately.
+' BPMN is represented as swimlane activity diagrams (PlantUML has no separate BPMN grammar).
+
+' 1 Use Case: actors and full function list
+@startuml
+left to right direction
+actor "Quản trị viên" as A
+actor "Thiết bị đeo hoặc Simulator" as W
+actor "Arduino Gateway" as G
+rectangle "NEU Smart Running Backend Web" {
+ usecase "Tạo giải và checkpoint" as U1
+ usecase "Đăng ký sinh viên và wearable" as U2
+ usecase "Theo dõi live và danh sách runner" as U3
+ usecase "Xem lịch sử phiên chạy" as U4
+ usecase "Cập nhật polyline tuyến và vị trí checkpoint" as U13
+ usecase "Gửi GPS và tổng bước" as U5
+ usecase "Xác định runner từ wearable ID" as U6
+ usecase "Phát hiện vào vùng checkpoint bằng GPS" as U7
+ usecase "Ghi lap hợp lệ" as U8
+ usecase "Gửi sự kiện phát hiện người qua" as U9
+ usecase "Chờ ghép GPS hoặc lưu UNASSIGNED ở GPS_ONLY" as U10
+ usecase "Giữ AMBIGUOUS nếu có nhiều ứng viên" as U11
+ usecase "Admin xác nhận hoặc loại sự kiện mơ hồ" as U12
+}
+A --> U1
+A --> U2
+A --> U3
+A --> U4
+A --> U13
+W --> U5
+U5 ..> U6 : <<include>>
+U6 ..> U7 : <<include>>
+U7 ..> U8 : <<include>>
+G --> U9
+U9 ..> U10 : <<include>>
+U10 ..> U11 : <<extend>>
+A --> U12
+note bottom of G
+Gateway reports passage only; it cannot identify a student.
+end note
+@enduml
+
+' 2 Activity: GPS validation, duplicate protection, geofence and response
+@startuml
+start
+:Receive GPS, total steps, wearable ID;
+if (API key valid?) then (yes)
+ :Continue;
+ else (no)
+ :Return 401 and allow retry without locking Admin;
+ stop
+endif
+if (Run ACTIVE and wearable belongs to runner?) then (yes)
+ :Continue;
+else (no)
+ :Return business validation error;
+ stop
+endif
+if (Coordinates, timestamp, steps and speed valid?) then (yes)
+ :Continue;
+else (no)
+ :Return 422;
+ stop
+endif
+if (Idempotency key already received?) then (yes)
+ :Do not apply data twice;
+ stop
+else (no)
+ :Calculate distance and save GPS snapshot;
+endif
+if (Checkpoint crossing?) then (yes)
+ if (Checkpoint kind LAP?) then (yes)
+  if (Race mode?) then (GPS_ONLY)
+   if (Minimum lap duration met?) then (yes)
+    :Create LapEvent and increment lap_count;
+    if (Required lap count reached?) then (yes)
+     :Set COMPLETED, ended_at and duration_total_s;
+    else (no)
+     :Keep run ACTIVE;
+    endif
+   else (no)
+    :Do not count lap;
+   endif
+  else (GPS_AND_ARDUINO)
+   :Save GPS passage pending Arduino match, do not count lap yet;
+  endif
+ else (ordinary checkpoint)
+  :Save checkpoint crossing without lap;
+ endif
+else (no)
+ :Continue run without a checkpoint crossing;
+endif
+:Commit database transaction;
+:Publish WebSocket only after commit;
+:Return 202 Accepted;
+stop
+@enduml
+
+' 3 BPMN AS-IS: runner, Arduino station, serial gateway, optional Sheets
+@startuml
+|Runner|
+start
+:Start;
+repeat
+:Pass START/FINISH station;
+|Arduino UNO|
+:HC-SR04 detects person;
+if (ARMED and min lap interval met?) then (yes)
+ :Increment lap and calculate distance;
+ :Update LCD, LED and buzzer;
+ :Send CSV through USB Serial;
+ |Laptop Gateway|
+ :Read Serial;
+ if (Google Sheets enabled?) then (yes)
+  :Optionally write Google Sheets;
+ endif
+ :Finish local session;
+ stop
+else (no)
+ :Keep lap count unchanged;
+ :Wait until runner leaves detection region;
+ :Re-arm sensor;
+endif
+|Runner|
+repeat while (Continue running?) is (yes)
+:Finish local session;
+|Laptop Gateway|
+:Close local session and optional Google Sheets output;
+stop
+@enduml
+
+' 4 BPMN TO-BE: web flow, route config, 20 runners, matching and completion
+@startuml
+|Admin Web|
+start
+:Create race, checkpoints, students and wearable assignments;
+:Update real map polyline and checkpoint positions before any run;
+|Wearable or Simulator|
+:Start run;
+while (Run ACTIVE?) is (yes)
+ :Send moving GPS and total steps continuously;
+ |FastAPI Backend and SQLite|
+ :Validate API key and payload;
+ if (Valid?) then (yes)
+  :Save GPS, steps, distance and geofence state;
+  if (GPS crosses a checkpoint?) then (yes)
+   if (Race mode?) then (GPS_ONLY)
+    if (Checkpoint kind LAP?) then (yes)
+     :Validate min lap interval, create lap and update run;
+    else (ordinary checkpoint)
+     :Save ordinary passage without counting lap;
+    endif
+   else (GPS_AND_ARDUINO)
+    :Save GPS passage linked to wearable, do not count lap yet;
+    |Arduino Gateway|
+    :Send passage event with device ID and stable event ID, no student_id;
+    |FastAPI Backend and SQLite|
+    :Validate gateway, map device to checkpoint and save DeviceEvent;
+    :Return 202 PENDING_MATCH and wait for configured match window/deadline;
+    if (Exactly one eligible GPS candidate?) then (yes)
+     :Mark MATCHED and validate run/checkpoint;
+     if (LAP and minimum interval met?) then (yes)
+      :Create LapEvent and increment lap_count;
+     else (no)
+      :Matched ordinary or invalid lap, do not count;
+     endif
+    else (none or multiple)
+     if (No eligible GPS candidate?) then (none)
+      :Mark UNASSIGNED / NO_ELIGIBLE_PASSAGE;
+     else (multiple or passage competition)
+      :Mark AMBIGUOUS and do not guess runner;
+      |Admin Web|
+      :Admin confirms candidate or dismisses event;
+      |FastAPI Backend and SQLite|
+      :Validate version, candidate and idempotency, then save audit;
+      if (Confirmed LAP candidate?) then (yes)
+       :Apply min interval and lap rules;
+      else (dismiss or non-LAP)
+       :Do not count lap;
+      endif
+     endif
+    endif
+   endif
+  endif
+  if (lap_count reached 4?) then (yes)
+   :Freeze ended_at and duration_total_s, then set COMPLETED/DONE;
+  endif
+  :Commit, then publish WebSocket;
+ else (no)
+  :Return 401 or 422;
+ endif
+ |Admin Web|
+ :Show dashboard, map, live status and runner results;
+ |Wearable or Simulator|
+endwhile (no)
+:Run ends;
+stop
+@enduml
+
+' 5 DFD Level 1: external sources, processes, stores and named flows
+@startuml
+left to right direction
+actor "Admin Web" as A
+actor "Wearable or Simulator" as W
+actor "Arduino UNO" as U
+rectangle "Gateway USB Serial" as G
+usecase "1 Race and runner management" as P1
+usecase "2 GPS authentication and processing" as P2
+usecase "3 Checkpoint matching and lap calculation" as P3
+usecase "4 Dashboard aggregation" as P4
+database "D1 Races, Students, Participants" as D1
+database "D2 Checkpoints, Route Points, Devices" as D2
+database "D3 Runs, GPS Points, GPS Passages" as D3
+database "D4 Device Events, Lap Events, Audit" as D4
+A --> P1 : race info and configuration
+A --> P1 : GPS polyline and checkpoint anchors
+P1 --> D1
+P1 --> D2
+D1 --> P2
+D2 --> P2
+W --> P2 : GPS, steps, timestamp, wearable ID
+P2 --> D3 : validated GPS, position and steps
+P2 --> P3 : GPS checkpoint passage
+U --> G : passage signal; no identity
+G --> P3 : device_event_id, checkpoint_id, occurred_at
+P3 --> D3
+P3 --> D4
+D1 --> P4
+D2 --> P4
+D3 --> P4
+D4 --> P4
+A --> P4 : dashboard/live request
+P4 --> A : KPIs, runners, checkpoints, status
+@enduml
+
+' 6 ERD: all entities, persisted fields, keys and relationships
+@startuml
+hide methods
+skinparam linetype ortho
+entity RACE {
+  * id : string <<PK>>
+  --
+  name : string
+  start_at : datetime
+  end_at : datetime
+  status : string
+  total_laps : int
+  checkpoint_mode : string
+}
+entity STUDENT {
+  * id : string <<PK>>
+  --
+  student_code : string <<UK>>
+  full_name : string
+  faculty : string
+  status : string
+}
+entity RACE_PARTICIPANT {
+  * id : string <<PK>>
+  --
+  race_id : string <<FK>>
+  student_id : string <<FK>>
+  bib_number : string
+  registration_status : string
+}
+entity RUNNER_WEARABLE {
+  * id : string <<PK>>
+  --
+  student_id : string <<FK>>
+  name : string
+  status : string
+}
+entity CHECKPOINT {
+  * id : string <<PK>>
+  --
+  race_id : string <<FK>>
+  code : string
+  sequence_no : int
+  kind : string
+  latitude : float
+  longitude : float
+  radius_m : float
+}
+entity RACE_ROUTE_POINT {
+  * id : string <<PK>>
+  --
+  race_id : string <<FK>>
+  sequence_no : int
+  latitude : float
+  longitude : float
+  checkpoint_id : string <<FK nullable>>
+}
+entity RUN_SESSION {
+  * id : string <<PK>>
+  --
+  race_id : string <<FK>>
+  student_id : string <<FK>>
+  wearable_device_id : string
+  status : string
+  started_at : datetime
+  ended_at : datetime
+  lap_count : int
+  duration_total_s : int
+  total_steps : int
+}
+entity GPS_POINT {
+  * id : string <<PK>>
+  --
+  run_id : string <<FK>>
+  wearable_device_id : string
+  latitude : float
+  longitude : float
+  recorded_at : datetime
+  total_steps : int
+  idempotency_key : string <<UK>>
+}
+entity GPS_PASSAGE {
+  * id : string <<PK>>
+  --
+  race_id : string <<FK>>
+  checkpoint_id : string <<FK>>
+  run_id : string <<FK>>
+  student_id : string <<FK>>
+  wearable_device_id : string
+  entry_at : datetime
+  entry_distance_m : float
+}
+entity GEOFENCE_STATE {
+  * id : string <<PK>>
+  --
+  run_id : string <<FK>>
+  checkpoint_id : string <<FK>>
+  region : string
+  last_sample_at : datetime
+}
+entity LAP_EVENT {
+  * id : string <<PK>>
+  --
+  run_id : string <<FK>>
+  checkpoint_id : string <<FK>>
+  occurred_at : datetime
+  lap_no : int
+  duration_s : int
+  source_event_id : string <<UK>>
+}
+entity DEVICE {
+  * id : string <<PK>>
+  --
+  checkpoint_id : string <<FK>>
+  name : string
+  status : string
+}
+entity DEVICE_EVENT {
+  * id : string <<PK>>
+  --
+  device_id : string <<FK>>
+  checkpoint_id : string <<FK>>
+  student_id : string <<FK nullable>>
+  occurred_at : datetime
+  status : string
+  source_event_id : string <<UK>>
+}
+entity MATCH_AUDIT {
+  * id : string <<PK>>
+  --
+  event_id : string <<FK>>
+  action : string
+  reason : string
+  idempotency_key : string <<UK>>
+}
+entity IDEMPOTENCY_RECORD {
+  * key : string <<PK>>
+  --
+  resource_id : string
+  request_hash : string
+}
+RACE ||--o{ CHECKPOINT : defines
+RACE ||--o{ RACE_ROUTE_POINT : stores_polyline
+CHECKPOINT ||--o| RACE_ROUTE_POINT : anchors_route
+RACE ||--o{ RACE_PARTICIPANT : enrolls
+STUDENT ||--o{ RACE_PARTICIPANT : joins
+RACE ||--o{ RUN_SESSION : hosts
+STUDENT ||--o{ RUN_SESSION : performs
+STUDENT ||--o{ RUNNER_WEARABLE : assigned
+RUNNER_WEARABLE ||--o{ RUN_SESSION : bound_to
+RUN_SESSION ||--o{ GPS_POINT : records
+RUNNER_WEARABLE ||--o{ GPS_POINT : sends_GPS_and_steps
+RACE ||--o{ GPS_PASSAGE : collects
+CHECKPOINT ||--o{ GPS_PASSAGE : crossed
+RUN_SESSION ||--o{ GPS_PASSAGE : produces
+STUDENT ||--o{ GPS_PASSAGE : identified_by_wearable
+RUN_SESSION ||--o{ GEOFENCE_STATE : tracks
+CHECKPOINT ||--o{ GEOFENCE_STATE : has_state
+RUN_SESSION ||--o{ LAP_EVENT : counts
+CHECKPOINT ||--o{ LAP_EVENT : validates
+CHECKPOINT ||--o{ DEVICE : hosts
+DEVICE ||--o{ DEVICE_EVENT : emits
+CHECKPOINT ||--o{ DEVICE_EVENT : detects_at
+STUDENT o|--o{ DEVICE_EVENT : optional_identity
+DEVICE_EVENT ||--o{ MATCH_AUDIT : resolution_history
+@enduml
+
+' 7 Sequence GPS: auth, idempotency, two operating modes, commit and WS
+@startuml
+autonumber
+participant "Wearable GPS and Steps" as W
+participant "FastAPI GPS endpoint" as API
+database "SQLite Database" as DB
+participant "Geofence rules" as Geo
+participant "WebSocket EventHub" as Hub
+participant "Admin Web" as Web
+W -> API : POST /api/v1/telemetry/gps
+API -> API : authenticate source and API key
+API -> DB : lookup idempotency_key
+alt previously received sample
+ DB --> API : saved GPS point
+ alt same payload
+  API --> W : 202 Accepted, duplicate=true
+ else different payload with same key
+  API --> W : 409 IDEMPOTENCY_CONFLICT
+ end
+else new sample
+ API -> API : validate ACTIVE run, wearable, timestamp, steps, coordinates, speed
+ alt invalid
+  API --> W : 401 or 422; no telemetry saved
+ else valid
+  API -> DB : read prior GPS/geofence state
+  API -> DB : save GPS point; update distance and steps
+  alt GPS_ONLY
+   API -> Geo : detect outside-to-inside checkpoint crossings
+   Geo --> API : crossed checkpoints
+   opt LAP checkpoint and minimum interval met
+    API -> DB : create LapEvent; increment lap_count
+    opt required lap count reached
+     API -> DB : set COMPLETED, ended_at and duration_total_s
+    end
+   end
+  else GPS_AND_ARDUINO
+   API -> Geo : update geofence and create GPSPassage on entry
+   Geo --> API : pending passage; no lap yet
+  end
+  API -> DB : COMMIT
+  API -> Hub : publish runner.updated after commit
+  opt crossing exists
+   API -> Hub : publish checkpoint.passed after commit
+  end
+  opt run just completed
+   API -> Hub : publish runner.completed after commit
+  end
+  Hub --> Web : race realtime events
+  API --> W : 202 with lap_count and status
+ end
+end
+@enduml
+
+' 8 Sequence Arduino: pending event, durable worker match, Admin resolution
+@startuml
+autonumber
+participant "HC-SR04" as Sensor
+participant "Arduino UNO" as Arduino
+participant "Laptop Gateway" as Gateway
+participant "FastAPI Device Event API" as API
+database "SQLite Database" as DB
+participant "Background matching worker" as Worker
+participant "WebSocket EventHub" as Hub
+participant "Admin Web" as Web
+Sensor -> Arduino : detect person passing
+Arduino -> Gateway : event ID, device ID, timestamp
+Gateway -> API : POST /api/v1/checkpoint-events
+API -> API : authenticate gateway; require student_id=null; map device to checkpoint
+alt GPS_ONLY
+ API -> DB : save UNASSIGNED; no lap
+ API -> DB : COMMIT
+ API -> Hub : publish checkpoint.match.updated
+ Hub --> Web : update event
+ API --> Gateway : 202 UNASSIGNED
+else event too old
+ API -> DB : save UNASSIGNED / LATE_DEVICE_EVENT
+ API -> DB : COMMIT
+ API -> Hub : publish checkpoint.match.updated
+ Hub --> Web : update event
+ API --> Gateway : 202 UNASSIGNED
+else GPS_AND_ARDUINO, event in age limit
+ API -> DB : save PENDING_MATCH, deadline and version
+ API -> DB : COMMIT
+ API -> Hub : publish checkpoint.match.updated, PENDING_MATCH
+ Hub --> Web : display pending event
+ API --> Gateway : 202 event_id, PENDING_MATCH
+ note over Worker, DB : Persisted pending rows are scanned after deadline and survive restart
+ Worker -> DB : read due pending events
+ Worker -> DB : find passages by race, checkpoint, configured time window
+ alt none
+  Worker -> DB : UNASSIGNED / NO_ELIGIBLE_PASSAGE
+ else exactly one
+  Worker -> DB : MATCHED; validate run, checkpoint and min lap interval
+  opt eligible LAP checkpoint
+   Worker -> DB : save LapEvent and increment lap_count
+   opt total_laps reached
+    Worker -> DB : set COMPLETED, ended_at and duration_total_s
+   end
+  end
+ else multiple candidates or competing passage
+  Worker -> DB : AMBIGUOUS; never guess runner
+ end
+ Worker -> DB : COMMIT matching result
+ Worker -> Hub : publish checkpoint.match.updated after commit
+ opt lap counted
+  Worker -> Hub : publish runner.updated after commit
+  opt run completed
+   Worker -> Hub : publish runner.completed after commit
+  end
+ end
+ Hub --> Web : update match and runner progress
+ opt Admin later resolves AMBIGUOUS
+  Web -> API : POST /checkpoint-events/{event_id}/resolve
+  API -> DB : validate version, candidate and idempotency
+  API -> DB : save confirm or dismiss plus audit
+  API -> DB : COMMIT
+  API -> Hub : publish result after commit
+  Hub --> Web : update event
+ end
+end
+@enduml
+
+' 9 Swimlane: runner, Arduino, backend, Admin paths and outcomes
+@startuml
+|Runner wearable or Simulator|
+start
+:Send GPS and step snapshot;
+|Backend FastAPI|
+:Validate key and payload;
+:Save GPS, steps and geofence state;
+if (GPS crossing?) then (yes)
+ if (Race mode?) then (GPS_ONLY)
+  if (Checkpoint kind LAP?) then (yes)
+   :Check min interval and record valid lap;
+   if (Reached total_laps?) then (yes)
+   :Freeze end time and duration, then mark COMPLETED;
+   else (no)
+    :Keep run ACTIVE;
+   endif
+  else (ordinary checkpoint)
+   :Update location only;
+  endif
+ else (GPS_AND_ARDUINO)
+  :Save GPS passage for matching, do not count lap yet;
+ endif
+else (no)
+ :Update location only;
+endif
+:Commit and publish WebSocket;
+|Arduino and Gateway|
+:HC-SR04 detects passage;
+:Gateway sends DeviceEvent with student_id=null;
+|Backend FastAPI|
+:Validate gateway and map device to checkpoint;
+if (GPS_ONLY or event too old?) then (yes)
+ :Persist UNASSIGNED, do not count lap;
+ :Commit and publish event status;
+else (GPS_AND_ARDUINO and in time)
+ :Persist PENDING_MATCH and return 202;
+ :Worker waits until deadline and searches eligible passages;
+ if (Exactly one eligible candidate?) then (yes)
+  if (Checkpoint LAP and interval valid?) then (yes)
+   :Count lap and complete at required total;
+  else (no)
+   :Mark MATCHED without lap;
+  endif
+ else (none or multiple)
+  if (No eligible candidate?) then (none)
+   :Mark UNASSIGNED;
+  else (multiple or competition)
+   :Mark AMBIGUOUS, never guess;
+   |Admin Web|
+   :Confirm candidate or dismiss event;
+   |Backend FastAPI|
+   :Validate version/candidate and write audit;
+  endif
+ endif
+ :Commit result before WebSocket;
+endif
+|Admin Web|
+:Display dashboard, map, runners 01–20 and event status;
+stop
+@enduml
+
+' 10 State Machine: run lifecycle
+@startuml
+[*] --> ACTIVE : valid run creation
+ACTIVE --> ACTIVE : valid GPS/steps; target not reached
+ACTIVE --> ACTIVE : ordinary checkpoint or lap rejected by minimum interval
+ACTIVE --> COMPLETED : final valid lap reaches total_laps
+ACTIVE --> COMPLETED : Admin calls finish-run
+COMPLETED --> [*] : run finalized
+note right of ACTIVE
+Only ACTIVE accepts telemetry.
+GPS_ONLY counts from GPS geofence.
+GPS_AND_ARDUINO counts after one Arduino event uniquely matches GPS passage.
+end note
+note right of COMPLETED
+ended_at and duration_total_s are frozen.
+Later telemetry is rejected because status is not ACTIVE.
+end note
+@enduml
+
+' 11 Class Diagram: fields, methods and relationships
+@startuml
+skinparam classAttributeIconSize 0
+class Race {
+  +UUID race_id
+  +string name
+  +datetime start_at
+  +datetime end_at
+  +string status
+  +int total_laps
+  +int min_lap_interval_seconds
+  +string checkpoint_mode
+  +float inner_radius_m
+  +float outer_radius_m
+  +int match_window_seconds
+  +int config_version
+}
+class Student {
+  +UUID student_id
+  +string student_code
+  +string full_name
+  +string faculty
+  +string status
+}
+class RunnerWearable {
+  +string device_id
+  +UUID student_id
+  +string name
+  +string status
+  +datetime last_seen_at
+}
+class RaceParticipant {
+  +UUID id
+  +string bib_number
+  +string registration_status
+}
+class Checkpoint {
+  +UUID checkpoint_id
+  +string code
+  +int sequence_no
+  +string kind
+  +float latitude
+  +float longitude
+  +float radius_m
+}
+class RaceRoutePoint {
+  +UUID id
+  +UUID race_id
+  +int sequence_no
+  +float latitude
+  +float longitude
+  +UUID checkpoint_id_nullable
+}
+class RunSession {
+  +UUID run_id
+  +UUID wearable_device_id
+  +datetime started_at
+  +datetime ended_at
+  +string status
+  +float distance_total_m
+  +int duration_total_s
+  +int lap_count
+  +int total_steps
+  +float last_latitude
+  +float last_longitude
+}
+class GpsPoint {
+  +UUID gps_point_id
+  +UUID wearable_device_id
+  +float latitude
+  +float longitude
+  +datetime recorded_at
+  +datetime received_at
+  +int total_steps
+  +string source
+  +string idempotency_key
+}
+class LapEvent {
+  +UUID lap_event_id
+  +datetime occurred_at
+  +int lap_no
+  +int duration_s
+  +string source
+  +string source_event_id
+  +string validation_status
+}
+class Device {
+  +string device_id
+  +string name
+  +string status
+  +datetime last_seen_at
+}
+class DeviceEvent {
+  +UUID device_event_id
+  +datetime occurred_at
+  +datetime received_at
+  +string event_type
+  +string source_event_id
+  +UUID student_id_nullable
+  +string match_status
+  +string lap_status
+  +string reason_code
+  +UUID passage_id
+  +int version
+}
+class GPSPassage {
+  +UUID passage_id
+  +UUID race_id
+  +UUID checkpoint_id
+  +UUID run_id
+  +UUID student_id
+  +datetime entry_at
+  +float entry_distance_m
+  +UUID consumed_by_event_id
+}
+class GeofenceState {
+  +UUID run_id
+  +UUID checkpoint_id
+  +string region
+  +datetime last_sample_at
+  +int config_version
+}
+class MatchAudit {
+  +UUID audit_id
+  +UUID event_id
+  +string action
+  +string reason
+  +string idempotency_key
+  +datetime created_at
+}
+class RaceService {
+  +create_race()
+  +get_route()
+  +replace_route()
+  +update_checkpoint()
+  +overview()
+  +runners()
+  +live_snapshot()
+}
+class RunService {
+  +start_run()
+  +accept_gps()
+  +record_lap()
+  +finish_run()
+}
+class DeviceService {
+  +accept_passage()
+  +mark_unassigned()
+}
+class GeofenceDetector {
+  +update_region(previous_state,gps,checkpoint)
+  +create_passage_on_outside_to_inside()
+  +validate_lap_time()
+}
+class MatchingWorker {
+  +scan_due_events()
+  +find_eligible_passages()
+  +mark_ambiguous()
+  +auto_match_one_candidate()
+}
+class EventHub {
+  +connect()
+  +disconnect()
+  +publish()
+}
+Race "1" --> "0..*" Checkpoint
+Race "1" *-- "0..*" RaceRoutePoint
+Checkpoint "0..1" --> "0..1" RaceRoutePoint : anchor
+Race "1" --> "0..*" RaceParticipant
+Student "1" --> "0..*" RaceParticipant
+Race "1" --> "0..*" RunSession
+Student "1" --> "0..*" RunSession
+Student "1" --> "0..*" RunnerWearable : assigned
+RunnerWearable "1" --> "0..*" RunSession : bound device
+RunSession "1" --> "0..*" GpsPoint
+RunnerWearable "1" --> "0..*" GpsPoint : GPS and steps
+RunSession "1" --> "0..*" GPSPassage : geofence evidence
+Checkpoint "1" --> "0..*" GPSPassage : geofence
+GPSPassage "0..1" --> "0..1" DeviceEvent : consumed at most once
+RunSession "1" --> "0..*" GeofenceState : state per checkpoint
+Checkpoint "1" --> "0..*" GeofenceState : state per run
+RunSession "1" --> "0..*" LapEvent
+Checkpoint "1" --> "0..*" LapEvent
+Device "1" --> "0..*" DeviceEvent
+Checkpoint "1" --> "0..*" DeviceEvent
+Student "0..1" --> "0..*" DeviceEvent : optional identity
+DeviceEvent "1" --> "0..*" MatchAudit : resolution history
+RaceService ..> Race
+RunService ..> RunSession
+DeviceService ..> DeviceEvent
+GeofenceDetector ..> Checkpoint : checks radius
+GeofenceDetector ..> LapEvent : creates GPS lap
+MatchingWorker ..> GPSPassage : correlates checkpoint and time
+MatchingWorker ..> DeviceEvent : MATCHED / AMBIGUOUS / UNASSIGNED
+MatchingWorker ..> LapEvent : counts validated Arduino match
+EventHub ..> RunService : publishes committed events
+@enduml
+
+' 12 Context: external actors and system boundary
+@startuml
+left to right direction
+actor "Admin / Organizers" as A
+actor "Wearable GPS + steps\nor Simulator" as R
+actor "HC-SR04 + Arduino UNO" as S
+rectangle "Laptop Gateway" as G
+rectangle "NEU Smart Running Backend Web" as SYS
+database SQLite as DB
+A --> SYS : REST configuration and dashboard reads
+SYS --> A : REST response and live WebSocket
+R --> SYS : REST GPS, steps, wearable ID
+S --> G : passage detection signal
+G --> SYS : REST checkpoint event, no student_id
+SYS --> DB : store/read race, runner, run, telemetry and events
+DB --> SYS : persisted records
+@enduml
+
+' 13 Mind Map: full feature decomposition
+@startmindmap
+* NEU Smart Running Backend Web
+** Race administration
+*** Create race
+*** Register students
+*** Bibs 01 to 20
+*** Assign wearable
+*** Create four checkpoints
+** Runner monitoring
+*** Simulated or physical GPS
+*** Total steps
+*** Distance
+*** Lap duration
+*** Live map
+** Lap and completion
+*** Four checkpoints on route
+*** Checkpoint 4 records lap
+*** Demo minimum lap 15 seconds
+*** Four laps to complete
+*** Freeze duration
+*** COMPLETED and DONE
+** Arduino Gateway
+*** HC-SR04 detects person
+*** Arduino does not identify runner
+*** GPS_ONLY stores UNASSIGNED
+*** GPS_AND_ARDUINO correlates passage
+*** AMBIGUOUS requires Admin
+** Storage and integration
+*** SQLite
+*** REST API
+*** WebSocket
+*** API keys in environment
+*** Frontend and device integration
+@endmindmap
+
+' 14 User Journey: phase, actions, actors and satisfaction ratings
+@startuml
+|Preparation|
+start
+:Open backend and check API [Admin, 5/5];
+:Enter valid Admin key [Admin, 4/5];
+:Create race and four checkpoints [Admin, 4/5];
+:Update polyline and checkpoint anchors [Admin, 4/5];
+:Create 20 runners and wearables [Admin + Simulator, 5/5];
+|Monitoring|
+:Open dashboard and map [Admin Web, 5/5];
+:Observe moving GPS and increasing steps [Admin + Simulator, 5/5];
+:Monitor laps and ranking [Admin Web, 4/5];
+:Review AMBIGUOUS warning if present [Admin + Gateway, 2/5];
+|Completion|
+:Runner reaches four laps [Simulator + Backend, 5/5];
+:Backend freezes duration and marks DONE [Backend, 5/5];
+:Review summary and history [Admin Web + SQLite, 5/5];
+stop
+@enduml
+
+' 15 Component: modules, interfaces, protocols, storage and realtime
+@startuml
+left to right direction
+component "Admin Web" as FE
+component "Map route provider or map editor" as MAP
+component "FastAPI REST / WebSocket" as API
+component "Wearable Simulator: GPS + step counter" as SIM
+component "Physical GPS + step device" as WEAR
+component "Arduino UNO + HC-SR04" as UNO
+component "Laptop Gateway" as GW
+component "API key / role checks" as AUTH
+component "Race, Run, GPS geofence, Steps, Lap, Device logic" as DOMAIN
+component "Checkpoint correlation worker" as MATCH
+database "SQLite: races, route points, checkpoints, runs, telemetry" as DB
+component "WebSocket Event Hub" as HUB
+FE --> API : REST + WebSocket
+MAP --> FE : Ordered GPS polyline
+FE --> API : GET/PUT route; PATCH checkpoints
+SIM --> API : REST + X-Simulator-Key
+WEAR --> API : REST + X-Wearable-Key
+UNO --> GW : USB Serial
+GW --> API : REST + X-Gateway-Key
+API --> AUTH
+API --> DOMAIN
+API --> MATCH
+DOMAIN --> DB
+MATCH --> DB
+MATCH --> HUB
+DOMAIN --> HUB
+HUB --> FE
+@enduml

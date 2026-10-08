@@ -20,17 +20,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Approximate four points around the NEU Centennial Building, centered at the
-# OpenStreetMap point 21.00004, 105.84266. The four corners form a closed loop.
+# GPS coordinates supplied for the four demo checkpoints around the NEU
+# Centennial Building. The DMS coordinates are converted to decimal degrees.
 ROUTE_CHECKPOINTS = [
     {"code": "NEU-C01", "name": "Checkpoint 1 - phía Bắc tòa Thế Kỷ", "sequence_no": 1,
-     "kind": "CHECKPOINT", "latitude": 21.00022, "longitude": 105.84266},
+     "kind": "CHECKPOINT", "latitude": 21.0003888889, "longitude": 105.8425833333},
     {"code": "NEU-C02", "name": "Checkpoint 2 - phía Đông tòa Thế Kỷ", "sequence_no": 2,
-     "kind": "CHECKPOINT", "latitude": 21.00004, "longitude": 105.84291},
+     "kind": "CHECKPOINT", "latitude": 21.0000000000, "longitude": 105.8434166667},
     {"code": "NEU-C03", "name": "Checkpoint 3 - phía Nam tòa Thế Kỷ", "sequence_no": 3,
-     "kind": "CHECKPOINT", "latitude": 20.99986, "longitude": 105.84266},
+     "kind": "CHECKPOINT", "latitude": 20.9996111111, "longitude": 105.8426388889},
     {"code": "NEU-C04", "name": "Checkpoint 4 / đích vòng", "sequence_no": 4,
-     "kind": "LAP", "latitude": 21.00004, "longitude": 105.84241},
+     "kind": "LAP", "latitude": 20.9999722222, "longitude": 105.8418888889},
+]
+
+# Provisional map polyline passing through each checkpoint anchor. The four
+# added bends make a ~425m closed loop for the 400–450m demo requirement; replace
+# these unverified bend coordinates with a real map routing polyline when ready.
+ROUTE_WAYPOINTS = [
+    {"latitude": 20.9999722222, "longitude": 105.8418888889, "checkpoint_code": "NEU-C04"},
+    {"latitude": 21.0003915773, "longitude": 105.8420908414},
+    {"latitude": 21.0003888889, "longitude": 105.8425833333, "checkpoint_code": "NEU-C01"},
+    {"latitude": 21.0004188190, "longitude": 105.8431201370},
+    {"latitude": 21.0000000000, "longitude": 105.8434166667, "checkpoint_code": "NEU-C02"},
+    {"latitude": 20.9995844276, "longitude": 105.8431546335},
+    {"latitude": 20.9996111111, "longitude": 105.8426388889, "checkpoint_code": "NEU-C03"},
+    {"latitude": 20.9995687249, "longitude": 105.8421407295},
+    {"latitude": 20.9999722222, "longitude": 105.8418888889},
 ]
 
 
@@ -67,8 +82,8 @@ def distance_m(a: dict, b: dict) -> float:
 
 
 def make_route() -> tuple[list[dict], list[float], float]:
-    """Build segment lengths for C04 -> C01 -> C02 -> C03 -> C04."""
-    points = [ROUTE_CHECKPOINTS[3], *ROUTE_CHECKPOINTS[:3], ROUTE_CHECKPOINTS[3]]
+    """Build the closed map polyline, including detour vertices between checkpoints."""
+    points = ROUTE_WAYPOINTS
     lengths = [distance_m(points[index], points[index + 1]) for index in range(len(points) - 1)]
     return points, lengths, sum(lengths)
 
@@ -93,7 +108,7 @@ def main() -> None:
     """Create 20 demo runners and keep GPS/steps moving until each completes four loops."""
     parser = argparse.ArgumentParser(description="Mô phỏng sinh viên chạy quanh tòa Thế Kỷ NEU với 4 checkpoint/vòng.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Địa chỉ API backend")
-    parser.add_argument("--interval", type=float, default=2.0, help="Chu kỳ gửi GPS, mặc định 2 giây")
+    parser.add_argument("--interval", type=float, default=0.5, help="Chu kỳ gửi GPS, mặc định 0.5 giây")
     parser.add_argument("--laps", type=int, default=4, help="Số vòng hoàn thành giải, mặc định 4")
     parser.add_argument("--students", type=int, default=20, help="Số sinh viên giả lập, mặc định 20")
     parser.add_argument("--mode", choices=("GPS_ONLY", "GPS_AND_ARDUINO"), default="GPS_ONLY",
@@ -108,7 +123,7 @@ def main() -> None:
     run_tag = uuid.uuid4().hex[:8]
     admin_header, sim_header = "X-Admin-Key", "X-Simulator-Key"
     points, segment_lengths, route_length = make_route()
-    start_offset_m = 10.0  # Start just after C04, already moving toward C01.
+    start_offset_m = 0.0  # Start at the C04 start/finish anchor for four complete loops.
 
     # The demo race uses four laps and a 15-second minimum lap so four loops fit
     # in the requested presentation window. All other races keep their own rule.
@@ -133,6 +148,17 @@ def main() -> None:
                          {"device_id": device_id, "name": f"Gateway mô phỏng {point['code']}"}, admin_key, admin_header)
             gateway_device_ids.append(device_id)
 
+    # Save the ordered route geometry so the map/dashboard use the same path
+    # as the simulator. The route API synchronizes all checkpoint anchor points.
+    checkpoint_ids = {point["code"]: created["checkpoint_id"]
+                      for point, created in zip(ROUTE_CHECKPOINTS, created_checkpoints)}
+    route_payload = {"points": [
+        {"latitude": point["latitude"], "longitude": point["longitude"],
+         "checkpoint_id": checkpoint_ids.get(point.get("checkpoint_code"))}
+        for point in ROUTE_WAYPOINTS
+    ]}
+    request_json(args.base_url, f"/api/v1/races/{race_id}/route", "PUT", route_payload, admin_key, admin_header)
+
     runners = []
     for number in range(1, args.students + 1):
         display_id = f"{number:02d}"
@@ -154,11 +180,12 @@ def main() -> None:
             "source": "SIMULATOR", "idempotency_key": f"sim-run-{run_tag}-{display_id}",
         }, simulator_key, sim_header)
 
-        # Different paces (21-27 seconds per loop) make fast and slow runners
-        # complete at different times while all remain in continuous motion.
-        lap_seconds = 21 + ((number * 3) % 7)
-        speed_mps = route_length / lap_seconds
-        finish_elapsed = (route_length * args.laps - start_offset_m) / speed_mps
+        # The 425m polyline needs accelerated demo motion to fit four full laps
+        # in 90–120 seconds. Simulator credentials have a separate 18m/s ceiling;
+        # physical wearable credentials keep the stricter 12m/s limit.
+        speed_mps = 14.3 + ((number * 7) % 7) * 0.5
+        lap_seconds = route_length / speed_mps
+        finish_elapsed = (route_length * args.laps) / speed_mps
         runners.append({
             "display_id": display_id, "student_id": student_id,
             "wearable_id": wearable_id, "run_id": run["run_id"],
@@ -168,8 +195,8 @@ def main() -> None:
         })
 
     print(f"Race {race_id}: {args.students} sinh viên, {args.laps} vòng, 4 checkpoint/vòng.")
-    print("Tuyến: quanh tòa Thế Kỷ NEU (tọa độ minh họa), gửi GPS + bước chân liên tục.")
-    print("Pace mô phỏng: 21-27 giây/vòng; runner hoàn thành ở các thời điểm khác nhau.")
+    print(f"Tuyến polyline mô phỏng: khoảng {route_length:.1f}m/vòng, 4 checkpoint.")
+    print("GPS + bước chân chuyển động liên tục; pace tăng tốc demo khoảng 25-30 giây/vòng.")
     simulator_started = time.monotonic()
     expected_finish = max(runner["finish_elapsed"] for runner in runners)
     last_progress_print = -1

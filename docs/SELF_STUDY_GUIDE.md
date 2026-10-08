@@ -49,18 +49,21 @@ Sao chép `.env.example` thành `.env` và đặt khóa local riêng. Chạy th�
 DATABASE_URL=sqlite:///./running_demo.db
 ADMIN_API_KEY=local-admin-key-change-this
 SIMULATOR_API_KEY=local-simulator-key-change-this
+WEARABLE_API_KEY=local-wearable-key-change-this
 GATEWAY_API_KEY=local-gateway-key-change-this
+MAX_GPS_SPEED_MPS=12
+MAX_SIMULATOR_SPEED_MPS=18
 MIN_LAP_INTERVAL_SECONDS=30
 ```
 
-Mục đích tách ba key: Admin cấu hình/đọc dashboard; Simulator gửi run và GPS giả lập; Gateway gửi event Arduino. Không đặt các key thật vào mã nguồn hoặc frontend công khai.
+Mục đích tách key: Admin cấu hình/đọc dashboard; Simulator gửi run và GPS giả lập; wearable thật gửi GPS bằng Wearable key; Gateway gửi event Arduino. Simulator có ngưỡng tốc độ demo riêng để hoàn thành bốn vòng trong thời gian trình chiếu; wearable thật vẫn dùng ngưỡng thấp hơn. Không đặt key thật vào mã nguồn hoặc frontend công khai.
 
 ## 4. Viết phần nền và model trong `app/main.py`
 
 1. Import FastAPI, SQLAlchemy, Pydantic, `datetime`, `uuid`, `hashlib`, `json`, `asyncio` và các thư viện khoảng cách/thời gian.
 2. Đọc `.env` bằng `pydantic-settings`; tạo `engine`, `SessionLocal`, `Base(DeclarativeBase)` và dependency tạo/đóng session database cho mỗi request.
 3. Tạo hàm `new_id()` sinh UUID và hàm UTC dùng thống nhất. Chuẩn hóa thời gian có timezone trước khi so sánh.
-4. Tạo các model `Race`, `Student`, `RaceParticipant`, `Checkpoint`, `RunnerWearable`, `RunSession`, `GpsPoint`, `LapEvent`, `Device`, `DeviceEvent`. Quan hệ trung tâm là Race → Participant → Student → Run; GPS gắn với Run; Arduino event gắn với Device và Checkpoint. `DeviceEvent.student_id` được nullable: Arduino không biết danh tính.
+4. Tạo các model `Race`, `Student`, `RaceParticipant`, `Checkpoint`, `RaceRoutePoint`, `RunnerWearable`, `RunSession`, `GpsPoint`, `LapEvent`, `Device`, `DeviceEvent`. `RaceRoutePoint` lưu polyline GPS có thứ tự, gắn tùy chọn với checkpoint để việc đổi vị trí marker cũng cập nhật tuyến. Quan hệ trung tâm là Race → Participant → Student → Run; GPS gắn với Run; Arduino event gắn với Device và Checkpoint. `DeviceEvent.student_id` được nullable: Arduino không biết danh tính.
 5. Bổ sung `GPSPassage` để lưu một lần runner đi từ ngoài vào trong geofence; `GeofenceState` lưu vùng `UNKNOWN/OUTSIDE/INSIDE` theo từng run/checkpoint; `MatchAudit` lưu admin xử lý event mơ hồ. `DeviceEvent` lưu trạng thái ghép, trạng thái tính vòng, deadline, candidates, version và lý do.
 6. Đặt `Race.checkpoint_mode` mặc định `GPS_ONLY`. Thông số demo là inner 10m, outer 15m, match window ±3s, late grace 2s, sample gap 5s, tuổi event tối đa 10s và future skew 2s.
 7. Tạo Pydantic input model cho race, student, checkpoint, participant, run, GPS, Arduino event, cấu hình matching và thao tác resolve. Validate tọa độ, bước chân, timestamp, mode và yêu cầu `student_id` của Arduino phải null.
@@ -69,16 +72,17 @@ Mục đích tách ba key: Admin cấu hình/đọc dashboard; Simulator gửi r
 
 ## 5. Thêm xác thực API key và API khởi tạo
 
-1. Viết helper so sánh header `X-Admin-Key`, `X-Simulator-Key`, `X-Gateway-Key` với cấu hình môi trường; thiếu/sai trả HTTP 401.
+1. Viết helper so sánh header `X-Admin-Key`, `X-Simulator-Key`, `X-Wearable-Key`, `X-Gateway-Key` với cấu hình môi trường; thiếu/sai trả HTTP 401.
 2. Tạo `POST /api/v1/auth/admin-key`. Frontend gửi key trong header; chỉ mở dashboard khi nhận 200. Sai key trả 401 và có thể thử lại không giới hạn; không xây cơ chế khóa sau N lần.
 3. Tạo API tạo race/student/checkpoint/participant và đăng ký wearable.
 4. Gán `bib_number` theo race cho mỗi participant (`01`, `02`, ...). Đây là nhãn để hiển thị, không thay thế UUID `student_id` khi liên kết API.
+5. Tạo `PUT /api/v1/races/{race_id}/route` để lưu polyline đóng 400–450 m, cùng một điểm anchor cho mỗi checkpoint; tạo `GET` để frontend tải tuyến và `PATCH /api/v1/checkpoints/{checkpoint_id}` để sửa marker/radius. Khóa thay đổi khi đã có run để tránh đổi tuyến giữa cuộc đua.
 5. Tạo `POST /api/v1/runs`: xác nhận participant đã đăng ký, wearable thuộc đúng student, không có phiên ACTIVE khác; lưu `started_at` từ server.
 6. Trong `GPS_AND_ARDUINO`, khóa cấu hình sau khi run đầu tiên được tạo. Nếu đã khóa mà sửa mode/tham số, trả 409; muốn thử cấu hình khác thì tạo race mới.
 
 ## 6. Nhận GPS và snapshot bước chân
 
-Tạo `POST /api/v1/telemetry/gps`, xác thực Simulator key rồi xử lý theo thứ tự: idempotency → kiểm tra race/run/student/wearable khớp → run ACTIVE → tọa độ hợp lệ → timestamp không lùi → bước chân không giảm → vận tốc/độ nhảy tọa độ hợp lý → tính khoảng cách Haversine → lưu point và cập nhật run. Khi key idempotency bị gửi lại với payload khác, trả 409. Không cập nhật geofence nếu GPS bị từ chối.
+Tạo `POST /api/v1/telemetry/gps`, chấp nhận `X-Simulator-Key` cho dữ liệu demo (tối đa 18 m/s) hoặc `X-Wearable-Key` cho thiết bị thật (mặc định tối đa 12 m/s), rồi xử lý theo thứ tự: idempotency → kiểm tra race/run/student/wearable khớp → run ACTIVE → tọa độ hợp lệ → timestamp không lùi → bước chân không giảm → vận tốc/độ nhảy tọa độ theo nguồn → tính khoảng cách Haversine → lưu point và cập nhật run. Khi key idempotency bị gửi lại với payload khác, trả 409. Không cập nhật geofence nếu GPS bị từ chối.
 
 `GPS_ONLY`: chuyển trạng thái geofence và đếm lap từ GPS theo hành vi cũ. `GPS_AND_ARDUINO`: GPS chỉ tạo passage bằng `OUTSIDE → INSIDE`; GPS không tự cộng vòng. Mẫu đầu ở bên trong chỉ khởi tạo trạng thái, không tạo passage; nếu mất mẫu quá 5 giây thì reset `UNKNOWN` để tránh suy luận passage giả.
 
@@ -119,13 +123,15 @@ Tạo hoặc giữ `GET /runners`, `GET /live` làm API danh sách/snapshot. Fro
 Terminal 1:
 
 ```powershell
+cd "D:\study\Mạnh kết nối vạn vật\backend"
 .\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload
 ```
 
-Mở `http://127.0.0.1:8000/docs`. Terminal 2 tạo 20 sinh viên có bib `01`–`20`, GPS/bước chân di chuyển liên tục trên tuyến quanh tòa Thế Kỷ NEU. Mỗi vòng qua bốn checkpoint; checkpoint thứ tư mới tăng số vòng. Pace runner khác nhau 21–27 giây/vòng, race demo yêu cầu 4 vòng và thường mất khoảng 90–120 giây:
+Mở `http://127.0.0.1:8000/docs`. Terminal 2 tạo 20 sinh viên có bib `01`–`20`, GPS/bước chân di chuyển liên tục trên tuyến quanh A1/A2. Mỗi vòng qua bốn checkpoint; checkpoint thứ tư mới tăng số vòng. Tọa độ checkpoint chuyển từ bảng README; polyline demo thêm điểm bẻ mô phỏng để đạt khoảng 425 m/vòng. Tốc độ giả lập tăng tốc 14.3–17.3 m/s, GPS gửi mỗi 0.5 giây để demo bốn vòng hoàn chỉnh trong khoảng 98–119 giây:
 
 ```powershell
+cd "D:\study\Mạnh kết nối vạn vật\backend"
 .\.venv\Scripts\Activate.ps1
 python -m app.simulator
 ```
@@ -136,12 +142,13 @@ python -m app.simulator
 python -m app.simulator --mode GPS_AND_ARDUINO --students 4 --laps 4
 ```
 
-Simulator tạo race mới, bốn checkpoint, participant, wearable và run. Mặc định `GPS_ONLY` là chế độ phù hợp để demo đủ 20 runner hoàn thành nhanh. Chế độ `GPS_AND_ARDUINO` có thể trả `AMBIGUOUS` khi nhiều runner qua checkpoint gần nhau, đúng theo rule không tự gán danh tính trong đám đông. Tọa độ tuyến là điểm minh họa gần tòa nhà, không phải khảo sát đường chạy an toàn ngoài thực địa. Lấy `race_id` simulator in ở cuối rồi gọi `GET /api/v1/races/{race_id}/dashboard` trong `/docs` với `X-Admin-Key`.
+Simulator tạo race mới, bốn checkpoint, polyline tuyến, participant, wearable và run. Mặc định `GPS_ONLY` là chế độ phù hợp để demo đủ 20 runner hoàn thành nhanh. Chế độ `GPS_AND_ARDUINO` có thể trả `AMBIGUOUS` khi nhiều runner qua checkpoint gần nhau, đúng theo rule không tự gán danh tính trong đám đông. Các điểm bẻ của polyline demo chưa được đối chiếu với lối đi thực địa; thay bằng polyline lấy từ bản đồ qua API PUT trước khi nhận thiết bị thật. Lấy `race_id` simulator in ở cuối rồi gọi `GET /api/v1/races/{race_id}/dashboard` trong `/docs` với `X-Admin-Key`.
 
 ## 11. Tự nối frontend và thiết bị thật sau này
 
 - FE: base URL `http://localhost:8000/api/v1`; Admin key ở header `X-Admin-Key`; gọi dashboard và render `display_id` làm số lớn, dùng UUID làm khóa.
-- Wearable: gửi GPS và `total_steps` trong một request tới `/telemetry/gps`, cùng `run_id`, `student_id`, `wearable_device_id`, timestamp và idempotency key. Thay simulator key bằng cơ chế credential phù hợp trước khi triển khai thật.
+- Wearable: gửi GPS và `total_steps` trong một request tới `/telemetry/gps`, cùng `run_id`, `student_id`, `wearable_device_id`, timestamp và idempotency key; xác thực bằng `X-Wearable-Key` và giữ giới hạn 12 m/s. Simulator dùng `X-Simulator-Key` riêng, giới hạn 18 m/s để tăng tốc demo.
+- Route/map: Admin Web tải `GET /races/{race_id}/route`, gửi polyline có thứ tự bằng `PUT /races/{race_id}/route`, và cập nhật marker/radius bằng `PATCH /checkpoints/{checkpoint_id}`. Route cần khép kín, dài 400–450 m, chứa anchor cho mọi checkpoint và chỉ sửa được trước khi tạo run.
 - Arduino: board nối Serial tới Gateway; Gateway gửi event lên backend với `X-Gateway-Key`, device/event ID và timestamp. Board không tự gửi danh tính runner.
 - Chế độ tích hợp: tạo race `GPS_AND_ARDUINO`, đăng ký mapping thiết bị trước khi mở run. Cấu hình ghép đã khóa sau khi tạo run.
 
@@ -153,14 +160,18 @@ Simulator tạo race mới, bốn checkpoint, participant, wearable và run. M�
 
 | Phần | Tệp và dòng | Mục đích |
 |---|---|---|
-| Xác thực Admin và endpoint kiểm tra key | [`app/main.py`](../app/main.py:429), [`app/main.py`](../app/main.py:698) | Sai key trả 401; không khóa sau số lần nhập sai. |
-| Hoàn tất phiên và chốt đồng hồ | [`app/main.py`](../app/main.py:486), [`app/main.py`](../app/main.py:498), [`app/main.py`](../app/main.py:793) | Đủ 4 vòng thì hoàn tất; thời lượng đóng băng. |
-| Cấu hình ngưỡng vòng cho từng race | [`app/main.py`](../app/main.py:276), [`app/main.py`](../app/main.py:706) | Demo dùng 15 giây/vòng; race thường lấy giá trị môi trường. |
-| Ghi bốn checkpoint GPS mỗi vòng | [`app/main.py`](../app/main.py:829), [`app/main.py`](../app/main.py:1130) | Lưu passage từng điểm; chỉ checkpoint `LAP` số 4 tăng bộ đếm vòng; dashboard trả tọa độ/tổng lượt qua. |
-| API dashboard / danh sách runner | [`app/main.py`](../app/main.py:1130), [`app/main.py`](../app/main.py:1184) | Tổng hợp chỉ số; hiển thị bib và giữ UUID làm định danh. |
-| Gán wearable / tạo run / nhận GPS | [`app/main.py`](../app/main.py:731), [`app/main.py`](../app/main.py:803), [`app/main.py`](../app/main.py:829) | FE/device gửi đúng runner và wearable đã gán. |
-| Mapping Arduino / event / xử lý tay | [`app/main.py`](../app/main.py:749), [`app/main.py`](../app/main.py:962), [`app/main.py`](../app/main.py:1047) | Gateway gửi event; admin giải quyết ambiguity. |
-| Worker ghép bền vững | [`app/main.py`](../app/main.py:1311) | Tìm candidates từ dữ liệu database đã lưu. |
-| Tạo 20 runner di chuyển và phát GPS/steps | [`app/simulator.py`](../app/simulator.py:25), [`app/simulator.py`](../app/simulator.py:92), [`app/simulator.py`](../app/simulator.py:137) | Chạy bằng `python -m app.simulator`; pace 21–27 giây/vòng. |
+| Cấu hình SQLite và an toàn kết nối | [`app/main.py`](../app/main.py:45), [`app/main.py`](../app/main.py:67) | Đặt database cạnh backend, bật khóa ngoại và WAL. |
+| Model dữ liệu lưu trong SQLite | [`app/main.py`](../app/main.py:95), [`app/main.py`](../app/main.py:120), [`app/main.py`](../app/main.py:129), [`app/main.py`](../app/main.py:140), [`app/main.py`](../app/main.py:154), [`app/main.py`](../app/main.py:167), [`app/main.py`](../app/main.py:189), [`app/main.py`](../app/main.py:207), [`app/main.py`](../app/main.py:241), [`app/main.py`](../app/main.py:255), [`app/main.py`](../app/main.py:264), [`app/main.py`](../app/main.py:274) | Race, student, participant, checkpoint, route polyline, run, GPS, GPS passage, lap, device, wearable và Arduino event. |
+| Xác thực Admin và endpoint kiểm tra key | [`app/main.py`](../app/main.py:494), [`app/main.py`](../app/main.py:805) | Sai key trả 401; không khóa sau số lần nhập sai. |
+| Hoàn tất phiên và chốt đồng hồ | [`app/main.py`](../app/main.py:592), [`app/main.py`](../app/main.py:604), [`app/main.py`](../app/main.py:1287) | Đủ số vòng của race thì chuyển `COMPLETED` và chốt thời lượng. |
+| Tạo sinh viên, wearable, checkpoint và registration | [`app/main.py`](../app/main.py:828), [`app/main.py`](../app/main.py:837), [`app/main.py`](../app/main.py:848), [`app/main.py`](../app/main.py:964) | API quản trị chuẩn bị giải và các điểm nối thiết bị. |
+| Tạo run và nhận GPS + steps | [`app/main.py`](../app/main.py:982), [`app/main.py`](../app/main.py:1008) | Frontend/Admin tạo run; simulator hoặc wearable gửi telemetry. |
+| Nhận checkpoint event và xử lý match | [`app/main.py`](../app/main.py:1141), [`app/main.py`](../app/main.py:1492), [`app/main.py`](../app/main.py:1226) | Gateway gửi event; worker đối chiếu; Admin xử lý ambiguity. |
+| API dashboard / danh sách runner / polyline | [`app/main.py`](../app/main.py:1310), [`app/main.py`](../app/main.py:1365), [`app/main.py`](../app/main.py:1386), [`app/main.py`](../app/main.py:855) | Trả KPI, bib hiển thị, checkpoint, tuyến và vị trí runner. |
+| WebSocket live | [`app/main.py`](../app/main.py:1429) | Phát dữ liệu đã commit cho Admin Web. |
+| Tạo bảng và nâng schema demo | [`app/main.py`](../app/main.py:1442), [`app/main.py`](../app/main.py:1445) | Tạo bảng mới, gồm cả bảng `race_route_points`, trong SQLite. |
+| Tạo 20 runner di chuyển và phát GPS/steps | [`app/simulator.py`](../app/simulator.py:25), [`app/simulator.py`](../app/simulator.py:113), [`app/simulator.py`](../app/simulator.py:163), [`app/simulator.py`](../app/simulator.py:186) | Mặc định 20 người; GPS chạy liên tục trên polyline ~425 m; checkpoint theo bốn tọa độ người dùng cung cấp. |
+| Đọc/thay polyline tuyến và sửa checkpoint | [`app/main.py`](../app/main.py:855), [`app/main.py`](../app/main.py:861), [`app/main.py`](../app/main.py:895) | GET/PUT tuyến; PATCH checkpoint đồng bộ anchor tuyến; chỉ trước khi bắt đầu run. |
+| Bộ sơ đồ hệ thống | [`UML_DIAGRAMS.md`](UML_DIAGRAMS.md) | Có Use Case, Activity, BPMN AS-IS/TO-BE, DFD, ERD, Sequence, Swimlane, State, Class, Context, Mind Map, Journey và Component. |
 
 Số dòng tham chiếu áp dụng cho phiên bản hiện tại; VS Code có thể mở trực tiếp file theo các link tương đối trên.
