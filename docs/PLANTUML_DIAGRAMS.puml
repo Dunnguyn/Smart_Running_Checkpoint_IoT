@@ -245,6 +245,9 @@ entity RACE {
   end_at : datetime
   status : string
   total_laps : int
+  route_profile : string
+  route_length_min_m : float nullable
+  route_length_max_m : float nullable
   checkpoint_mode : string
 }
 entity STUDENT {
@@ -613,6 +616,9 @@ class Race {
   +datetime end_at
   +string status
   +int total_laps
+  +string route_profile
+  +float route_length_min_m nullable
+  +float route_length_max_m nullable
   +int min_lap_interval_seconds
   +string checkpoint_mode
   +float inner_radius_m

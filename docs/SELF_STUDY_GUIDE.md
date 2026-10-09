@@ -4,7 +4,7 @@ Tài liệu này hướng dẫn tạo một bản backend riêng trên Windows b
 
 ## 1. Tạo thư mục và mở VS Code
 
-1. Tạo một thư mục dự án, ví dụ `D:\study\Mạnh kết nối vạn vật\backend-ban-tu-lam`.
+1. Tạo thư mục dự án tương đối, ví dụ `backend-ban-tu-lam`.
 2. VS Code → **File → Open Folder...** → chọn đúng thư mục này.
 3. Mở Terminal → **New Terminal**. Những lệnh tiếp theo chạy trong terminal PowerShell tại thư mục dự án.
 
@@ -43,7 +43,7 @@ Trong `.gitignore`, bỏ qua `.env`, `.venv/`, `__pycache__/`, `*.py[cod]` và `
 
 ## 3. Tạo cấu hình môi trường
 
-Sao chép `.env.example` thành `.env` và đặt khóa local riêng. Chạy thử nhanh với SQLite; để dùng SQL Server thì thay `DATABASE_URL` bằng connection string phù hợp và cài ODBC Driver.
+Sao chép `.env.example` thành `.env` và đặt khóa local riêng. Chạy thử nhanh với SQLite. Mã có cấu hình SQL Server qua ODBC Driver 18 nhưng chưa được kiểm thử ở lần rà soát này.
 
 ```dotenv
 DATABASE_URL=sqlite:///./running_demo.db
@@ -76,7 +76,7 @@ Mục đích tách key: Admin cấu hình/đọc dashboard; Simulator gửi run 
 2. Tạo `POST /api/v1/auth/admin-key`. Frontend gửi key trong header; chỉ mở dashboard khi nhận 200. Sai key trả 401 và có thể thử lại không giới hạn; không xây cơ chế khóa sau N lần.
 3. Tạo API tạo race/student/checkpoint/participant và đăng ký wearable.
 4. Gán `bib_number` theo race cho mỗi participant (`01`, `02`, ...). Đây là nhãn để hiển thị, không thay thế UUID `student_id` khi liên kết API.
-5. Tạo `PUT /api/v1/races/{race_id}/route` để lưu polyline đóng 400–450 m, cùng một điểm anchor cho mỗi checkpoint; tạo `GET` để frontend tải tuyến và `PATCH /api/v1/checkpoints/{checkpoint_id}` để sửa marker/radius. Khóa thay đổi khi đã có run để tránh đổi tuyến giữa cuộc đua.
+5. Tạo `PUT /api/v1/races/{race_id}/route` để lưu polyline đóng, cùng một điểm anchor cho mỗi checkpoint; profile `NEU_DEMO` áp cận 400–450 m, còn `CUSTOM` dùng cận tùy chọn. Tạo `GET` để frontend tải tuyến và trạng thái khóa, `PATCH /api/v1/checkpoints/{checkpoint_id}` để sửa marker/radius. Khóa thay đổi khi đã có run để tránh đổi tuyến giữa cuộc đua.
 5. Tạo `POST /api/v1/runs`: xác nhận participant đã đăng ký, wearable thuộc đúng student, không có phiên ACTIVE khác; lưu `started_at` từ server.
 6. Trong `GPS_AND_ARDUINO`, khóa cấu hình sau khi run đầu tiên được tạo. Nếu đã khóa mà sửa mode/tham số, trả 409; muốn thử cấu hình khác thì tạo race mới.
 
@@ -123,17 +123,19 @@ Tạo hoặc giữ `GET /runners`, `GET /live` làm API danh sách/snapshot. Fro
 Terminal 1:
 
 ```powershell
-cd "D:\study\Mạnh kết nối vạn vật\backend"
+# Chạy từ repo root; nếu đã mở services/backend trực tiếp trong VS Code thì bỏ dòng cd.
+cd services\backend
 .\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload
 ```
 
-Mở `http://127.0.0.1:8000/docs`. Terminal 2 tạo 20 sinh viên có bib `01`–`20`, GPS/bước chân di chuyển liên tục trên tuyến quanh A1/A2. Mỗi vòng qua bốn checkpoint; checkpoint thứ tư mới tăng số vòng. Tọa độ checkpoint chuyển từ bảng README; polyline demo thêm điểm bẻ mô phỏng để đạt khoảng 425 m/vòng. Tốc độ giả lập tăng tốc 14.3–17.3 m/s, GPS gửi mỗi 0.5 giây để demo bốn vòng hoàn chỉnh trong khoảng 98–119 giây:
+Mở `http://127.0.0.1:8000/docs`. Terminal 2 tạo 20 sinh viên có bib `01`–`20`, GPS/bước chân di chuyển liên tục trên tuyến quanh A1/A2. Mỗi vòng qua bốn checkpoint; chỉ checkpoint được khai báo `LAP` mới tăng số vòng. Tọa độ checkpoint chuyển từ bảng README; polyline demo thêm điểm bẻ mô phỏng để đạt khoảng 425 m/vòng. Simulator đọc tuyến đã lưu từ API. Tốc độ mô phỏng tăng tốc 12.4–13.1 m/s và được tái lập bằng seed; GPS gửi mỗi 0.5 giây. Giữ thời gian tối thiểu 30 giây/vòng nên bốn vòng cần ít nhất 120 giây; với tuyến 425 m dự kiến khoảng 130–137 giây cộng độ trễ API:
 
 ```powershell
-cd "D:\study\Mạnh kết nối vạn vật\backend"
+# Chạy từ repo root; nếu đã mở services/backend trực tiếp trong VS Code thì bỏ dòng cd.
+cd services\backend
 .\.venv\Scripts\Activate.ps1
-python -m app.simulator
+python -m app.simulator --seed 42
 ```
 
 Để minh họa quy tắc ghép GPS + Arduino:
@@ -147,8 +149,8 @@ Simulator tạo race mới, bốn checkpoint, polyline tuyến, participant, wea
 ## 11. Tự nối frontend và thiết bị thật sau này
 
 - FE: base URL `http://localhost:8000/api/v1`; Admin key ở header `X-Admin-Key`; gọi dashboard và render `display_id` làm số lớn, dùng UUID làm khóa.
-- Wearable: gửi GPS và `total_steps` trong một request tới `/telemetry/gps`, cùng `run_id`, `student_id`, `wearable_device_id`, timestamp và idempotency key; xác thực bằng `X-Wearable-Key` và giữ giới hạn 12 m/s. Simulator dùng `X-Simulator-Key` riêng, giới hạn 18 m/s để tăng tốc demo.
-- Route/map: Admin Web tải `GET /races/{race_id}/route`, gửi polyline có thứ tự bằng `PUT /races/{race_id}/route`, và cập nhật marker/radius bằng `PATCH /checkpoints/{checkpoint_id}`. Route cần khép kín, dài 400–450 m, chứa anchor cho mọi checkpoint và chỉ sửa được trước khi tạo run.
+- Wearable: gửi GPS và `total_steps` trong một request tới `/telemetry/gps`, cùng `run_id`, `student_id`, `wearable_device_id`, timestamp và idempotency key; xác thực bằng `X-Wearable-Key` và giữ giới hạn 12 m/s. Khóa này dùng chung theo vai trò, không xác thực mật mã riêng từng thiết bị; backend kiểm tra wearable ID đã ghép với student/run. Simulator dùng `X-Simulator-Key` riêng, giới hạn 18 m/s để tăng tốc demo. Backend xác định GPS source theo key, không tin `source` do client khai.
+- Route/map: Admin Web tải `GET /races/{race_id}/route`, gửi polyline có thứ tự bằng `PUT /races/{race_id}/route`, và cập nhật marker/radius bằng `PATCH /checkpoints/{checkpoint_id}`. Route cần khép kín, chứa anchor cho mọi checkpoint; profile `NEU_DEMO` dài 400–450 m, còn `CUSTOM` chỉ áp cận nếu khai báo. Sau khi thay đổi, FE refetch route/dashboard vì REST cập nhật không phát WebSocket event.
 - Arduino: board nối Serial tới Gateway; Gateway gửi event lên backend với `X-Gateway-Key`, device/event ID và timestamp. Board không tự gửi danh tính runner.
 - Chế độ tích hợp: tạo race `GPS_AND_ARDUINO`, đăng ký mapping thiết bị trước khi mở run. Cấu hình ghép đã khóa sau khi tạo run.
 

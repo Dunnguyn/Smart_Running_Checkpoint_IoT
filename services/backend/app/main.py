@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, select, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, select, text, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -100,6 +100,9 @@ class Race(Base):
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="DRAFT")
     route_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    route_profile: Mapped[str] = mapped_column(String(30), default="CUSTOM")
+    route_length_min_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    route_length_max_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     total_laps: Mapped[int] = mapped_column(Integer, default=4)
     min_lap_interval_seconds: Mapped[int] = mapped_column(Integer, default=30)
     checkpoint_mode: Mapped[str] = mapped_column(String(30), default="GPS_ONLY")
@@ -327,6 +330,9 @@ class RaceIn(BaseModel):
     end_at: datetime | None = None
     status: str = "DRAFT"
     route_name: str | None = None
+    route_profile: str = "CUSTOM"
+    route_length_min_m: float | None = Field(default=None, gt=0, le=100000)
+    route_length_max_m: float | None = Field(default=None, gt=0, le=100000)
     total_laps: int = Field(default=4, ge=1, le=100)
     min_lap_interval_seconds: int | None = Field(default=None, ge=1, le=3600)
     checkpoint_mode: str = "GPS_ONLY"
@@ -509,6 +515,8 @@ def gps_ingest_auth(
     x_wearable_key: str | None = Header(default=None),
 ) -> str:
     """Return the authenticated telemetry source so demo and hardware limits differ."""
+    if x_simulator_key and x_wearable_key:
+        raise HTTPException(400, detail={"code": "AMBIGUOUS_INGEST_CREDENTIALS", "message": "Chỉ gửi một trong X-Simulator-Key hoặc X-Wearable-Key.", "details": [], "trace_id": new_id()})
     if x_simulator_key and x_simulator_key == settings.simulator_api_key:
         return "SIMULATOR"
     if x_wearable_key and x_wearable_key == settings.wearable_api_key:
@@ -551,8 +559,13 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def route_length_m(points: list[Any]) -> float:
-    """Measure an ordered route polyline using Haversine distance per segment."""
-    return sum(haversine_m(a.latitude, a.longitude, b.latitude, b.longitude) for a, b in zip(points, points[1:]))
+    """Measure every ordered leg, including the short closing leg to the start."""
+    if len(points) < 2:
+        return 0.0
+    legs = sum(haversine_m(a.latitude, a.longitude, b.latitude, b.longitude)
+               for a, b in zip(points, points[1:]))
+    return legs + haversine_m(points[-1].latitude, points[-1].longitude,
+                              points[0].latitude, points[0].longitude)
 
 
 def race_route_dict(db: Session, race_id: str) -> dict[str, Any]:
@@ -564,6 +577,26 @@ def race_route_dict(db: Session, race_id: str) -> dict[str, Any]:
     }
 
 
+def lock_race_configuration(db: Session, race_id: str) -> Race:
+    """Serialize route/config edits against run creation for the same race.
+
+    SQL Server honors SELECT FOR UPDATE. SQLite has no row-level FOR UPDATE, so
+    the no-op UPDATE obtains its write lock before either operation checks state.
+    """
+    race = db.scalar(select(Race).where(Race.id == race_id).with_for_update())
+    if not race:
+        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Không tìm thấy giải chạy.", "details": [], "trace_id": new_id()})
+    if engine.dialect.name == "sqlite":
+        db.execute(update(Race).where(Race.id == race_id).values(config_version=Race.config_version))
+    return race
+
+
+def route_lock_metadata(db: Session, race_id: str) -> dict[str, Any]:
+    locked = db.scalar(select(RunSession.id).where(RunSession.race_id == race_id).limit(1)) is not None
+    return {"editable": not locked, "locked": locked,
+            "locked_reason": "Đã tạo ít nhất một phiên chạy cho giải này." if locked else None}
+
+
 def aware(value: datetime) -> datetime:
     """Normalize naive client ISO timestamps to UTC; aware timestamps convert to UTC."""
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
@@ -571,7 +604,7 @@ def aware(value: datetime) -> datetime:
 
 def race_matching_config(race: Race) -> dict[str, Any]:
     return {name: getattr(race, name) for name in (
-        "checkpoint_mode", "inner_radius_m", "outer_radius_m", "match_window_seconds",
+        "checkpoint_mode", "min_lap_interval_seconds", "inner_radius_m", "outer_radius_m", "match_window_seconds",
         "late_grace_seconds", "max_sample_gap_seconds", "max_event_age_seconds",
         "max_future_skew_seconds", "config_version",
     )}
@@ -813,10 +846,21 @@ def create_race(data: RaceIn, db: Session = Depends(db_session)):
     if data.checkpoint_mode not in {"GPS_ONLY", "GPS_AND_ARDUINO"}:
         envelope_error("INVALID_CHECKPOINT_MODE", "checkpoint_mode phải là GPS_ONLY hoặc GPS_AND_ARDUINO.", 422)
     race_values = data.model_dump(exclude={"min_lap_interval_seconds"})
+    if data.route_profile not in {"CUSTOM", "NEU_DEMO"}:
+        envelope_error("INVALID_ROUTE_PROFILE", "route_profile phải là CUSTOM hoặc NEU_DEMO.", 422)
+    if data.route_profile == "NEU_DEMO":
+        race_values["route_length_min_m"] = data.route_length_min_m or 400.0
+        race_values["route_length_max_m"] = data.route_length_max_m or 450.0
+    minimum = race_values["route_length_min_m"]
+    maximum = race_values["route_length_max_m"]
+    if minimum is not None and maximum is not None and minimum >= maximum:
+        envelope_error("INVALID_ROUTE_LENGTH_BOUNDS", "route_length_min_m phải nhỏ hơn route_length_max_m.", 422)
+    if data.route_profile == "NEU_DEMO" and (minimum is None or maximum is None):
+        envelope_error("INVALID_ROUTE_LENGTH_BOUNDS", "NEU_DEMO cần cận chiều dài tối thiểu và tối đa.", 422)
     race_values["min_lap_interval_seconds"] = data.min_lap_interval_seconds or settings.min_lap_interval_seconds
     race = Race(**race_values)
     db.add(race); db.commit(); db.refresh(race)
-    return {"race_id": race.id, "name": race.name, "status": race.status, "total_laps": race.total_laps, "min_lap_interval_seconds": race.min_lap_interval_seconds, **race_matching_config(race)}
+    return {"race_id": race.id, "name": race.name, "status": race.status, "total_laps": race.total_laps, "min_lap_interval_seconds": race.min_lap_interval_seconds, "route_profile": race.route_profile, "route_length_min_m": race.route_length_min_m, "route_length_max_m": race.route_length_max_m, **race_matching_config(race)}
 
 
 @app.get("/api/v1/races", dependencies=[Depends(admin)])
@@ -846,7 +890,13 @@ def register_runner_wearable(data: RunnerWearableIn, db: Session = Depends(db_se
 
 @app.post("/api/v1/races/{race_id}/checkpoints", status_code=201, dependencies=[Depends(admin)])
 def create_checkpoint(race_id: str, data: CheckpointIn, db: Session = Depends(db_session)):
-    get_or_404(db, Race, race_id, "giải chạy")
+    lock_race_configuration(db, race_id)
+    if db.scalar(select(RunSession.id).where(RunSession.race_id == race_id).limit(1)):
+        envelope_error("CHECKPOINT_LOCKED", "Không thể thêm checkpoint sau khi đã tạo phiên chạy.")
+    if db.scalar(select(Checkpoint.id).where(Checkpoint.race_id == race_id, Checkpoint.code == data.code).limit(1)):
+        envelope_error("CHECKPOINT_CODE_EXISTS", "Mã checkpoint đã tồn tại trong giải.", 422)
+    if db.scalar(select(Checkpoint.id).where(Checkpoint.race_id == race_id, Checkpoint.sequence_no == data.sequence_no).limit(1)):
+        envelope_error("DUPLICATE_CHECKPOINT_SEQUENCE", "sequence_no đã được dùng bởi checkpoint khác.", 422)
     checkpoint = Checkpoint(race_id=race_id, **data.model_dump()); db.add(checkpoint); db.commit(); db.refresh(checkpoint)
     return {"checkpoint_id": checkpoint.id, **data.model_dump()}
 
@@ -854,32 +904,49 @@ def create_checkpoint(race_id: str, data: CheckpointIn, db: Session = Depends(db
 # [FE LINK: ROUTE EDITOR] Store an ordered map polyline; checkpoint anchors must lie on it.
 @app.get("/api/v1/races/{race_id}/route", dependencies=[Depends(admin)])
 def get_race_route(race_id: str, db: Session = Depends(db_session)):
-    get_or_404(db, Race, race_id, "giải chạy")
-    return {"race_id": race_id, **race_route_dict(db, race_id)}
+    race = get_or_404(db, Race, race_id, "giải chạy")
+    route = race_route_dict(db, race_id)
+    return {"race_id": race_id, **route,
+            "route_status": "CONFIGURED" if len(route["points"]) >= 5 else "NOT_CONFIGURED",
+            "route_profile": race.route_profile,
+            "route_length_min_m": race.route_length_min_m,
+            "route_length_max_m": race.route_length_max_m,
+            **route_lock_metadata(db, race_id)}
 
 
 @app.put("/api/v1/races/{race_id}/route", dependencies=[Depends(admin)])
 def replace_race_route(race_id: str, data: RouteReplaceIn, db: Session = Depends(db_session)):
     """Replace a race's map route before runs start; supports map-service/editor coordinates."""
-    race = get_or_404(db, Race, race_id, "giải chạy")
+    race = lock_race_configuration(db, race_id)
     if db.scalar(select(RunSession.id).where(RunSession.race_id == race_id).limit(1)):
         envelope_error("ROUTE_LOCKED", "Không thể đổi tuyến sau khi đã tạo phiên chạy.")
     first, last = data.points[0], data.points[-1]
     if haversine_m(first.latitude, first.longitude, last.latitude, last.longitude) > 2.0:
         envelope_error("ROUTE_NOT_CLOSED", "Tuyến vòng phải kết thúc tại điểm xuất phát (sai lệch tối đa 2 m).", 422)
     checkpoints = db.scalars(select(Checkpoint).where(Checkpoint.race_id == race_id)).all()
+    if not checkpoints:
+        envelope_error("ROUTE_REQUIRES_CHECKPOINTS", "Cần tạo checkpoint trước khi lưu tuyến.", 422)
     checkpoint_map = {cp.id: cp for cp in checkpoints}
     anchors = [point.checkpoint_id for point in data.points if point.checkpoint_id]
     if len(anchors) != len(set(anchors)):
         envelope_error("DUPLICATE_ROUTE_CHECKPOINT", "Mỗi checkpoint chỉ được gắn một lần vào tuyến; điểm khép vòng cuối không gắn checkpoint_id.", 422)
+    if any(checkpoint_id not in checkpoint_map for checkpoint_id in anchors):
+        envelope_error("CHECKPOINT_RACE_MISMATCH", "Checkpoint neo không thuộc giải này.", 422)
     if set(anchors) != set(checkpoint_map):
         envelope_error("ROUTE_CHECKPOINT_MISMATCH", "Polyline phải có một điểm neo cho từng checkpoint của giải.", 422)
-    for point in data.points:
-        if point.checkpoint_id and point.checkpoint_id not in checkpoint_map:
-            envelope_error("CHECKPOINT_RACE_MISMATCH", "Checkpoint neo không thuộc giải này.", 422)
+    sequence_values = [checkpoint_map[checkpoint_id].sequence_no for checkpoint_id in anchors]
+    if len(set(sequence_values)) != len(sequence_values):
+        envelope_error("DUPLICATE_CHECKPOINT_SEQUENCE", "Mỗi checkpoint trong giải phải có sequence_no duy nhất.", 422)
+    sorted_sequences = sorted(sequence_values)
+    valid_rotations = {tuple(sorted_sequences[index:] + sorted_sequences[:index]) for index in range(len(sorted_sequences))}
+    if tuple(sequence_values) not in valid_rotations:
+        envelope_error("ROUTE_CHECKPOINT_ORDER_MISMATCH", "Thứ tự các điểm neo phải theo sequence_no quanh vòng; điểm bắt đầu có thể là bất kỳ checkpoint nào.", 422)
     distance = route_length_m(data.points)
-    if not 400.0 <= distance <= 450.0:
-        envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Tuyến phải dài 400–450 m; tuyến gửi lên dài {distance:.1f} m.", 422)
+    if race.route_length_min_m is not None and distance < race.route_length_min_m:
+        envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Tuyến phải dài ít nhất {race.route_length_min_m:g} m; tuyến gửi lên dài {distance:.1f} m.", 422)
+    if race.route_length_max_m is not None and distance > race.route_length_max_m:
+        envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Tuyến phải dài tối đa {race.route_length_max_m:g} m; tuyến gửi lên dài {distance:.1f} m.", 422)
+    # Replace polyline, checkpoint anchors and config version in one transaction.
     db.query(RaceRoutePoint).filter(RaceRoutePoint.race_id == race_id).delete(synchronize_session=False)
     for sequence_no, point in enumerate(data.points, start=1):
         db.add(RaceRoutePoint(race_id=race_id, sequence_no=sequence_no, latitude=point.latitude,
@@ -889,19 +956,42 @@ def replace_race_route(race_id: str, data: RouteReplaceIn, db: Session = Depends
             checkpoint.latitude, checkpoint.longitude = point.latitude, point.longitude
     race.config_version += 1
     db.commit()
-    return {"race_id": race_id, "route": race_route_dict(db, race_id), "config_version": race.config_version}
+    route = race_route_dict(db, race_id)
+    return {"race_id": race_id, "route": route, "route_status": "CONFIGURED",
+            "route_profile": race.route_profile,
+            "route_length_min_m": race.route_length_min_m,
+            "route_length_max_m": race.route_length_max_m,
+            **route_lock_metadata(db, race_id), "config_version": race.config_version}
 
 
 @app.patch("/api/v1/checkpoints/{checkpoint_id}", dependencies=[Depends(admin)])
 def patch_checkpoint(checkpoint_id: str, data: CheckpointPatch, db: Session = Depends(db_session)):
     """Update a checkpoint marker and keep its route anchor synchronized."""
     checkpoint = get_or_404(db, Checkpoint, checkpoint_id, "checkpoint")
+    lock_race_configuration(db, checkpoint.race_id)
+    db.refresh(checkpoint)
     if db.scalar(select(RunSession.id).where(RunSession.race_id == checkpoint.race_id).limit(1)):
         envelope_error("CHECKPOINT_LOCKED", "Không thể sửa checkpoint sau khi đã tạo phiên chạy.")
     values = data.model_dump(exclude_unset=True, exclude_none=True)
     if "kind" in values and values["kind"] not in {"CHECKPOINT", "LAP"}:
         envelope_error("INVALID_CHECKPOINT_KIND", "kind phải là CHECKPOINT hoặc LAP.", 422)
+    next_sequence = values.get("sequence_no", checkpoint.sequence_no)
+    duplicate_sequence = db.scalar(select(Checkpoint.id).where(
+        Checkpoint.race_id == checkpoint.race_id,
+        Checkpoint.sequence_no == next_sequence,
+        Checkpoint.id != checkpoint.id,
+    ).limit(1))
+    if duplicate_sequence:
+        envelope_error("DUPLICATE_CHECKPOINT_SEQUENCE", "sequence_no đã được dùng bởi checkpoint khác.", 422)
+    next_latitude = values.get("latitude", checkpoint.latitude)
+    next_longitude = values.get("longitude", checkpoint.longitude)
+    if (next_latitude is None) != (next_longitude is None):
+        envelope_error("INCOMPLETE_CHECKPOINT_COORDINATE", "Cần cập nhật đồng thời latitude và longitude.", 422)
+    if ("latitude" in values) != ("longitude" in values):
+        envelope_error("INCOMPLETE_CHECKPOINT_COORDINATE", "Khi di chuyển checkpoint, gửi cả latitude và longitude.", 422)
     route_points = db.scalars(select(RaceRoutePoint).where(RaceRoutePoint.race_id == checkpoint.race_id).order_by(RaceRoutePoint.sequence_no)).all()
+    if route_points and not any(p.checkpoint_id == checkpoint_id for p in route_points):
+        envelope_error("CHECKPOINT_ANCHOR_MISSING", "Checkpoint chưa có điểm neo trong polyline; hãy cập nhật toàn bộ tuyến.", 409)
     was_closed = len(route_points) > 1 and haversine_m(route_points[0].latitude, route_points[0].longitude,
                                                         route_points[-1].latitude, route_points[-1].longitude) <= 2.0
     for name, value in values.items():
@@ -914,14 +1004,27 @@ def patch_checkpoint(checkpoint_id: str, data: CheckpointPatch, db: Session = De
         elif was_closed and point.sequence_no == route_points[-1].sequence_no:
             route_points[0].latitude, route_points[0].longitude = checkpoint.latitude, checkpoint.longitude
         distance = route_length_m(route_points)
-        if not 400.0 <= distance <= 450.0:
-            envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Vị trí này làm tuyến dài {distance:.1f} m; cần giữ trong 400–450 m.", 422)
+        race = db.get(Race, checkpoint.race_id)
+        if race.route_length_min_m is not None and distance < race.route_length_min_m:
+            envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Vị trí này làm tuyến dài {distance:.1f} m; cần ít nhất {race.route_length_min_m:g} m.", 422)
+        if race.route_length_max_m is not None and distance > race.route_length_max_m:
+            envelope_error("ROUTE_LENGTH_OUT_OF_RANGE", f"Vị trí này làm tuyến dài {distance:.1f} m; tối đa {race.route_length_max_m:g} m.", 422)
+        anchors = [p.checkpoint_id for p in route_points if p.checkpoint_id]
+        anchor_sequences = [db.get(Checkpoint, anchor_id).sequence_no for anchor_id in anchors]
+        sorted_sequences = sorted(anchor_sequences)
+        rotations = {tuple(sorted_sequences[index:] + sorted_sequences[:index]) for index in range(len(sorted_sequences))}
+        if len(set(anchor_sequences)) != len(anchor_sequences) or tuple(anchor_sequences) not in rotations:
+            envelope_error("ROUTE_CHECKPOINT_ORDER_MISMATCH", "Thay đổi sequence_no làm thứ tự neo trên tuyến không hợp lệ.", 422)
     db.get(Race, checkpoint.race_id).config_version += 1
     db.commit()
+    race = db.get(Race, checkpoint.race_id)
     return {"checkpoint_id": checkpoint.id, "race_id": checkpoint.race_id, "code": checkpoint.code,
             "name": checkpoint.name, "sequence_no": checkpoint.sequence_no, "kind": checkpoint.kind,
             "latitude": checkpoint.latitude, "longitude": checkpoint.longitude, "radius_m": checkpoint.radius_m,
-            "route": race_route_dict(db, checkpoint.race_id) if point else None}
+            "route": race_route_dict(db, checkpoint.race_id) if point else None,
+            "route_profile": race.route_profile, "route_length_min_m": race.route_length_min_m,
+            "route_length_max_m": race.route_length_max_m,
+            **route_lock_metadata(db, checkpoint.race_id)}
 
 
 @app.post("/api/v1/checkpoints/{checkpoint_id}/devices", status_code=201, dependencies=[Depends(admin)])
@@ -941,9 +1044,19 @@ def register_checkpoint_device(checkpoint_id: str, data: CheckpointDeviceIn, db:
     return {"device_id": device.id, "checkpoint_id": checkpoint.id, "race_id": checkpoint.race_id, "status": device.status}
 
 
+@app.get("/api/v1/races/{race_id}/checkpoint-matching", dependencies=[Depends(admin)])
+def get_checkpoint_matching(race_id: str, db: Session = Depends(db_session)):
+    """Return the saved, effective Arduino/GPS matching config for Admin Web forms."""
+    race = get_or_404(db, Race, race_id, "giải chạy")
+    has_runs = db.scalar(select(RunSession.id).where(RunSession.race_id == race_id).limit(1)) is not None
+    return {**race_matching_config(race), "locked": has_runs,
+            "locked_at": race.matching_locked_at,
+            "locked_reason": "Phiên chạy đầu tiên đã được tạo." if has_runs else None}
+
+
 @app.patch("/api/v1/races/{race_id}/checkpoint-matching", dependencies=[Depends(admin)])
 def patch_checkpoint_matching(race_id: str, data: MatchingConfigPatch, db: Session = Depends(db_session)):
-    race = get_or_404(db, Race, race_id, "giải chạy")
+    race = lock_race_configuration(db, race_id)
     if db.scalar(select(RunSession.id).where(RunSession.race_id == race_id).limit(1)):
         envelope_error("MATCHING_CONFIG_LOCKED", "Không thể đổi cấu hình sau khi giải đã có phiên chạy.")
     values = data.model_dump(exclude_unset=True, exclude_none=True)
@@ -957,7 +1070,10 @@ def patch_checkpoint_matching(race_id: str, data: MatchingConfigPatch, db: Sessi
     if values:
         race.config_version += 1
     db.commit()
-    return race_matching_config(race)
+    return {**race_matching_config(race),
+            "locked": race.matching_locked_at is not None,
+            "locked_at": race.matching_locked_at,
+            "locked_reason": "Phiên chạy đầu tiên đã được tạo." if race.matching_locked_at else None}
 
 
 @app.post("/api/v1/races/{race_id}/participants", status_code=201, dependencies=[Depends(admin)])
@@ -973,8 +1089,11 @@ def run_dict(db: Session, run: RunSession) -> dict[str, Any]:
     student = db.get(Student, run.student_id)
     race = db.get(Race, run.race_id)
     participant = db.scalar(select(RaceParticipant).where(RaceParticipant.race_id == run.race_id, RaceParticipant.student_id == run.student_id))
+    wearable = db.get(RunnerWearable, run.wearable_device_id) if run.wearable_device_id else None
+    latest_telemetry = db.scalar(select(GpsPoint).where(GpsPoint.run_id == run.id).order_by(GpsPoint.recorded_at.desc()).limit(1))
+    telemetry_source = latest_telemetry.source if latest_telemetry else None
     elapsed = run.duration_total_s if run.duration_total_s is not None else max(0, int((now_utc() - aware(run.started_at)).total_seconds()))
-    return {"run_id": run.id, "race_id": run.race_id, "student_id": run.student_id, "display_id": participant.bib_number if participant else None, "bib_number": participant.bib_number if participant else None, "wearable_device_id": run.wearable_device_id, "student_code": student.student_code if student else None, "full_name": student.full_name if student else None, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "total_laps": race.total_laps if race else None, "source": run.source, "started_at": run.started_at, "ended_at": run.ended_at, "distance_total_m": round(run.distance_total_m, 2), "duration_total_s": elapsed, "lap_count": run.lap_count, "last_lap_duration_s": run.last_lap_duration_s, "total_steps": run.total_steps, "last_latitude": run.last_latitude, "last_longitude": run.last_longitude, "last_seen_at": run.last_seen_at}
+    return {"run_id": run.id, "race_id": run.race_id, "student_id": run.student_id, "display_id": participant.bib_number if participant else None, "bib_number": participant.bib_number if participant else None, "wearable_device_id": run.wearable_device_id, "wearable_status": wearable.status if wearable else "NOT_REGISTERED", "wearable_last_seen_at": wearable.last_seen_at if wearable else None, "student_code": student.student_code if student else None, "full_name": student.full_name if student else None, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "total_laps": race.total_laps if race else None, "source": telemetry_source or run.source, "run_source": run.source, "telemetry_source": telemetry_source, "started_at": run.started_at, "ended_at": run.ended_at, "distance_total_m": round(run.distance_total_m, 2), "duration_total_s": elapsed, "lap_count": run.lap_count, "last_lap_duration_s": run.last_lap_duration_s, "total_steps": run.total_steps, "last_latitude": run.last_latitude, "last_longitude": run.last_longitude, "last_seen_at": run.last_seen_at}
 
 
 # [DEVICE LINK: GPS + STEPS] A run is bound to the wearable already paired to this student.
@@ -987,7 +1106,10 @@ def create_run(data: RunIn, db: Session = Depends(db_session)):
             envelope_error("IDEMPOTENCY_CONFLICT", "idempotency_key đã được dùng với payload khác.")
         run = db.get(RunSession, record.resource_id)
         return run_dict(db, run)
-    get_or_404(db, Race, data.race_id, "giải chạy"); get_or_404(db, Student, data.student_id, "sinh viên")
+    race = lock_race_configuration(db, data.race_id)
+    get_or_404(db, Student, data.student_id, "sinh viên")
+    if race.status == "COMPLETED":
+        envelope_error("RACE_COMPLETED", "Không thể mở phiên mới trong giải đã hoàn thành.")
     wearable = get_or_404(db, RunnerWearable, data.wearable_device_id, "thiết bị đeo")
     if wearable.student_id != data.student_id or wearable.status != "ACTIVE":
         envelope_error("WEARABLE_RUNNER_MISMATCH", "Thiết bị GPS/bước chân không được gán cho runner này.")
@@ -995,7 +1117,6 @@ def create_run(data: RunIn, db: Session = Depends(db_session)):
     if not participant: envelope_error("NOT_REGISTERED", "Sinh viên chưa đăng ký giải chạy.")
     active = db.scalar(select(RunSession).where(RunSession.race_id == data.race_id, RunSession.student_id == data.student_id, RunSession.status == "ACTIVE"))
     if active: envelope_error("ACTIVE_RUN_EXISTS", "Sinh viên đã có phiên chạy ACTIVE trong giải này.")
-    race = db.get(Race, data.race_id)
     run = RunSession(race_id=data.race_id, student_id=data.student_id, wearable_device_id=wearable.id, source=data.source, started_at=now_utc())
     if race.matching_locked_at is None:
         race.matching_locked_at = now_utc()
@@ -1017,7 +1138,7 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
         if duplicate.payload_hash and duplicate.payload_hash != request_hash:
             envelope_error("IDEMPOTENCY_CONFLICT", "idempotency_key đã được dùng với payload GPS khác.")
         run = get_or_404(db, RunSession, duplicate.run_id, "phiên chạy")
-        return {"accepted": True, "gps_point_id": duplicate.id, "distance_delta_m": 0, "distance_total_m": run.distance_total_m, "total_steps": run.total_steps, "lap_count": run.lap_count, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "duration_total_s": run_dict(db, run)["duration_total_s"], "checkpoint_crossings": [], "duplicate": True, "received_at": duplicate.received_at}
+        return {"accepted": True, "gps_point_id": duplicate.id, "source": duplicate.source, "distance_delta_m": 0, "distance_total_m": run.distance_total_m, "total_steps": run.total_steps, "lap_count": run.lap_count, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "duration_total_s": run_dict(db, run)["duration_total_s"], "checkpoint_crossings": [], "duplicate": True, "received_at": duplicate.received_at}
     run = get_or_404(db, RunSession, data.run_id, "phiên chạy")
     if run.race_id != data.race_id or run.student_id != data.student_id: envelope_error("RUN_IDENTITY_MISMATCH", "Thông tin giải hoặc sinh viên không khớp phiên chạy.")
     if run.status != "ACTIVE": envelope_error("RUN_NOT_ACTIVE", "Phiên chạy không ở trạng thái đang chạy.")
@@ -1025,9 +1146,16 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
     wearable = get_or_404(db, RunnerWearable, data.wearable_device_id, "thiết bị đeo")
     if wearable.student_id != run.student_id or wearable.status != "ACTIVE": envelope_error("WEARABLE_RUNNER_MISMATCH", "Thiết bị GPS/bước chân không được gán cho runner này.")
     recorded = aware(data.recorded_at)
+    race = get_or_404(db, Race, run.race_id, "giải chạy")
+    validation_now = now_utc()
+    if recorded < aware(run.started_at):
+        envelope_error("GPS_BEFORE_RUN_START", "GPS recorded_at không được trước thời điểm bắt đầu phiên chạy.", 422)
+    if recorded < validation_now - timedelta(seconds=race.max_event_age_seconds):
+        envelope_error("GPS_TOO_OLD", f"GPS cũ hơn giới hạn {race.max_event_age_seconds} giây.", 422)
+    if recorded > validation_now + timedelta(seconds=race.max_future_skew_seconds):
+        envelope_error("GPS_IN_FUTURE", f"GPS vượt quá độ lệch tương lai {race.max_future_skew_seconds} giây.", 422)
     if run.last_gps_recorded_at and recorded <= aware(run.last_gps_recorded_at): envelope_error("GPS_OUT_OF_ORDER", "Thời điểm GPS phải tăng dần.", 422)
     if data.total_steps < run.total_steps: envelope_error("STEPS_DECREASED", "Snapshot bước chân không được nhỏ hơn giá trị đã lưu.", 422)
-    race = get_or_404(db, Race, run.race_id, "giải chạy")
     previous_latitude, previous_longitude = run.last_latitude, run.last_longitude
     delta = 0.0
     if previous_latitude is not None and previous_longitude is not None:
@@ -1036,7 +1164,7 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
             seconds = (recorded - aware(run.last_gps_recorded_at)).total_seconds()
             max_speed = settings.max_simulator_speed_mps if auth_source == "SIMULATOR" else settings.max_gps_speed_mps
             if delta / seconds > max_speed: envelope_error("GPS_JUMP_REJECTED", f"Điểm GPS vượt ngưỡng {max_speed:g} m/s của nguồn {auth_source}.", 422)
-    received = now_utc()
+    received = validation_now
     telemetry_source = "SIMULATED_GPS" if auth_source == "SIMULATOR" else "WEARABLE_GPS"
     point = GpsPoint(run_id=run.id, wearable_device_id=wearable.id, latitude=data.latitude, longitude=data.longitude, recorded_at=recorded, received_at=received, accuracy_m=data.accuracy_m, speed_mps=data.speed_mps, total_steps=data.total_steps, source=telemetry_source, idempotency_key=data.idempotency_key, payload_hash=request_hash)
     db.add(point); run.distance_total_m += delta; run.total_steps = data.total_steps; run.last_latitude = data.latitude; run.last_longitude = data.longitude; run.last_seen_at = received; run.last_gps_recorded_at = recorded
@@ -1134,7 +1262,7 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
         await hub.publish(run.race_id, {"type": "checkpoint.passed", "race_id": run.race_id, "occurred_at": recorded.isoformat(), "data": crossing})
     if run.status == "COMPLETED":
         await hub.publish(run.race_id, {"type": "runner.completed", "race_id": run.race_id, "occurred_at": received.isoformat(), "data": run_dict(db, run)})
-    return {"accepted": True, "gps_point_id": point.id, "distance_delta_m": round(delta, 2), "distance_total_m": round(run.distance_total_m, 2), "total_steps": run.total_steps, "lap_count": run.lap_count, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "duration_total_s": run_dict(db, run)["duration_total_s"], "ended_at": run.ended_at, "checkpoint_crossings": crossings, "received_at": received}
+    return {"accepted": True, "gps_point_id": point.id, "source": telemetry_source, "distance_delta_m": round(delta, 2), "distance_total_m": round(run.distance_total_m, 2), "total_steps": run.total_steps, "lap_count": run.lap_count, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "duration_total_s": run_dict(db, run)["duration_total_s"], "ended_at": run.ended_at, "checkpoint_crossings": crossings, "received_at": received}
 
 
 # [DEVICE LINK: ARDUINO GATEWAY] Physical passage-only sensors still arrive without runner identity.
@@ -1303,7 +1431,7 @@ def race_overview(race_id: str, db: Session = Depends(db_session)):
     runs = db.scalars(select(RunSession).where(RunSession.race_id == race_id)).all()
     participant_count = len(db.scalars(select(RaceParticipant).where(RaceParticipant.race_id == race_id)).all())
     event_count = len(db.scalars(select(DeviceEvent).join(Checkpoint).where(Checkpoint.race_id == race_id)).all())
-    return {"race_id": race.id, "status": race.status, "participants": participant_count, "active_runners": sum(x.status == "ACTIVE" for x in runs), "completed_runners": sum(x.status == "COMPLETED" for x in runs), "checkpoint_events": event_count, "server_time": now_utc()}
+    return {"race_id": race.id, "status": race.status, "participants": participant_count, "active_runners": sum(x.status == "ACTIVE" for x in runs), "completed_runners": sum(x.status == "COMPLETED" for x in runs), "checkpoint_events": event_count, "route": race_route_dict(db, race_id), **route_lock_metadata(db, race_id), "matching_locked_at": race.matching_locked_at, "matching_locked": race.matching_locked_at is not None, "matching_locked_reason": "Phiên chạy đầu tiên đã được tạo." if race.matching_locked_at else None, "server_time": now_utc()}
 
 
 @app.get("/api/v1/races/{race_id}/dashboard", dependencies=[Depends(admin)])
@@ -1334,8 +1462,20 @@ def race_dashboard(race_id: str, db: Session = Depends(db_session)):
     ranked = sorted(runner_rows, key=lambda r: (-r["lap_count"], r["duration_total_s"], r["display_id"]))
     return {
         "race": {"race_id": race.id, "name": race.name, "status": race.status, "checkpoint_mode": race.checkpoint_mode,
+            "route_profile": race.route_profile,
+            "route_length_min_m": race.route_length_min_m,
+            "route_length_max_m": race.route_length_max_m,
             "total_laps": race.total_laps, "min_lap_interval_seconds": race.min_lap_interval_seconds,
-            "config_version": race.config_version},
+            "inner_radius_m": race.inner_radius_m, "outer_radius_m": race.outer_radius_m,
+            "match_window_seconds": race.match_window_seconds, "late_grace_seconds": race.late_grace_seconds,
+            "max_sample_gap_seconds": race.max_sample_gap_seconds,
+            "max_event_age_seconds": race.max_event_age_seconds,
+            "max_future_skew_seconds": race.max_future_skew_seconds,
+            "config_version": race.config_version, "matching_locked_at": race.matching_locked_at,
+            "matching_locked": race.matching_locked_at is not None,
+            "matching_locked_reason": "Phiên chạy đầu tiên đã được tạo." if race.matching_locked_at else None,
+            "route_status": "CONFIGURED" if len(race_route_dict(db, race_id)["points"]) >= 5 else "NOT_CONFIGURED",
+            **route_lock_metadata(db, race_id)},
         "summary": {"participants": len(participant_rows), "started_runners": sum(r["run_id"] is not None for r in runner_rows),
             "active_runners": len(active), "completed_runners": len(completed),
             "not_started_runners": sum(r["run_id"] is None for r in runner_rows),
@@ -1449,6 +1589,9 @@ def migrate_demo_schema() -> None:
         "gps_points": {"wearable_device_id": "VARCHAR(80) NULL", "payload_hash": "VARCHAR(64) NULL"},
         "idempotency_records": {"request_hash": "VARCHAR(64) NULL"},
         "races": {
+            "route_profile": "VARCHAR(30) NOT NULL DEFAULT 'CUSTOM'",
+            "route_length_min_m": "FLOAT NULL",
+            "route_length_max_m": "FLOAT NULL",
             "checkpoint_mode": "VARCHAR(30) NOT NULL DEFAULT 'GPS_ONLY'",
             "min_lap_interval_seconds": "INTEGER NOT NULL DEFAULT 30",
             "inner_radius_m": "FLOAT NOT NULL DEFAULT 10",

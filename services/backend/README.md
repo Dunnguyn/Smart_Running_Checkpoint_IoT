@@ -36,12 +36,13 @@
    Copy-Item .env.example .env
    ```
 
-   Để chạy thử không cần SQL Server, đặt `DATABASE_URL=sqlite:///./running_demo.db` trong `.env`. File database được đặt trong thư mục backend kể cả khi khởi chạy từ thư mục làm việc khác. Các bảng được tạo tự động và dữ liệu tồn tại sau khi tắt/mở lại server. Để dùng SQL Server, tạo database `iot_running`, cài Microsoft ODBC Driver 18, rồi cấu hình chuỗi kết nối mẫu trong `.env`.
+   Để chạy thử không cần SQL Server, đặt `DATABASE_URL=sqlite:///./running_demo.db` trong `.env`. File database được đặt trong thư mục backend kể cả khi khởi chạy từ thư mục làm việc khác. Các bảng được tạo tự động và dữ liệu tồn tại sau khi tắt/mở lại server. Để dùng SQL Server, tạo database `iot_running`, cài Microsoft ODBC Driver 18, rồi cấu hình chuỗi kết nối mẫu trong `.env`; tùy chọn SQL Server chưa được kiểm thử trong lần rà soát này.
 
 3. Khởi động web API:
 
    ```powershell
-   cd "D:\study\Mạnh kết nối vạn vật\backend"
+   # Nếu terminal đang ở repo root; nếu mở thẳng services/backend thì bỏ dòng cd.
+   cd services\backend
    .\.venv\Scripts\Activate.ps1
    uvicorn app.main:app --reload
    ```
@@ -51,12 +52,13 @@
 5. Mở cửa sổ PowerShell thứ hai, kích hoạt `.venv`, chạy mô phỏng. Mặc định lệnh tạo 20 sinh viên có số hiển thị `01`–`20`, mỗi người có wearable và run, rồi phát GPS/bước chân giả lập:
 
    ```powershell
-   cd "D:\study\Mạnh kết nối vạn vật\backend"
+   # Nếu terminal đang ở repo root; nếu mở thẳng services/backend thì bỏ dòng cd.
+   cd services\backend
    .\.venv\Scripts\Activate.ps1
    python -m app.simulator
    ```
 
-   Mặc định mô phỏng 20 sinh viên, 4 vòng hoàn chỉnh, 4 checkpoint/vòng, GPS gửi mỗi 0.5 giây; tốc độ runner khác nhau nhưng tất cả liên tục di chuyển. Run tự chuyển `COMPLETED` ở vòng thứ tư, thời gian được chốt. Polyline dài khoảng 425 m/vòng; tốc độ mô phỏng tăng tốc 14.3–17.3 m/s cho tổng thời gian dự kiến khoảng 98–119 giây, có thể tăng nhẹ theo thời gian xử lý request. Tốc độ mô phỏng cao hơn giới hạn wearable thật; API phân biệt simulator key (tối đa 18 m/s) và wearable key (tối đa 12 m/s).
+   Mặc định mô phỏng 20 sinh viên, 4 vòng hoàn chỉnh, 4 checkpoint/vòng, GPS gửi mỗi 0.5 giây; tốc độ runner khác nhau nhưng tái lập được theo `--seed` và tất cả liên tục di chuyển. Simulator đọc lại polyline vừa lưu từ API rồi mới phát GPS. Run tự chuyển `COMPLETED` ở vòng thứ tư, thời gian được chốt. Polyline dài khoảng 425 m/vòng; tốc độ mô phỏng tăng tốc 12.4–13.1 m/s. Vì backend giữ `MIN_LAP_INTERVAL_SECONDS=30`, bốn vòng cần ít nhất 120 giây; với tuyến 425 m dự kiến khoảng 130–137 giây cộng độ trễ request. Không thể bảo đảm hoàn thành dưới 2 phút mà vẫn giữ đủ bốn vòng và ngưỡng 30 giây/vòng. Tốc độ mô phỏng vẫn cao hơn tốc độ chạy thực tế; API phân biệt simulator key (tối đa 18 m/s) và wearable key (tối đa 12 m/s).
 
    Để chạy quy tắc Arduino + GPS trong tài liệu mới, dùng:
 
@@ -64,7 +66,7 @@
    python -m app.simulator --mode GPS_AND_ARDUINO --students 4 --laps 4
    ```
 
-   Chế độ kết hợp dùng để minh họa ghép Arduino với GPS. Khi nhiều runner đi sát nhau, backend có thể trả `AMBIGUOUS` theo rule an toàn; dùng mặc định `GPS_ONLY` để demo 20 người cùng hoàn tất trong thời gian ngắn. Mở race dashboard sau khi chương trình báo kết quả.
+   Chế độ kết hợp dùng để minh họa ghép Arduino với GPS. Dùng `--students 1` để kiểm tra ghép tự động một ứng viên; nhiều runner đi sát nhau có thể trả `AMBIGUOUS` theo rule an toàn. Dùng mặc định `GPS_ONLY` để demo 20 người. Mở race dashboard sau khi chương trình báo kết quả.
 
 SQLite lưu tại `running_demo.db` trong thư mục backend. Các bảng lưu giải chạy, sinh viên, đăng ký/bib, wearable và thiết bị checkpoint, checkpoint/tọa độ/thứ tự, phiên chạy, điểm GPS/bước chân, GPS passage, sự kiện Arduino và vòng chạy hợp lệ. SQLite bật khóa ngoại và WAL; tắt backend trước khi sao lưu database. File `.db`, WAL/SHM và `.env` bị loại khỏi Git.
 
@@ -79,7 +81,7 @@ Tuyến tạo theo thứ tự `C04 → C01 → C02 → C03 → C04`, có các đ
 | NEU-C03 — Nam | 20.9996111111 | 105.8426388889 | 20°59′58.6″N, 105°50′33.5″E |
 | NEU-C04 — Tây/đích vòng | 20.9999722222 | 105.8418888889 | 20°59′59.9″N, 105°50′30.8″E |
 
-Admin Web có thể đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, thay toàn bộ polyline bằng `PUT /api/v1/races/{race_id}/route` (gửi danh sách điểm GPS có thứ tự và checkpoint anchor; chiều dài phải 400–450 m), hoặc sửa một checkpoint bằng `PATCH /api/v1/checkpoints/{checkpoint_id}`. Thay route/checkpoint chỉ được phép trước khi tạo run. Điểm bẻ trong simulator là đường hình học demo; để khớp vỉa hè/lối đi thật, lấy polyline từ bản đồ và gửi qua API PUT.
+Admin Web có thể đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, thay toàn bộ polyline bằng `PUT /api/v1/races/{race_id}/route` (gửi danh sách điểm GPS có thứ tự và checkpoint anchor), hoặc sửa một checkpoint bằng `PATCH /api/v1/checkpoints/{checkpoint_id}`. Cận 400–450 m chỉ áp dụng cho profile `NEU_DEMO`; route `CUSTOM` không bị áp cận demo nếu không khai báo `route_length_min_m`/`route_length_max_m`. Các API trả trạng thái khóa và lý do; sau khi lưu, FE refetch route/dashboard để đọc cấu hình đã commit. Thay route/checkpoint chỉ được phép trước khi tạo run. Điểm bẻ trong simulator là đường hình học demo; để khớp vỉa hè/lối đi thật, lấy polyline từ bản đồ và gửi qua API PUT.
 
 Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trường; không lưu các key này vào bảng và không commit `.env`. Dùng khóa riêng của bạn thay giá trị mẫu. Các bảng demo được tạo tự động khi ứng dụng khởi động. Với dữ liệu cần bảo toàn hoặc triển khai production, hãy chuyển sang Alembic migration và không dùng `create_all` làm quy trình nâng cấp schema.
 
@@ -92,18 +94,19 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 - Dashboard tổng hợp dùng `GET /api/v1/races/{race_id}/dashboard`; trả summary, bảng runners, top runners và checkpoint events mới nhất.
 - Dashboard/live trả cả polyline route có thứ tự, tọa độ checkpoint và vị trí GPS mới nhất để frontend vẽ bản đồ/tiến độ.
 - Dashboard trả danh sách 4 checkpoint đã sắp theo `sequence_no`; frontend có thể nối các tọa độ để vẽ tuyến và vẽ vị trí GPS mới nhất của từng runner.
-- Admin Web đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, thay tuyến bằng `PUT /api/v1/races/{race_id}/route` (polyline đóng 400–450 m, có checkpoint anchor), sửa vị trí/bán kính bằng `PATCH /api/v1/checkpoints/{checkpoint_id}`. Chỉ sửa trước khi tạo run.
+- Admin Web đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, thay tuyến bằng `PUT /api/v1/races/{race_id}/route` (polyline đóng, có checkpoint anchor), sửa vị trí/bán kính bằng `PATCH /api/v1/checkpoints/{checkpoint_id}`. Profile `NEU_DEMO` áp cận 400–450 m; profile `CUSTOM` dùng cận tùy chọn. Sau khi lưu route/checkpoint, FE tải lại route/dashboard để đồng bộ trạng thái đã commit. Chỉ sửa trước khi tạo run.
 - Tải snapshot lần đầu bằng `GET /races/{race_id}/live`, sau đó mở WebSocket `ws://localhost:8000/ws/v1/races/{race_id}/live?key=<ADMIN_API_KEY>`.
 - URL WebSocket có query key để tương thích API WebSocket trình duyệt; chỉ dùng local/demo qua HTTPS/WSS ở môi trường thật và không ghi key vào mã frontend công khai.
 - Ví dụ payload và các điểm nối trong mã được đánh dấu `[FE LINK]`, `[SIMULATOR LINK]`, `[GATEWAY LINK]` và `[DEVICE LINK]`.
 
 ## Liên kết Simulator / Arduino Gateway
 
-Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo. Ở `GPS_ONLY`, GPS passage tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
+Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
 
 Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Serial rồi gọi `POST /api/v1/checkpoint-events` với `X-Gateway-Key`, `device_event_id` ổn định và `student_id=null`. Admin đăng ký mapping thiết bị qua `POST /api/v1/checkpoints/{checkpoint_id}/devices`. Chỉ trong chế độ kết hợp, backend ghép event và passage; trường hợp mơ hồ cần `POST /api/v1/checkpoint-events/{event_id}/resolve`. Các API tra cứu là `GET /api/v1/checkpoint-events/{event_id}` và `GET /api/v1/races/{race_id}/checkpoint-events`.
 ## Tài liệu nhóm
 
+- [Mã sơ đồ PlantUML](docs/PLANTUML_DIAGRAMS.puml)
 - [Sơ đồ UML và ER](docs/UML_DIAGRAMS.md)
 - [Quy tắc ghép Arduino/GPS và các điểm nối API](docs/ARDUINO_GPS_MATCHING.md)
 - Đặc tả nghiệp vụ/API: `Dac_ta_nghiep_vu_va_API_Backend_IoT_NEU_RUN.docx`
@@ -112,6 +115,7 @@ Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Ser
 ## Lưu ý vận hành
 
 - `Base.metadata.create_all()` ở cuối `app/main.py` tạo bảng cho bản demo. Production nên dùng Alembic.
+- SQLite là cấu hình đã dùng để chạy demo. SQL Server connection string có hướng dẫn nhưng chưa được xác minh trong lần rà soát feedback này.
 - WebSocket fan-out hiện ở bộ nhớ một tiến trình; nhiều worker/máy chủ cần Redis pub/sub.
 - Các khóa API mẫu chỉ dành cho local. Không commit `.env` hoặc dùng khóa mẫu trên mạng công khai.
 - GPS là dữ liệu mô phỏng nếu không có thiết bị; kết quả ghép phản ánh runner mô phỏng ở gần thời điểm event và không xác minh người thật.
