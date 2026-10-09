@@ -1,9 +1,15 @@
 import { isCheckpointEvent } from "./matchingContract";
 import { normalizeEvent } from "./matchingService";
+import { reconcileRunner, reconcileSnapshot } from "./reconcile";
 import type { LiveSnapshot, RunSession } from "../types/domain";
 import type { RaceService } from "./interface";
 import { keyGeneration, liveUrl, RequestError, expireSession } from "./client";
-import { utc, validPosition, type WireEvent } from "./contract";
+import {
+  utc,
+  validPosition,
+  runnerConnection,
+  type WireEvent,
+} from "./contract";
 const refreshListeners = new Map<string, () => void>();
 export const refreshRaceLive = (id: string) => refreshListeners.get(id)?.();
 export function applyLive(
@@ -13,6 +19,7 @@ export function applyLive(
 ): LiveSnapshot {
   if (event.race_id && event.race_id !== id) return snapshot;
   const data = event.data;
+  if (typeof data?.race_id === "string" && data.race_id !== id) return snapshot;
   if (event.type === "checkpoint.match.updated") {
     if (typeof data.event_id !== "string" || typeof data.version !== "number")
       return snapshot;
@@ -76,7 +83,15 @@ export function applyLive(
       return r;
     const timestamp =
       typeof data.last_seen_at === "string" ? utc(data.last_seen_at) : null;
-    if (timestamp && r.last_seen_at && timestamp < r.last_seen_at) return r;
+    const completed =
+      event.type === "runner.completed" || data.status === "COMPLETED";
+    if (
+      timestamp &&
+      r.last_seen_at &&
+      Date.parse(timestamp) < Date.parse(r.last_seen_at) &&
+      !completed
+    )
+      return r;
     const next = { ...r };
     for (const field of [
       "lap_count",
@@ -112,7 +127,7 @@ export function applyLive(
     if (typeof data.bib_number === "string") next.bib = data.bib_number;
     if (event.type === "runner.completed") next.status = "COMPLETED";
     if (next.status === "COMPLETED") next.connection = "FINISHED";
-    return next;
+    return reconcileRunner(r, next);
   });
   return {
     ...snapshot,
@@ -166,10 +181,13 @@ export function subscribeLive(
       const fresh = await load(id, controller.signal);
       if (!alive()) return;
       // No global backend sequence: buffer committed deltas during REST reads, then reconcile periodically.
-      state = buffer.reduce<LiveSnapshot>((s, e) => applyLive(s, e, id), {
-        ...fresh,
-        eventRevision: (state?.eventRevision ?? 0) + 1,
-      });
+      state = buffer.reduce<LiveSnapshot>(
+        (s, e) => applyLive(s, e, id),
+        reconcileSnapshot(state, {
+          ...fresh,
+          eventRevision: (state?.eventRevision ?? 0) + 1,
+        }),
+      );
       emit();
     } catch (error) {
       fail(error);
@@ -285,6 +303,16 @@ export function subscribeLive(
     if (alive() && state) connect();
   });
   const poll = setInterval(() => {
+    if (alive() && state) {
+      state = {
+        ...state,
+        runners: state.runners.map((row) => ({
+          ...row,
+          connection: runnerConnection(row),
+        })),
+      };
+      emit();
+    }
     if (alive() && socket?.readyState !== 1)
       void sync().then(() => {
         if (alive() && state && !socket) connect();

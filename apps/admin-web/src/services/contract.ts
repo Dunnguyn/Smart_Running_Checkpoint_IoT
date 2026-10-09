@@ -69,6 +69,21 @@ export function validPosition(lat: unknown, lon: unknown): boolean {
     Math.abs(lon) <= 180
   );
 }
+export function runnerConnection(
+  row: Pick<
+    RunSession,
+    "status" | "last_latitude" | "last_longitude" | "last_seen_at"
+  >,
+): RunSession["connection"] {
+  if (row.status === "COMPLETED") return "FINISHED";
+  if (
+    !validPosition(row.last_latitude, row.last_longitude) ||
+    !row.last_seen_at ||
+    !Number.isFinite(Date.parse(row.last_seen_at))
+  )
+    return "UNAVAILABLE";
+  return Date.now() - Date.parse(row.last_seen_at) > 30000 ? "STALE" : "ONLINE";
+}
 export function normalizeRunner(
   row: BackendRunner,
   raceId = row.race_id ?? "",

@@ -69,7 +69,7 @@ Dùng `/ws/v1/races/{race_id}/live?key=…` tạo bằng URL/URLSearchParams, kh
 
 ## Contract còn thiếu / giới hạn có chủ ý
 
-- Dashboard chỉ trả checkpoint_mode/config_version, **không trả các giá trị bán kính/cửa sổ/grace hoặc matching_locked_at**. FE hiển thị thông số chưa biết là “—”, gửi PATCH các trường được nhập; hiển thị giá trị PATCH trả về sau khi lưu. Không dùng PATCH rỗng làm API đọc. Khi dashboard.started_runners > 0, khóa form; đây là suy ra từ quy tắc backend, luôn xử lý 409 MATCHING_CONFIG_LOCKED. Cần endpoint GET cấu hình/flag khóa để hiển thị đầy đủ sau reload.
+- Dashboard chỉ trả checkpoint_mode/config_version, **không trả các giá trị bán kính/cửa sổ/grace hoặc matching_locked_at**. FE hiển thị thông số chưa biết là “—”, gửi PATCH các trường được nhập; hiển thị giá trị PATCH trả về sau khi lưu. Không dùng PATCH rỗng làm API đọc. Không suy trạng thái khóa từ dashboard.started_runners: hiển thị chưa có dữ liệu khóa, chỉ khóa form sau 409 có code MATCHING_CONFIG_LOCKED. Cần endpoint GET cấu hình/flag khóa để hiển thị đầy đủ sau reload.
 - Chưa có GET danh sách/metadata/geometry checkpoint hoặc route. Không trộn mock; nhật ký hiển thị ID checkpoint và device ID. Form đăng ký cần checkpoint ID do backend cấp. Chưa có GET/sửa/xóa thiết bị.
 - Candidate.available trong source là snapshot lưu trong candidates_json, có thể cũ khi passage đã bị event khác dùng. UI ghi rõ và backend kiểm tra lại khi resolve; 409 không tự chọn người khác.
 - Response chỉ có checkpoint_source=ARDUINO_GATEWAY, không có cờ Gateway giả/thật hay online đáng tin cậy. Không ghi “Arduino online”. telemetry_source hiển thị đúng backend (ví dụ SIMULATED_GPS); kết quả ghép không xác minh danh tính người thật trước sensor.
@@ -106,3 +106,25 @@ Kiểm thử backend thật riêng (từ gốc repo, cần backend .venv và Mic
 Harness tạo SQLite tạm với fixture deterministic AMBIGUOUS/passage bằng model backend, khởi động FastAPI riêng, gửi một Gateway HTTP event từ Python harness và kiểm thử UI/REST/WS với Edge. Không sửa backend hoặc DB server local đang chạy, không gọi CLI simulator. Browser chỉ nhận Admin key ngẫu nhiên trong bộ nhớ; báo cáo/ảnh trong `test-results/` gitignored. Đây là kiểm thử tích hợp có fixture, không phải kiểm thử sensor/GPS vật lý.
 
 `integration_api.py`/`integration-api.mjs` là harness cũ cho backend trước auto-completion (không dùng để xác nhận contract mới). `test:ui` kiểm tra mock: build với VITE_DATA_MODE=mock rồi mở preview port 5174. Không nhầm kết quả mock với backend thật.
+
+
+## Đối chiếu ngày 07/10/2026 — backend chỉ đọc
+
+Xem [báo cáo tích hợp](INTEGRATION_REPORT.md) để biết commit, bảng API, kết quả hiện tại và phần chưa xác minh runtime. Kết quả tích hợp của lần trước không thay thế kiểm tra phiên bản/môi trường hiện tại.
+
+Kiểm tra backend **đã được người vận hành khởi động** bằng dữ liệu hiện có:
+
+```powershell
+# ADMIN_API_KEY chỉ trong tiến trình kiểm tra; không đặt vào VITE_* hoặc commit key.
+# Thiết lập ADMIN_API_KEY bằng cơ chế quản lý biến môi trường local của bạn.
+npm.cmd run test:backend:read
+```
+
+Script dùng health/OpenAPI, POST xác thực (không ghi dữ liệu nghiệp vụ), GET các bản ghi có sẵn và mở/đóng WS. Không tự chạy backend, simulator, seed hoặc gọi resolve/PATCH/đăng ký. Mặc định local 8000, có thể đổi bằng VITE_API_BASE_URL/VITE_WS_BASE_URL trong môi trường tiến trình. Script không tự đọc file .env; Vite vẫn đọc .env cho frontend bình thường. Không có key hoặc backend không chạy sẽ báo bị chặn.
+
+**Không chạy `integration_matching.py` hoặc `integration_api.py` trong nhiệm vụ chỉ đọc backend**: chúng tạo DB/fixture và khởi động backend; cần cho phép riêng. Backend hiện có create_all/migrate_demo_schema khi import và matching worker khi startup, nên khởi động backend cũng có tác dụng phụ schema/dữ liệu.
+
+Đồng bộ FE hiện giữ version checkpoint mới hơn qua các lần REST resync, giữ thời gian COMPLETED và tổng đã nhận trong cùng run, chấp nhận completion có GPS cũ mà không lùi marker. GPS quá 30 giây được đánh dấu STALE bởi timer 15 giây ngay cả khi socket vẫn mở; timer này không gửi REST khi WS đang connected. Thứ hạng/tổng hợp dashboard vẫn do backend trả, không tự tính từ delta. Không có sequence toàn cục nên chưa thể bảo đảm tính nguyên tử giữa mọi panel.
+
+
+Cập nhật local 07/10: người dùng chuyển backend sang cổng 8001; `.env` FE hiện dùng REST `http://localhost:8001/api/v1` và WS `ws://localhost:8001`. Các giá trị 8000 trong ví dụ là mặc định. Xem phần đầu INTEGRATION_REPORT.md để biết điều tra dữ liệu legacy, tile và kế hoạch E2E chờ duyệt.

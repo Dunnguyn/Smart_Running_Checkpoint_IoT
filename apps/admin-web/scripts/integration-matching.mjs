@@ -159,9 +159,7 @@ try {
   );
   await page.getByRole("link", { name: "Giải chạy", exact: true }).click();
   await page.getByRole("link", { name: /Matching integration/ }).click();
-  await expect(
-    page.getByRole("button", { name: "Lưu cấu hình ghép" }),
-  ).toBeDisabled();
+  await expect(page.getByText(/Chưa có dữ liệu trạng thái khóa/)).toBeVisible();
   await page.getByRole("link", { name: "Giải chạy", exact: true }).click();
   await page.getByRole("link", { name: /Config integration/ }).click();
   await page
@@ -174,7 +172,9 @@ try {
         (await api(`/races/${ids.draft}/dashboard`)).race.checkpoint_mode,
     )
     .toBe("GPS_AND_ARDUINO");
-  checks.push("locked race is read-only; unlocked PATCH config succeeds");
+  checks.push(
+    "lock is unknown without backend flag; unlocked PATCH config succeeds",
+  );
   await page.getByRole("link", { name: "Checkpoint", exact: true }).click();
   await page
     .getByLabel("Checkpoint ID", { exact: true })
@@ -203,7 +203,9 @@ try {
   await expect(page.getByLabel("Admin key", { exact: true })).toBeVisible();
   await expect.poll(() => sockets.size).toBe(0);
   await login();
-  await expect(page.getByRole("button", { name: "Thử lại / Làm mới" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Thử lại / Làm mới" }),
+  ).toBeVisible();
   await expect(page.locator(".connection-bar")).toContainText("connected");
   await page.route("**/api/v1/races", (route) =>
     route.fulfill({ status: 401, body: "{}", contentType: "application/json" }),

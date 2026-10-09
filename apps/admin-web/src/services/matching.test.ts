@@ -20,6 +20,18 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+it("reports network and server errors without expiring a valid session", async () => {
+  const key = crypto.randomUUID();
+  setAdminKey(key);
+  const fetch = vi
+    .fn()
+    .mockRejectedValueOnce(new TypeError("Network unavailable"))
+    .mockResolvedValueOnce(new Response("{}", { status: 500 }));
+  vi.stubGlobal("fetch", fetch);
+  await expect(request("/races")).rejects.toMatchObject({ status: 0 });
+  await expect(request("/races")).rejects.toMatchObject({ status: 500 });
+  expect(getAdminKey()).toBe(key);
+});
 it("preserves bib as display-only and completed position is not a lost connection", () => {
   expect(runner.bib).toBe("01");
   expect(runner.student_id).toBe("student-uuid");
@@ -99,13 +111,11 @@ it("protected 401 expires the session once; login 401 does not emit expiry", asy
 });
 it("sends exact resolution payload on retries; parses backend conflict code", async () => {
   setAdminKey(crypto.randomUUID());
-  const fetch = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(JSON.stringify({ detail: { code: "VERSION_CONFLICT" } }), {
-        status: 409,
-      }),
-    );
+  const fetch = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ detail: { code: "VERSION_CONFLICT" } }), {
+      status: 409,
+    }),
+  );
   vi.stubGlobal("fetch", fetch);
   const payload = {
     action: "CONFIRM" as const,

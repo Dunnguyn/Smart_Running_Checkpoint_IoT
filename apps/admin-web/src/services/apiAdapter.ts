@@ -55,7 +55,8 @@ export async function loadSnapshot(
     return normalizeRunner(
       point &&
         row.status !== "COMPLETED" &&
-        (utc(point.last_seen_at) ?? "") >= (utc(row.last_seen_at) ?? "")
+        (Date.parse(utc(point.last_seen_at) ?? "") || 0) >=
+          (Date.parse(utc(row.last_seen_at) ?? "") || 0)
         ? {
             ...row,
             ...point,

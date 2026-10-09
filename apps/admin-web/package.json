@@ -11,6 +11,7 @@
     "test": "vitest run",
     "preview": "vite preview --host localhost --port 5174",
     "test:ui": "node scripts/verify-ui.mjs",
+    "test:backend:read": "node scripts/verify-backend-readonly.mjs",
     "format": "prettier --write src scripts *.json *.ts *.js *.html *.md"
   },
   "dependencies": {
