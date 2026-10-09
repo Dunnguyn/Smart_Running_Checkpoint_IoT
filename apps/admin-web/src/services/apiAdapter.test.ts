@@ -183,6 +183,7 @@ describe("backend contract and live consistency", () => {
     let resolve!: (s: LiveSnapshot) => void;
     const load = vi
       .fn()
+      .mockResolvedValue(snapshot())
       .mockResolvedValueOnce(snapshot())
       .mockImplementationOnce(
         () =>
@@ -205,6 +206,8 @@ describe("backend contract and live consistency", () => {
     });
     resolve(snapshot());
     await vi.advanceTimersByTimeAsync(0);
+    expect(onSnapshot.mock.lastCall?.[0].runners[0].total_steps).toBe(1240);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(onSnapshot.mock.lastCall?.[0].runners[0].total_steps).toBe(1240);
     socket.onmessage?.({ data: "malformed" });
     socket.onclose?.({ code: 4401 });

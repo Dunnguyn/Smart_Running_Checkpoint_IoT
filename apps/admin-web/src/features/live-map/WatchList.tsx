@@ -62,8 +62,8 @@ export function WatchList({
       </div>
       {!runners.length && (
         <Empty
-          title="Chưa có sinh viên đang chạy"
-          description="Vị trí sẽ xuất hiện khi phiên chạy bắt đầu."
+          title="Chưa có vị trí GPS mới để theo dõi"
+          description="Phiên chạy có thể vẫn đang hoạt động nhưng thiếu GPS hoặc dữ liệu đã cũ. Xem trạng thái phiên trong bảng sinh viên."
         />
       )}
       <Link className="panel-link" to="/runners">

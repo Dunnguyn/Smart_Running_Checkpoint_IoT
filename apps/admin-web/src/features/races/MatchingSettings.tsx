@@ -18,14 +18,14 @@ const fields = [
 ] as const;
 export function MatchingSettings() {
   const { snapshot, raceId } = useLive();
-  if (!snapshot?.dashboard) return null;
+  if (!snapshot?.dashboard || snapshot.dashboard.race.race_id !== raceId)
+    return null;
   return (
     <ConfigForm
       key={raceId}
       raceId={raceId}
       initialMode={snapshot.dashboard.race.checkpoint_mode}
       version={snapshot.dashboard.race.config_version}
-      locked={snapshot.dashboard.summary.started_runners > 0}
     />
   );
 }
@@ -33,15 +33,13 @@ function ConfigForm({
   raceId,
   initialMode,
   version,
-  locked,
 }: {
   raceId: string;
   initialMode: CheckpointMode;
   version: number;
-  locked: boolean;
 }) {
   const { refreshData } = useLive();
-  const [mode, setMode] = useState(initialMode),
+  const [modeOverride, setMode] = useState<CheckpointMode | null>(null),
     [draft, setDraft] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<MatchingConfig | null>(null),
     [blocked, setBlocked] = useState(false),
@@ -50,16 +48,19 @@ function ConfigForm({
   const controller = useRef<AbortController | null>(null),
     guard = useRef(false);
   useEffect(() => () => controller.current?.abort(), []);
-  const readOnly = locked || blocked;
+  const readOnly = blocked;
+  const currentSaved = saved && saved.config_version >= version ? saved : null;
+  const serverMode = currentSaved?.checkpoint_mode ?? initialMode;
+  const mode = modeOverride ?? serverMode;
   return (
     <Panel
       title="Cấu hình ghép GPS / Arduino"
-      subtitle={`Phiên bản cấu hình: ${saved?.config_version ?? version}`}
+      subtitle={`Phiên bản cấu hình: ${currentSaved?.config_version ?? version}`}
     >
       <p className="form-message">
         {readOnly
           ? "Cấu hình đã khóa sau khi có phiên chạy. Tạo race demo mới để thử cấu hình khác."
-          : "Chưa ghi nhận phiên chạy trong dashboard. Backend sẽ kiểm tra khóa lần nữa khi lưu."}
+          : "Chưa có dữ liệu trạng thái khóa: API đọc chưa hỗ trợ trường này. Backend kiểm tra khi lưu; màn hình không suy đoán từ số phiên chạy."}
       </p>
       <p className="form-message">
         API đọc hiện chỉ trả mode và phiên bản; các thông số chưa biết hiển thị
@@ -72,11 +73,12 @@ function ConfigForm({
           e.preventDefault();
           if (readOnly || guard.current) return;
           const values: Partial<Omit<MatchingConfig, "config_version">> = {};
-          if (mode !== initialMode) values.checkpoint_mode = mode;
+          if (modeOverride !== null && modeOverride !== serverMode)
+            values.checkpoint_mode = modeOverride;
           for (const [key] of fields)
             if (draft[key]?.trim()) values[key] = Number(draft[key]);
-          const inner = values.inner_radius_m ?? saved?.inner_radius_m,
-            outer = values.outer_radius_m ?? saved?.outer_radius_m;
+          const inner = values.inner_radius_m ?? currentSaved?.inner_radius_m,
+            outer = values.outer_radius_m ?? currentSaved?.outer_radius_m;
           if (inner !== undefined && outer !== undefined && inner >= outer) {
             setMessage("Bán kính trong phải nhỏ hơn bán kính ngoài.");
             return;
@@ -96,6 +98,7 @@ function ConfigForm({
               controller.current.signal,
             );
             setSaved(result);
+            setMode(null);
             setDraft({});
             setMessage("Backend đã lưu cấu hình.");
             refreshData();
@@ -106,7 +109,7 @@ function ConfigForm({
                 `${e.message} ${e.code ?? ""} ${Object.values(e.fields ?? {}).join("; ")}`,
               );
               if (e.status === 409) {
-                setBlocked(true);
+                if (e.code === "MATCHING_CONFIG_LOCKED") setBlocked(true);
                 refreshData();
               }
             }
@@ -120,7 +123,7 @@ function ConfigForm({
           Chế độ
           <select
             aria-label="Chế độ"
-            value={readOnly ? initialMode : mode}
+            value={readOnly ? serverMode : mode}
             disabled={readOnly || busy}
             onChange={(e) => setMode(e.target.value as CheckpointMode)}
           >
@@ -131,7 +134,7 @@ function ConfigForm({
         {fields.map(([key, label, min, max, step]) => (
           <label key={key}>
             {label}
-            <small>Hiện tại: {saved?.[key] ?? "—"}</small>
+            <small>Hiện tại: {currentSaved?.[key] ?? "—"}</small>
             <input
               type="number"
               min={min}

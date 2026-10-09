@@ -10,6 +10,11 @@ import {
 import { raceService, dataMode } from "../services";
 import { simulator } from "../mocks/liveSimulator";
 import { refreshRaceLive } from "../services/liveService";
+import {
+  reconcileRunner,
+  reconcileSnapshot,
+  sameRun,
+} from "../services/reconcile";
 import { clearApiCache } from "../services/apiAdapter";
 import {
   setAdminKey,
@@ -80,24 +85,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       return {
         ...previous,
         runners: previous.runners.map((current) => {
-          const incoming = rows.find(
-            (r) =>
-              r.run_id === current.run_id &&
-              r.student_id === current.student_id &&
-              r.race_id === current.race_id,
-          );
-          if (
-            !incoming ||
-            (current.status === "COMPLETED" && incoming.status !== "COMPLETED")
-          )
-            return current;
-          if ((incoming.last_seen_at ?? "") < (current.last_seen_at ?? ""))
-            return current;
-          return {
-            ...current,
-            ...incoming,
-            total_laps: incoming.total_laps || current.total_laps,
-          };
+          const incoming = rows.find((row) => sameRun(row, current));
+          return incoming ? reconcileRunner(current, incoming) : current;
         }),
       };
     });
@@ -138,44 +127,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const accept = (s: LiveSnapshot) => {
       if (!disposed) {
         setSnapshot((previous) =>
-          dataMode === "mock"
-            ? s
-            : {
-                ...s,
-                runners: s.runners.map((incoming) => {
-                  const cached = previous?.runners.find(
-                    (r) =>
-                      r.run_id === incoming.run_id &&
-                      r.student_id === incoming.student_id &&
-                      r.race_id === incoming.race_id,
-                  );
-                  if (!cached) return incoming;
-                  if (
-                    cached.status === "COMPLETED" &&
-                    incoming.status !== "COMPLETED"
-                  )
-                    return cached;
-                  if (
-                    (cached.last_seen_at ?? "") > (incoming.last_seen_at ?? "")
-                  )
-                    return cached;
-                  return {
-                    ...incoming,
-                    lap_count: Math.max(cached.lap_count, incoming.lap_count),
-                    distance_total_m: Math.max(
-                      cached.distance_total_m,
-                      incoming.distance_total_m,
-                    ),
-                    total_steps:
-                      incoming.total_steps === null
-                        ? cached.total_steps
-                        : Math.max(
-                            cached.total_steps ?? 0,
-                            incoming.total_steps,
-                          ),
-                  };
-                }),
-              },
+          dataMode === "mock" ? s : reconcileSnapshot(previous, s),
         );
         setError("");
       }
@@ -310,8 +262,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             <div className="empty">
               <h2>Chưa có giải chạy</h2>
               <p>
-                Chạy python -m app.simulator --laps 2 tại backend, rồi nhấn Làm
-                mới.
+                Backend chưa trả về giải chạy. Nhờ người quản trị chuẩn bị giải
+                và dữ liệu demo được phép sử dụng, rồi nhấn Làm mới.
               </p>
             </div>
           ) : (
