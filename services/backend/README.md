@@ -11,9 +11,9 @@
 - Arduino event được xác thực và ghép sau cửa sổ thời gian; một ứng viên có thể ghép tự động, nhiều ứng viên chuyển `AMBIGUOUS` để Admin xác nhận, không tự chọn người gần nhất.
 - Khi runner đạt `total_laps`, phiên tự chuyển `COMPLETED`, chốt thời gian và dừng bộ đếm. Race chuyển `COMPLETED` khi mọi participant đã hoàn tất.
 - Kiểm tra tọa độ/thời điểm/bước tăng dần, chống gửi lặp và cộng khoảng cách Haversine.
-- CLI mặc định tạo 20 sinh viên mô phỏng, gán bib `01`–`20`, tạo wearable/run, chạy vòng GPS quanh tòa Thế Kỷ với 4 checkpoint mỗi vòng và hoàn thành sau 4 vòng.
+- API Admin khởi động mặc định 5 sinh viên mô phỏng, gán bib `01`–`05`, tạo wearable/run đồng bộ thời điểm, rồi phát GPS/bước chân chuyển động quanh tòa Thế Kỷ.
 - Simulator chạy liên tục theo polyline khép kín khoảng 425 m/vòng, đi qua bốn tọa độ checkpoint bạn cung cấp; có thêm các điểm bẻ tuyến mô phỏng để đạt 400–450 m. Các điểm bẻ hiện chưa được xác minh là đường chạy thực địa và có thể thay bằng điểm lấy từ bản đồ.
-- CLI cũng mô phỏng được Gateway Arduino ở chế độ ghép; dữ liệu giả được ghi rõ nguồn, không chứng minh danh tính người thật trước cảm biến.
+- API khởi chạy simulator ở chế độ `GPS_ONLY` hoặc `GPS_AND_ARDUINO`; dữ liệu giả được ghi rõ nguồn, không chứng minh danh tính người thật trước cảm biến.
 - Nhận lap event chỉ từ nguồn có runner ID, kiểm tra giải, thời gian tối thiểu và sự kiện trùng.
 - Kết thúc phiên, tra cứu overview/runners/live/history và phát cập nhật WebSocket sau khi lưu thành công.
 - Phân quyền demo bằng ba API key riêng: Admin, Simulator, Gateway. Khóa cấu hình bằng biến môi trường.
@@ -36,7 +36,7 @@
    Copy-Item .env.example .env
    ```
 
-   Để chạy thử không cần SQL Server, đặt `DATABASE_URL=sqlite:///./running_demo.db` trong `.env`. File database được đặt trong thư mục backend kể cả khi khởi chạy từ thư mục làm việc khác. Các bảng được tạo tự động và dữ liệu tồn tại sau khi tắt/mở lại server. Để dùng SQL Server, tạo database `iot_running`, cài Microsoft ODBC Driver 18, rồi cấu hình chuỗi kết nối mẫu trong `.env`; tùy chọn SQL Server chưa được kiểm thử trong lần rà soát này.
+   Để chạy thử không cần SQL Server, đặt `DATABASE_URL=sqlite:///./running_demo.db` trong `.env`. File database được đặt trong thư mục backend kể cả khi khởi chạy từ thư mục làm việc khác. Các bảng được tạo tự động và dữ liệu tồn tại sau khi tắt/mở lại server. `SIMULATOR_BASE_URL` mặc định là `http://127.0.0.1:8000`; cập nhật nếu API chạy ở port khác. Để dùng SQL Server, tạo database `iot_running`, cài Microsoft ODBC Driver 18, rồi cấu hình chuỗi kết nối mẫu trong `.env`; tùy chọn SQL Server chưa được kiểm thử trong lần rà soát này.
 
 3. Khởi động web API:
 
@@ -49,37 +49,29 @@
 
 4. Mở `http://127.0.0.1:8000/docs` để xem và gọi API, hoặc `http://127.0.0.1:8000/health` để xem trạng thái.
 
-5. Mở cửa sổ PowerShell thứ hai, kích hoạt `.venv`, chạy mô phỏng. Mặc định lệnh tạo 20 sinh viên có số hiển thị `01`–`20`, mỗi người có wearable và run, rồi phát GPS/bước chân giả lập:
+5. Chạy mô phỏng trực tiếp qua API, không cần mở cửa sổ terminal thứ hai:
 
-   ```powershell
-   # Nếu terminal đang ở repo root; nếu mở thẳng services/backend thì bỏ dòng cd.
-   cd services\backend
-   .\.venv\Scripts\Activate.ps1
-   python -m app.simulator
-   ```
+   - Trong `/docs`, bấm **Authorize** và nhập giá trị `ADMIN_API_KEY` vào header `X-Admin-Key`.
+   - Gọi `POST /api/v1/simulations` với `{"checkpoint_mode":"GPS_ONLY","seed":42,"interval_seconds":0.5}`. Backend tự tạo giải demo, 5 runner `01`–`05`, 4 checkpoint, route, wearable và phiên chạy; 5 phiên có cùng thời điểm xuất phát.
+   - Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và `race_id`; dùng `GET /api/v1/races/{race_id}/dashboard` để theo dõi.
+   - Nếu muốn dừng sớm, gọi `POST /api/v1/simulations/{simulation_id}/stop`. Sau đó có thể xóa giải bằng `DELETE /api/v1/races/{race_id}`.
 
-   Mặc định mô phỏng 20 sinh viên, 4 vòng hoàn chỉnh, 4 checkpoint/vòng, GPS gửi mỗi 0.5 giây; tốc độ runner khác nhau nhưng tái lập được theo `--seed` và tất cả liên tục di chuyển. Simulator đọc lại polyline vừa lưu từ API rồi mới phát GPS. Run tự chuyển `COMPLETED` ở vòng thứ tư, thời gian được chốt. Polyline dài khoảng 425 m/vòng; tốc độ mô phỏng tăng tốc 12.4–13.1 m/s. Vì backend giữ `MIN_LAP_INTERVAL_SECONDS=30`, bốn vòng cần ít nhất 120 giây; với tuyến 425 m dự kiến khoảng 130–137 giây cộng độ trễ request. Không thể bảo đảm hoàn thành dưới 2 phút mà vẫn giữ đủ bốn vòng và ngưỡng 30 giây/vòng. Tốc độ mô phỏng vẫn cao hơn tốc độ chạy thực tế; API phân biệt simulator key (tối đa 18 m/s) và wearable key (tối đa 12 m/s).
+   Mỗi runner liên tục di chuyển theo polyline đã lưu. Snapshot bước chân tăng theo quãng đường với sải bước mô phỏng 0.62–0.82 m, tương đương khoảng 6–9 bước trên 5 m. Các tốc độ được tạo khác nhau để thể hiện nhóm chạy trước/sau; dữ liệu là mô phỏng, không phải số đo thực. 4 vòng cần ít nhất 120 giây theo luật 30 giây/vòng; route khoảng 425 m dự kiến xấp xỉ 2 phút cộng độ trễ API. `GPS_AND_ARDUINO` có thể chọn trong body để demo ghép sự kiện; nhiều runner đến sát nhau có thể chuyển `AMBIGUOUS` theo quy tắc an toàn.
 
-   Để chạy quy tắc Arduino + GPS trong tài liệu mới, dùng:
-
-   ```powershell
-   python -m app.simulator --mode GPS_AND_ARDUINO --students 4 --laps 4
-   ```
-
-   Chế độ kết hợp dùng để minh họa ghép Arduino với GPS. Dùng `--students 1` để kiểm tra ghép tự động một ứng viên; nhiều runner đi sát nhau có thể trả `AMBIGUOUS` theo rule an toàn. Dùng mặc định `GPS_ONLY` để demo 20 người. Mở race dashboard sau khi chương trình báo kết quả.
+   Job simulator được theo dõi trong bộ nhớ của một backend process; race, run, GPS, bước chân và lap được lưu bền trong SQLite. Nếu server khởi động lại, gọi GET job cũ sẽ trả 404; các dữ liệu race đã ghi vẫn còn. Chế độ demo hiện dành cho một backend process.
 
 SQLite lưu tại `running_demo.db` trong thư mục backend. Các bảng lưu giải chạy, sinh viên, đăng ký/bib, wearable và thiết bị checkpoint, checkpoint/tọa độ/thứ tự, phiên chạy, điểm GPS/bước chân, GPS passage, sự kiện Arduino và vòng chạy hợp lệ. SQLite bật khóa ngoại và WAL; tắt backend trước khi sao lưu database. File `.db`, WAL/SHM và `.env` bị loại khỏi Git.
 
 ### Tọa độ tuyến mô phỏng
 
-Tuyến tạo theo thứ tự `C04 → C01 → C02 → C03 → C04`, có các điểm bẻ mô phỏng giữa checkpoint; C04 là checkpoint đích vòng. Các số thập phân dưới đây được chuyển đổi từ tọa độ độ–phút–giây bạn cung cấp:
+Tuyến tạo theo thứ tự `C01 → C02 → C03 → C04 → C01`, có các điểm bẻ mô phỏng giữa checkpoint; C01 là điểm xuất phát và đích mỗi vòng. Sau vòng thứ tư, runner được ghi nhận hoàn thành giải. Các số thập phân dưới đây được chuyển đổi từ tọa độ độ–phút–giây bạn cung cấp:
 
 | Checkpoint | Vĩ độ | Kinh độ | Tọa độ nguồn |
 |---|---:|---:|---|
-| NEU-C01 — Bắc | 21.0003888889 | 105.8425833333 | 21°00′01.4″N, 105°50′33.3″E |
+| NEU-C01 — Bắc / xuất phát + đích vòng | 21.0003888889 | 105.8425833333 | 21°00′01.4″N, 105°50′33.3″E |
 | NEU-C02 — Đông | 21.0000000000 | 105.8434166667 | 21°00′00.0″N, 105°50′36.3″E |
 | NEU-C03 — Nam | 20.9996111111 | 105.8426388889 | 20°59′58.6″N, 105°50′33.5″E |
-| NEU-C04 — Tây/đích vòng | 20.9999722222 | 105.8418888889 | 20°59′59.9″N, 105°50′30.8″E |
+| NEU-C04 — Tây | 20.9999722222 | 105.8418888889 | 20°59′59.9″N, 105°50′30.8″E |
 
 Admin Web có thể đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, thay toàn bộ polyline bằng `PUT /api/v1/races/{race_id}/route` (gửi danh sách điểm GPS có thứ tự và checkpoint anchor), hoặc sửa một checkpoint bằng `PATCH /api/v1/checkpoints/{checkpoint_id}`. Cận 400–450 m chỉ áp dụng cho profile `NEU_DEMO`; route `CUSTOM` không bị áp cận demo nếu không khai báo `route_length_min_m`/`route_length_max_m`. Các API trả trạng thái khóa và lý do; sau khi lưu, FE refetch route/dashboard để đọc cấu hình đã commit. Thay route/checkpoint chỉ được phép trước khi tạo run. Điểm bẻ trong simulator là đường hình học demo; để khớp vỉa hè/lối đi thật, lấy polyline từ bản đồ và gửi qua API PUT.
 
@@ -90,8 +82,9 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 - REST base URL khi chạy local: `http://localhost:8000/api/v1`.
 - Admin gửi `X-Admin-Key: <ADMIN_API_KEY>` trong request; đây là cơ chế khóa API tương đương cho demo, cần thay bằng đăng nhập/JWT phù hợp trước production.
 - Màn hình nhập khóa gọi `POST /api/v1/auth/admin-key` kèm `X-Admin-Key`; `200` cho phép mở Admin Web, `401` giữ người dùng ở màn hình nhập. API không khóa tài khoản/key sau số lần sai, theo yêu cầu demo.
-- Số `01`–`20` là bib/display ID của participant; UUID `student_id` vẫn là khóa liên kết ổn định trong API.
+- Số `01`–`05` là bib/display ID của participant trong demo; UUID `student_id` vẫn là khóa liên kết ổn định trong API.
 - Dashboard tổng hợp dùng `GET /api/v1/races/{race_id}/dashboard`; trả summary, bảng runners, top runners và checkpoint events mới nhất.
+- Admin bắt đầu demo bằng `POST /api/v1/simulations`; poll `GET /api/v1/simulations/{simulation_id}`, dừng bằng `POST /api/v1/simulations/{simulation_id}/stop`. `DELETE /api/v1/races/{race_id}` dừng simulator được quản lý thuộc giải đó rồi xóa dữ liệu race; các phiên ACTIVE không thuộc simulator được quản lý trả HTTP 409 và cần dừng/hoàn tất trước.
 - Dashboard/live trả cả polyline route có thứ tự, tọa độ checkpoint và vị trí GPS mới nhất để frontend vẽ bản đồ/tiến độ.
 - Dashboard trả danh sách 4 checkpoint đã sắp theo `sequence_no`; frontend có thể nối các tọa độ để vẽ tuyến và vẽ vị trí GPS mới nhất của từng runner.
 - Admin Web đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, thay tuyến bằng `PUT /api/v1/races/{race_id}/route` (polyline đóng, có checkpoint anchor), sửa vị trí/bán kính bằng `PATCH /api/v1/checkpoints/{checkpoint_id}`. Profile `NEU_DEMO` áp cận 400–450 m; profile `CUSTOM` dùng cận tùy chọn. Sau khi lưu route/checkpoint, FE tải lại route/dashboard để đồng bộ trạng thái đã commit. Chỉ sửa trước khi tạo run.

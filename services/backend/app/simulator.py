@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
@@ -30,28 +30,28 @@ load_dotenv()
 # Centennial Building. The DMS coordinates are converted to decimal degrees.
 ROUTE_CHECKPOINTS = [
     {"code": "NEU-C01", "name": "Checkpoint 1 - phía Bắc tòa Thế Kỷ", "sequence_no": 1,
-     "kind": "CHECKPOINT", "latitude": 21.0003888889, "longitude": 105.8425833333},
+     "kind": "LAP", "latitude": 21.0003888889, "longitude": 105.8425833333},
     {"code": "NEU-C02", "name": "Checkpoint 2 - phía Đông tòa Thế Kỷ", "sequence_no": 2,
      "kind": "CHECKPOINT", "latitude": 21.0000000000, "longitude": 105.8434166667},
     {"code": "NEU-C03", "name": "Checkpoint 3 - phía Nam tòa Thế Kỷ", "sequence_no": 3,
      "kind": "CHECKPOINT", "latitude": 20.9996111111, "longitude": 105.8426388889},
-    {"code": "NEU-C04", "name": "Checkpoint 4 / đích vòng", "sequence_no": 4,
-     "kind": "LAP", "latitude": 20.9999722222, "longitude": 105.8418888889},
+    {"code": "NEU-C04", "name": "Checkpoint 4 - phía Tây tòa Thế Kỷ", "sequence_no": 4,
+     "kind": "CHECKPOINT", "latitude": 20.9999722222, "longitude": 105.8418888889},
 ]
 
 # Provisional map polyline passing through each checkpoint anchor. The four
 # added bends make a ~425m closed loop for the 400–450m demo requirement; replace
 # these unverified bend coordinates with a real map routing polyline when ready.
 ROUTE_WAYPOINTS = [
-    {"latitude": 20.9999722222, "longitude": 105.8418888889, "checkpoint_code": "NEU-C04"},
-    {"latitude": 21.0003915773, "longitude": 105.8420908414},
     {"latitude": 21.0003888889, "longitude": 105.8425833333, "checkpoint_code": "NEU-C01"},
     {"latitude": 21.0004188190, "longitude": 105.8431201370},
     {"latitude": 21.0000000000, "longitude": 105.8434166667, "checkpoint_code": "NEU-C02"},
     {"latitude": 20.9995844276, "longitude": 105.8431546335},
     {"latitude": 20.9996111111, "longitude": 105.8426388889, "checkpoint_code": "NEU-C03"},
     {"latitude": 20.9995687249, "longitude": 105.8421407295},
-    {"latitude": 20.9999722222, "longitude": 105.8418888889},
+    {"latitude": 20.9999722222, "longitude": 105.8418888889, "checkpoint_code": "NEU-C04"},
+    {"latitude": 21.0003915773, "longitude": 105.8420908414},
+    {"latitude": 21.0003888889, "longitude": 105.8425833333},
 ]
 
 
@@ -113,15 +113,15 @@ def position_at(points: list[dict], lengths: list[float], along_m: float) -> tup
 
 
 def main() -> None:
-    """Create 20 demo runners and keep GPS/steps moving until each completes four loops."""
+    """Create five simultaneous demo runners and move GPS/steps over four laps."""
     parser = argparse.ArgumentParser(description="Mô phỏng sinh viên chạy quanh tòa Thế Kỷ NEU với 4 checkpoint/vòng.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Địa chỉ API backend")
     parser.add_argument("--interval", type=float, default=0.5, help="Chu kỳ gửi GPS, mặc định 0.5 giây")
     parser.add_argument("--laps", type=int, default=4, help="Số vòng hoàn thành giải, mặc định 4")
-    parser.add_argument("--students", type=int, default=20, help="Số sinh viên giả lập, mặc định 20")
+    parser.add_argument("--students", type=int, default=5, help="Số sinh viên giả lập, mặc định 5")
     parser.add_argument("--seed", type=int, default=42, help="Seed để tái lập cùng tốc độ từng runner")
     parser.add_argument("--mode", choices=("GPS_ONLY", "GPS_AND_ARDUINO"), default="GPS_ONLY",
-                        help="GPS_ONLY là demo nhanh 20 runner; combined dùng thử ghép event Arduino")
+                        help="GPS_ONLY mô phỏng GPS/bước chân; combined kiểm tra ghép event Arduino")
     args = parser.parse_args()
     if args.interval < 0.5 or args.laps < 1 or not 1 <= args.students <= 100:
         parser.error("interval phải >= 0.5 giây, laps >= 1 và students nằm trong 1..100")
@@ -132,7 +132,7 @@ def main() -> None:
     run_tag = uuid.uuid4().hex[:8]
     admin_header, sim_header = "X-Admin-Key", "X-Simulator-Key"
     points, segment_lengths, route_length = make_route()
-    start_offset_m = 0.0  # Start at the C04 start/finish anchor for four complete loops.
+    start_offset_m = 0.0  # All five runners start together at C01 and finish each lap at C01.
 
     race = request_json(args.base_url, "/api/v1/races", "POST", {
         "name": f"NEU - Vòng quanh tòa Thế Kỷ ({run_tag})", "status": "LIVE",
@@ -142,6 +142,7 @@ def main() -> None:
         "checkpoint_mode": args.mode,
     }, admin_key, admin_header)
     race_id = race["race_id"]
+    print(f"Race {race_id} đang được khởi tạo.", flush=True)
 
     created_checkpoints = []
     gateway_device_ids = []
@@ -182,14 +183,18 @@ def main() -> None:
     speed_rng = random.Random(args.seed)
     min_lap_seconds = int(race.get("min_lap_interval_seconds", 30))
     server_speed_limit = float(os.getenv("MAX_SIMULATOR_SPEED_MPS", "18"))
-    safe_max_speed = min(13.1, server_speed_limit, route_length / (min_lap_seconds + 2.0))
+    safe_max_speed = min(13.35, server_speed_limit, route_length / (min_lap_seconds + 1.5))
     if safe_max_speed <= 0.5:
         raise RuntimeError("Cấu hình MIN_LAP_INTERVAL_SECONDS hoặc MAX_SIMULATOR_SPEED_MPS không phù hợp để mô phỏng.")
-    safe_min_speed = min(12.4, safe_max_speed - min(0.7, safe_max_speed / 2))
+    safe_min_speed = min(12.7, safe_max_speed - min(0.6, safe_max_speed / 2))
     pace_levels = [round(safe_min_speed + index * (safe_max_speed - safe_min_speed) / 7, 2)
                    for index in range(8)]
     speed_schedule = [pace_levels[index % len(pace_levels)] for index in range(args.students)]
     speed_rng.shuffle(speed_schedule)
+    stride_rng = random.Random(args.seed + 1)
+    stride_schedule = [0.62 + index * (0.82 - 0.62) / max(1, args.students - 1)
+                       for index in range(args.students)]
+    stride_rng.shuffle(stride_schedule)
     for number in range(1, args.students + 1):
         display_id = f"{number:02d}"
         student = request_json(args.base_url, "/api/v1/students", "POST", {
@@ -205,31 +210,40 @@ def main() -> None:
         request_json(args.base_url, f"/api/v1/races/{race_id}/participants", "POST", {
             "student_id": student_id, "bib_number": display_id,
         }, admin_key, admin_header)
-        run = request_json(args.base_url, "/api/v1/runs", "POST", {
-            "race_id": race_id, "student_id": student_id, "wearable_device_id": wearable_id,
-            "source": "SIMULATOR", "idempotency_key": f"sim-run-{run_tag}-{display_id}",
-        }, simulator_key, sim_header)
-
-        # 4 x 30 seconds is already 120 seconds. Keep that rule and use
-        # repeatable, distinct demo paces with margin for the finish geofence.
         speed_mps = speed_schedule[number - 1]
         lap_seconds = route_length / speed_mps
         finish_elapsed = (route_length * args.laps) / speed_mps
         runners.append({
             "display_id": display_id, "student_id": student_id,
-            "wearable_id": wearable_id, "run_id": run["run_id"],
+            "wearable_id": wearable_id, "run_id": None,
             "lap_seconds": lap_seconds, "speed_mps": speed_mps,
-            "finish_elapsed": finish_elapsed, "last_steps": 1000,
+            "stride_length_m": stride_schedule[number - 1],
+            "finish_elapsed": finish_elapsed, "last_steps": 0,
             "done": False, "last_checkpoint_keys": set(),
         })
 
+    # Run rows share one future timestamp so the API start is simultaneous,
+    # even though registrations and database inserts happen one after another.
+    simulator_started_at = datetime.now(timezone.utc) + timedelta(seconds=2)
+    for runner in runners:
+        run = request_json(args.base_url, "/api/v1/runs", "POST", {
+            "race_id": race_id, "student_id": runner["student_id"],
+            "wearable_device_id": runner["wearable_id"], "source": "SIMULATOR",
+            "started_at": timestamp(simulator_started_at),
+            "idempotency_key": f"sim-run-{run_tag}-{runner['display_id']}",
+        }, simulator_key, sim_header)
+        runner["run_id"] = run["run_id"]
+
     print(f"Race {race_id}: {args.students} sinh viên, {args.laps} vòng, 4 checkpoint/vòng.")
-    print(f"Tuyến polyline mô phỏng: khoảng {route_length:.1f}m/vòng, 4 checkpoint.")
+    print(f"Tuyến polyline mô phỏng: khoảng {route_length:.1f}m/vòng, xuất phát/đích vòng tại NEU-C01.")
     print(f"GPS + bước chân chuyển động liên tục; pace mô phỏng tăng tốc {min(r['speed_mps'] for r in runners):.2f}–{max(r['speed_mps'] for r in runners):.2f} m/s.")
-    print("Pace theo bib: " + ", ".join(f"{r['display_id']}={r['speed_mps']:.1f}" for r in runners) + " m/s.")
-    print(f"Giữ MIN_LAP_INTERVAL_SECONDS={race.get('min_lap_interval_seconds', 30)}; bốn vòng cần tối thiểu 120 giây, dự kiến khoảng {min(r['finish_elapsed'] for r in runners):.0f}–{max(r['finish_elapsed'] for r in runners):.0f} giây cộng độ trễ API.")
+    print("Bib / pace / độ dài bước: " + ", ".join(
+        f"{r['display_id']}={r['speed_mps']:.2f}m/s,{r['stride_length_m']:.2f}m"
+        for r in runners) + ".")
+    print(f"Giữ MIN_LAP_INTERVAL_SECONDS={race.get('min_lap_interval_seconds', 30)}; 4 vòng dự kiến khoảng {min(r['finish_elapsed'] for r in runners):.0f}–{max(r['finish_elapsed'] for r in runners):.0f} giây cộng độ trễ API.")
+    while datetime.now(timezone.utc) < simulator_started_at:
+        time.sleep(0.02)
     simulator_started = time.monotonic()
-    simulator_started_at = datetime.now(timezone.utc)
     expected_finish = max(runner["finish_elapsed"] for runner in runners)
     last_progress_print = -1
     event_ids: list[str] = []
@@ -246,7 +260,7 @@ def main() -> None:
             point_elapsed = max(0.0, (point_time - simulator_started_at).total_seconds())
             travelled_m = start_offset_m + runner["speed_mps"] * point_elapsed
             latitude, longitude = position_at(points, segment_lengths, travelled_m)
-            runner["last_steps"] = 1000 + int(travelled_m / 0.72)
+            runner["last_steps"] = int(travelled_m / runner["stride_length_m"])
             gps_body = {
                 "idempotency_key": f"sim-gps-{run_tag}-{runner['display_id']}-{int(elapsed * 1000):012d}",
                 "race_id": race_id, "run_id": runner["run_id"], "student_id": runner["student_id"],
@@ -279,7 +293,7 @@ def main() -> None:
             # In Arduino mode, send a gateway event when a lap-finish passage is
             # detected. Closely packed runners may correctly become AMBIGUOUS.
             if args.mode == "GPS_AND_ARDUINO":
-                finish_cp = created_checkpoints[-1]
+                finish_cp = created_checkpoints[0]
                 for crossing in accepted.get("checkpoint_crossings", []):
                     if crossing["checkpoint_id"] != finish_cp["checkpoint_id"]:
                         continue

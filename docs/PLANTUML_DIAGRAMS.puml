@@ -9,7 +9,10 @@ actor "Thiết bị đeo hoặc Simulator" as W
 actor "Arduino Gateway" as G
 rectangle "NEU Smart Running Backend Web" {
  usecase "Tạo giải và checkpoint" as U1
+ usecase "Xóa giải và dữ liệu thuộc giải" as U14
  usecase "Đăng ký sinh viên và wearable" as U2
+ usecase "Khởi chạy mô phỏng 5 runner qua API" as U15
+ usecase "Theo dõi hoặc dừng mô phỏng" as U16
  usecase "Theo dõi live và danh sách runner" as U3
  usecase "Xem lịch sử phiên chạy" as U4
  usecase "Cập nhật polyline tuyến và vị trí checkpoint" as U13
@@ -23,7 +26,10 @@ rectangle "NEU Smart Running Backend Web" {
  usecase "Admin xác nhận hoặc loại sự kiện mơ hồ" as U12
 }
 A --> U1
+A --> U14
 A --> U2
+A --> U15
+A --> U16
 A --> U3
 A --> U4
 A --> U13
@@ -129,11 +135,12 @@ repeat while (Continue running?) is (yes)
 stop
 @enduml
 
-' 4 BPMN TO-BE: web flow, route config, 20 runners, matching and completion
+' 4 BPMN TO-BE: web flow, route config, five runners, matching and completion
 @startuml
 |Admin Web|
 start
-:Create race, checkpoints, students and wearable assignments;
+:Call simulator API to create five runners and start all run clocks together;
+:Create race, four checkpoints, students and wearable assignments;
 :Update real map polyline and checkpoint positions before any run;
 |Wearable or Simulator|
 :Start run;
@@ -182,7 +189,7 @@ while (Run ACTIVE?) is (yes)
     endif
    endif
   endif
-  if (lap_count reached 4?) then (yes)
+   if (lap_count reached 4?) then (yes)
    :Freeze ended_at and duration_total_s, then set COMPLETED/DONE;
   endif
   :Commit, then publish WebSocket;
@@ -583,7 +590,7 @@ else (GPS_AND_ARDUINO and in time)
  :Commit result before WebSocket;
 endif
 |Admin Web|
-:Display dashboard, map, runners 01–20 and event status;
+:Display dashboard, map, runners 01–05 and event status;
 stop
 @enduml
 
@@ -594,7 +601,9 @@ ACTIVE --> ACTIVE : valid GPS/steps; target not reached
 ACTIVE --> ACTIVE : ordinary checkpoint or lap rejected by minimum interval
 ACTIVE --> COMPLETED : final valid lap reaches total_laps
 ACTIVE --> COMPLETED : Admin calls finish-run
+ACTIVE --> CANCELLED : Admin stops demo simulation
 COMPLETED --> [*] : run finalized
+CANCELLED --> [*] : run cancelled before completion
 note right of ACTIVE
 Only ACTIVE accepts telemetry.
 GPS_ONLY counts from GPS geofence.
@@ -741,12 +750,25 @@ class MatchAudit {
 }
 class RaceService {
   +create_race()
+  +delete_race_and_dependent_records()
   +get_route()
   +replace_route()
   +update_checkpoint()
   +overview()
   +runners()
   +live_snapshot()
+}
+class SimulatorJobController {
+  +start_five_runner_demo(mode,seed,interval)
+  +get_job_status(simulation_id)
+  +stop_job(simulation_id)
+}
+class SimulatorProcess {
+  +datetime shared_start_at
+  +float pace_mps
+  +float stride_length_m
+  +generate_gps(route,distance)
+  +derive_steps(distance)
 }
 class RunService {
   +start_run()
@@ -797,6 +819,9 @@ Checkpoint "1" --> "0..*" DeviceEvent
 Student "0..1" --> "0..*" DeviceEvent : optional identity
 DeviceEvent "1" --> "0..*" MatchAudit : resolution history
 RaceService ..> Race
+SimulatorJobController ..> SimulatorProcess : launches and monitors
+SimulatorProcess ..> RunSession : creates synchronized runs over REST
+SimulatorProcess ..> GpsPoint : posts movement and step snapshots over REST
 RunService ..> RunSession
 DeviceService ..> DeviceEvent
 GeofenceDetector ..> Checkpoint : checks radius
@@ -831,7 +856,9 @@ DB --> SYS : persisted records
 ** Race administration
 *** Create race
 *** Register students
-*** Bibs 01 to 20
+*** Bibs 01 to 05
+*** Start five-runner simulator from Admin API
+*** Poll or stop simulator job
 *** Assign wearable
 *** Create four checkpoints
 ** Runner monitoring
@@ -842,8 +869,8 @@ DB --> SYS : persisted records
 *** Live map
 ** Lap and completion
 *** Four checkpoints on route
-*** Checkpoint 4 records lap
-*** Demo minimum lap 15 seconds
+*** NEU-C01 is start and lap finish
+*** Demo minimum lap 30 seconds
 *** Four laps to complete
 *** Freeze duration
 *** COMPLETED and DONE
@@ -869,7 +896,7 @@ start
 :Enter valid Admin key [Admin, 4/5];
 :Create race and four checkpoints [Admin, 4/5];
 :Update polyline and checkpoint anchors [Admin, 4/5];
-:Create 20 runners and wearables [Admin + Simulator, 5/5];
+:Start five runners together through API [Admin + Simulator, 5/5];
 |Monitoring|
 :Open dashboard and map [Admin Web, 5/5];
 :Observe moving GPS and increasing steps [Admin + Simulator, 5/5];
@@ -888,6 +915,7 @@ left to right direction
 component "Admin Web" as FE
 component "Map route provider or map editor" as MAP
 component "FastAPI REST / WebSocket" as API
+component "Simulator Job Controller" as JOB
 component "Wearable Simulator: GPS + step counter" as SIM
 component "Physical GPS + step device" as WEAR
 component "Arduino UNO + HC-SR04" as UNO
@@ -898,9 +926,12 @@ component "Checkpoint correlation worker" as MATCH
 database "SQLite: races, route points, checkpoints, runs, telemetry" as DB
 component "WebSocket Event Hub" as HUB
 FE --> API : REST + WebSocket
+FE --> API : POST /simulations; poll /stop
 MAP --> FE : Ordered GPS polyline
 FE --> API : GET/PUT route; PATCH checkpoints
 SIM --> API : REST + X-Simulator-Key
+API --> JOB : Start / inspect / stop process
+JOB --> SIM : Launch five-runner task
 WEAR --> API : REST + X-Wearable-Key
 UNO --> GW : USB Serial
 GW --> API : REST + X-Gateway-Key

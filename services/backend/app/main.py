@@ -11,7 +11,13 @@ import hashlib
 import json
 import logging
 import math
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -37,6 +43,7 @@ class Settings(BaseSettings):
     min_lap_interval_seconds: int = 30
     max_gps_speed_mps: float = 12.0
     max_simulator_speed_mps: float = 18.0
+    simulator_base_url: str = "http://127.0.0.1:8000"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
@@ -394,6 +401,14 @@ class RunIn(BaseModel):
     wearable_device_id: str
     source: str = "SIMULATOR"
     idempotency_key: str = Field(min_length=1, max_length=120)
+    started_at: datetime | None = None
+
+
+class SimulationStartIn(BaseModel):
+    """Controls for the five-runner demo launched from the Admin Web."""
+    checkpoint_mode: str = "GPS_ONLY"
+    seed: int = 42
+    interval_seconds: float = Field(default=0.5, ge=0.5, le=5)
 
 
 class GpsIn(BaseModel):
@@ -490,6 +505,59 @@ hub = EventHub()
 app = FastAPI(title="NEU Smart Running Backend", version="1.0.0", description="Backend web cho giải chạy NEU: REST, SQLite và WebSocket.")
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.cors_origins.split(",") if x.strip()], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# One process-local job registry powers the demo control API. The telemetry,
+# laps, and race results themselves remain durable in the configured database.
+_simulation_jobs: dict[str, dict[str, Any]] = {}
+_simulation_jobs_lock = threading.Lock()
+
+
+def _simulation_job_snapshot(job_id: str) -> dict[str, Any]:
+    job = _simulation_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, detail={"code": "SIMULATION_NOT_FOUND", "message": "Không tìm thấy phiên mô phỏng trên backend này.", "details": [], "trace_id": new_id()})
+    process: subprocess.Popen | None = job["process"]
+    return_code = process.poll() if process else None
+    if job.get("stop_requested"):
+        status = "STOPPED" if return_code is not None else "STOPPING"
+    elif return_code is None:
+        status = "RUNNING"
+    else:
+        status = "COMPLETED" if return_code == 0 else "FAILED"
+    if return_code is not None and not job.get("finished_at"):
+        job["finished_at"] = now_utc()
+    try:
+        with open(job["log_path"], "r", encoding="utf-8", errors="replace") as log_file:
+            lines = log_file.readlines()[-60:]
+        log_text = "".join(lines)
+    except OSError:
+        log_text = ""
+    match = re.search(r"Race ([0-9a-f-]{36})", log_text, re.IGNORECASE)
+    race_id = match.group(1) if match else job.get("race_id")
+    if race_id:
+        job["race_id"] = race_id
+    return {"simulation_id": job_id, "status": status, "race_id": race_id,
+            "students": 5, "laps_required": 4, "checkpoint_mode": job["mode"],
+            "started_at": job["started_at"], "finished_at": job.get("finished_at") if return_code is not None else None,
+            "exit_code": return_code, "log_tail": log_text[-6000:]}
+
+
+def _cancel_simulation_runs(race_id: str) -> None:
+    """Stop clocks for a deliberately stopped demo before allowing race deletion."""
+    with SessionLocal() as db:
+        race = db.get(Race, race_id)
+        if not race:
+            return
+        stopped_at = now_utc()
+        active_runs = db.scalars(select(RunSession).where(RunSession.race_id == race_id, RunSession.status == "ACTIVE")).all()
+        for run in active_runs:
+            run.status = "CANCELLED"
+            run.ended_at = stopped_at
+            run.duration_total_s = max(0, int((stopped_at - aware(run.started_at)).total_seconds()))
+        if active_runs:
+            race.status = "CANCELLED"
+            race.end_at = stopped_at
+        db.commit()
+
 
 # 4. Shared request helpers: one DB session per request and role-specific API keys.
 def db_session():
@@ -527,10 +595,12 @@ def gps_ingest_auth(
 def run_create_auth(
     x_admin_key: str | None = Header(default=None),
     x_simulator_key: str | None = Header(default=None),
-) -> None:
+) -> str:
     """Allow Admin Web or the demo simulator to start an already-registered run."""
-    if x_admin_key == settings.admin_api_key or x_simulator_key == settings.simulator_api_key:
-        return
+    if x_admin_key == settings.admin_api_key:
+        return "ADMIN"
+    if x_simulator_key == settings.simulator_api_key:
+        return "SIMULATOR"
     raise HTTPException(401, detail={"code": "UNAUTHORIZED", "message": "Cần Admin key hoặc Simulator key để tạo phiên chạy.", "details": [], "trace_id": new_id()})
 
 
@@ -868,6 +938,115 @@ def list_races(db: Session = Depends(db_session)):
     return {"items": [{"race_id": r.id, "name": r.name, "status": r.status, "start_at": r.start_at} for r in db.scalars(select(Race)).all()]}
 
 
+# [FE LINK: SIMULATOR CONTROL] Admin starts, polls, or stops the five-runner
+# demonstration from the browser; it does not need a separate terminal window.
+@app.post("/api/v1/simulations", status_code=202, dependencies=[Depends(admin)])
+def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
+    if data.checkpoint_mode not in {"GPS_ONLY", "GPS_AND_ARDUINO"}:
+        envelope_error("INVALID_CHECKPOINT_MODE", "checkpoint_mode phải là GPS_ONLY hoặc GPS_AND_ARDUINO.", 422)
+    with _simulation_jobs_lock:
+        for existing_id, existing in _simulation_jobs.items():
+            process = existing.get("process")
+            if process and process.poll() is None:
+                return {**_simulation_job_snapshot(existing_id), "already_running": True}
+        job_id = new_id()
+        log_path = str(Path(tempfile.gettempdir()) / f"neu-smart-running-{job_id}.log")
+        command = [sys.executable, "-u", "-m", "app.simulator",
+                   "--base-url", settings.simulator_base_url,
+                   "--students", "5", "--laps", "4",
+                   "--mode", data.checkpoint_mode,
+                   "--seed", str(data.seed),
+                   "--interval", str(data.interval_seconds)]
+        child_env = os.environ.copy()
+        child_env["PYTHONUNBUFFERED"] = "1"
+        try:
+            with open(log_path, "w", encoding="utf-8") as log_file:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(Path(__file__).resolve().parent.parent),
+                    env=child_env,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+        except OSError as exc:
+            envelope_error("SIMULATOR_START_FAILED", f"Không khởi chạy được simulator: {exc}", 500)
+        _simulation_jobs[job_id] = {"process": process, "log_path": log_path,
+                                    "started_at": now_utc(), "mode": data.checkpoint_mode,
+                                    "stop_requested": False, "finished_at": None}
+        return {**_simulation_job_snapshot(job_id), "already_running": False}
+
+
+@app.get("/api/v1/simulations/{simulation_id}", dependencies=[Depends(admin)])
+def get_demo_simulation(simulation_id: str):
+    return _simulation_job_snapshot(simulation_id)
+
+
+@app.post("/api/v1/simulations/{simulation_id}/stop", dependencies=[Depends(admin)])
+def stop_demo_simulation(simulation_id: str):
+    job = _simulation_jobs.get(simulation_id)
+    if not job:
+        envelope_error("SIMULATION_NOT_FOUND", "Không tìm thấy phiên mô phỏng trên backend này.", 404)
+    process = job["process"]
+    if process and process.poll() is None:
+        job["stop_requested"] = True
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        job["finished_at"] = now_utc()
+    snapshot = _simulation_job_snapshot(simulation_id)
+    race_id = snapshot.get("race_id") or job.get("race_id")
+    if race_id:
+        _cancel_simulation_runs(race_id)
+    return _simulation_job_snapshot(simulation_id)
+
+
+@app.delete("/api/v1/races/{race_id}", dependencies=[Depends(admin)])
+def delete_race(race_id: str, db: Session = Depends(db_session)):
+    """Delete one race and its race-owned records while preserving student profiles."""
+    get_or_404(db, Race, race_id, "giải chạy")
+    for simulation_id, job in list(_simulation_jobs.items()):
+        process = job.get("process")
+        if not process or process.poll() is not None:
+            continue
+        snapshot = _simulation_job_snapshot(simulation_id)
+        if snapshot.get("race_id") == race_id:
+            stop_demo_simulation(simulation_id)
+        elif not snapshot.get("race_id"):
+            envelope_error("SIMULATOR_STARTING", "Mô phỏng đang tạo giải; hãy đợi lấy được race_id hoặc dừng mô phỏng rồi thử lại.", 409)
+    active_runs = db.scalars(select(RunSession).where(RunSession.race_id == race_id, RunSession.status == "ACTIVE")).all()
+    if active_runs:
+        envelope_error("RACE_HAS_ACTIVE_RUNS", "Hãy hoàn thành hoặc dừng các phiên chạy ACTIVE trước khi xóa giải.", 409)
+
+    checkpoint_ids = db.scalars(select(Checkpoint.id).where(Checkpoint.race_id == race_id)).all()
+    run_ids = db.scalars(select(RunSession.id).where(RunSession.race_id == race_id)).all()
+    event_ids = db.scalars(select(DeviceEvent.id).where(DeviceEvent.checkpoint_id.in_(checkpoint_ids))).all() if checkpoint_ids else []
+    if event_ids:
+        db.query(MatchAudit).filter(MatchAudit.event_id.in_(event_ids)).delete(synchronize_session=False)
+    if run_ids:
+        db.query(IdempotencyRecord).filter(IdempotencyRecord.resource_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(GPSPassage).filter(GPSPassage.run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(GeofenceState).filter(GeofenceState.run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(GpsPoint).filter(GpsPoint.run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(LapEvent).filter(LapEvent.run_id.in_(run_ids)).delete(synchronize_session=False)
+    if checkpoint_ids:
+        db.query(DeviceEvent).filter(DeviceEvent.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
+        db.query(GPSPassage).filter(GPSPassage.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
+        db.query(GeofenceState).filter(GeofenceState.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
+        db.query(LapEvent).filter(LapEvent.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
+        db.query(Device).filter(Device.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
+    db.query(RaceRoutePoint).filter(RaceRoutePoint.race_id == race_id).delete(synchronize_session=False)
+    db.query(RaceParticipant).filter(RaceParticipant.race_id == race_id).delete(synchronize_session=False)
+    db.query(RunSession).filter(RunSession.race_id == race_id).delete(synchronize_session=False)
+    db.query(Checkpoint).filter(Checkpoint.race_id == race_id).delete(synchronize_session=False)
+    db.delete(db.get(Race, race_id))
+    db.commit()
+    return {"deleted": True, "race_id": race_id}
+
+
 @app.post("/api/v1/students", status_code=201, dependencies=[Depends(admin)])
 def create_student(data: StudentIn, db: Session = Depends(db_session)):
     if db.scalar(select(Student).where(Student.student_code == data.student_code)):
@@ -1097,8 +1276,8 @@ def run_dict(db: Session, run: RunSession) -> dict[str, Any]:
 
 
 # [DEVICE LINK: GPS + STEPS] A run is bound to the wearable already paired to this student.
-@app.post("/api/v1/runs", status_code=201, dependencies=[Depends(run_create_auth)])
-def create_run(data: RunIn, db: Session = Depends(db_session)):
+@app.post("/api/v1/runs", status_code=201)
+def create_run(data: RunIn, auth_role: str = Depends(run_create_auth), db: Session = Depends(db_session)):
     request_hash = hashlib.sha256(json.dumps(data.model_dump(mode="json"), sort_keys=True).encode("utf-8")).hexdigest()
     record = db.get(IdempotencyRecord, data.idempotency_key)
     if record:
@@ -1110,6 +1289,14 @@ def create_run(data: RunIn, db: Session = Depends(db_session)):
     get_or_404(db, Student, data.student_id, "sinh viên")
     if race.status == "COMPLETED":
         envelope_error("RACE_COMPLETED", "Không thể mở phiên mới trong giải đã hoàn thành.")
+    started_at = now_utc()
+    if data.started_at is not None:
+        if auth_role != "SIMULATOR":
+            envelope_error("SIMULATOR_START_TIME_ONLY", "Chỉ Simulator API key mới được đồng bộ thời điểm xuất phát.", 403)
+        requested_start = aware(data.started_at)
+        if requested_start < started_at or requested_start > started_at + timedelta(seconds=10):
+            envelope_error("INVALID_SIMULATOR_START_TIME", "Thời điểm xuất phát đồng bộ phải nằm trong 10 giây tới.", 422)
+        started_at = requested_start
     wearable = get_or_404(db, RunnerWearable, data.wearable_device_id, "thiết bị đeo")
     if wearable.student_id != data.student_id or wearable.status != "ACTIVE":
         envelope_error("WEARABLE_RUNNER_MISMATCH", "Thiết bị GPS/bước chân không được gán cho runner này.")
@@ -1117,9 +1304,11 @@ def create_run(data: RunIn, db: Session = Depends(db_session)):
     if not participant: envelope_error("NOT_REGISTERED", "Sinh viên chưa đăng ký giải chạy.")
     active = db.scalar(select(RunSession).where(RunSession.race_id == data.race_id, RunSession.student_id == data.student_id, RunSession.status == "ACTIVE"))
     if active: envelope_error("ACTIVE_RUN_EXISTS", "Sinh viên đã có phiên chạy ACTIVE trong giải này.")
-    run = RunSession(race_id=data.race_id, student_id=data.student_id, wearable_device_id=wearable.id, source=data.source, started_at=now_utc())
+    run = RunSession(race_id=data.race_id, student_id=data.student_id, wearable_device_id=wearable.id, source=data.source, started_at=started_at)
     if race.matching_locked_at is None:
         race.matching_locked_at = now_utc()
+    if race.start_at is None or aware(race.start_at) > started_at:
+        race.start_at = started_at
     db.add(run); db.flush(); db.add(IdempotencyRecord(key=data.idempotency_key, resource_id=run.id, request_hash=request_hash)); db.commit(); db.refresh(run)
     return run_dict(db, run)
 
@@ -1459,7 +1648,7 @@ def race_dashboard(race_id: str, db: Session = Depends(db_session)):
         status_counts[event.status] = status_counts.get(event.status, 0) + 1
     completed = [r for r in runner_rows if r["status"] == "COMPLETED"]
     active = [r for r in runner_rows if r["status"] == "ACTIVE"]
-    ranked = sorted(runner_rows, key=lambda r: (-r["lap_count"], r["duration_total_s"], r["display_id"]))
+    ranked = sorted(runner_rows, key=lambda r: (-r["lap_count"], -r["distance_total_m"], r["duration_total_s"], r["display_id"]))
     return {
         "race": {"race_id": race.id, "name": race.name, "status": race.status, "checkpoint_mode": race.checkpoint_mode,
             "route_profile": race.route_profile,
@@ -1672,3 +1861,25 @@ async def stop_matching_worker() -> None:
             await _matching_worker
         except asyncio.CancelledError:
             pass
+
+
+@app.on_event("shutdown")
+async def stop_simulator_processes() -> None:
+    """Do not leave a demo subprocess sending GPS after the API server exits."""
+    for job_id, job in _simulation_jobs.items():
+        try:
+            _simulation_job_snapshot(job_id)
+        except HTTPException:
+            continue
+        process = job.get("process")
+        if process and process.poll() is None:
+            job["stop_requested"] = True
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            job["finished_at"] = now_utc()
+        if job.get("race_id"):
+            _cancel_simulation_runs(job["race_id"])
