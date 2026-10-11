@@ -30,12 +30,23 @@ let points = [
   { latitude: 21, longitude: 105.001, checkpoint_id: null },
   { latitude: 21, longitude: 105, checkpoint_id: null },
 ];
+const metadata = () => ({
+  route_profile: "NEU_DEMO",
+  route_length_min_m: 400,
+  route_length_max_m: 450,
+  editable: !runs,
+  locked: runs,
+  locked_reason: runs ? "Đã có phiên chạy" : null,
+  route_status: empty ? "NOT_CONFIGURED" : "CONFIGURED",
+});
 const route = () => ({
+  ...metadata(),
   points: empty ? [] : points.map((p, i) => ({ ...p, sequence_no: i + 1 })),
   distance_m: 419,
 });
 const dashboard = () => ({
   race: {
+    ...metadata(),
     race_id: race,
     name: "Kiểm thử editor · dữ liệu cô lập",
     status: "DRAFT",
@@ -233,7 +244,7 @@ try {
   await expect(page.getByLabel("Chọn giải chạy")).toHaveValue(race);
   fail = "validation";
   await save().click();
-  await expect(page.getByRole("alert")).toContainText("400–450");
+  await expect(page.getByRole("alert")).toContainText("giới hạn");
   await expect(page.getByLabel("Vĩ độ", { exact: true })).toHaveValue(
     "21.000001",
   );

@@ -100,6 +100,9 @@ export async function loadSnapshot(
     },
   };
 }
+export function evictRace(id: string) {
+  races = races.filter((r) => r.race_id !== id);
+}
 export function clearApiCache() {
   races = [];
 }

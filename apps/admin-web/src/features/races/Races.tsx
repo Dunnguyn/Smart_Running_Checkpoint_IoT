@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
 import { Badge, Panel, Empty } from "../../components/ui";
+import { SimulationPanel } from "./SimulationPanel";
+import { DeleteRace } from "./DeleteRace";
+import type { Race } from "../../types/domain";
 import { CreateRace } from "./CreateRace";
 import { dataMode } from "../../services";
 import { MatchingSettings } from "./MatchingSettings";
@@ -19,6 +22,7 @@ export function Races() {
     { raceId } = useParams();
   const [query, setQuery] = useState(""),
     [status, setStatus] = useState("");
+  const [deleting, setDeleting] = useState<Race | null>(null);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState("");
   useEffect(() => {
@@ -63,6 +67,10 @@ export function Races() {
           </button>
         )}
       </div>
+      {deleting && (
+        <DeleteRace race={deleting} onClose={() => setDeleting(null)} />
+      )}
+      {!selected && dataMode === "api" && <SimulationPanel />}
       {creating && (
         <CreateRace
           onClose={() => setCreating(false)}
@@ -208,6 +216,17 @@ export function Races() {
                       >
                         Mở giải
                       </Link>
+                      {dataMode === "api" && (
+                        <details className="race-actions">
+                          <summary>Thao tác khác</summary>
+                          <button
+                            className="button danger"
+                            onClick={() => setDeleting(r)}
+                          >
+                            Xóa giải
+                          </button>
+                        </details>
+                      )}
                     </td>
                   </tr>
                 ))}

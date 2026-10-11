@@ -1,3 +1,50 @@
+# Tích hợp backend main cba5339 — 11/10/2026
+
+Phần này thay thế thông tin runtime và contract trong các mục lịch sử bên dưới.
+
+## Phiên bản và runtime thực tế
+
+- FE: `E:\Hocccc\Project\Smart_Running_Checkpoint_IoT\apps\admin-web`, nhánh `fe`, HEAD `1891dcc`. Đã fast-forward an toàn từ `2046a2a` tới local `origin/fe`; không pull/fetch, không merge main vào fe, không commit/push. Giữ thay đổi `.gitignore` của người dùng.
+- BE: detached `cba5339` tại `C:\Users\Admin\.codex\worktrees\backend-current-main\Smart_Running_Checkpoint_IoT\services\backend`. Worktree sạch. Checkout FE không chứa toàn bộ backend mới nên không chạy backend từ đó.
+- Đã dừng các tiến trình backend cũ đã xác minh trước khi chạy bản mới. Backend hiện lắng nghe `127.0.0.1:8001`, PID `53192`; launcher Python PID `52536`. Frontend Vite `http://localhost:5173`, PID `49212`. Không có listener 8000 trong lần kiểm tra cuối.
+- Giữ `VITE_DATA_MODE=api`, `VITE_API_BASE_URL=http://localhost:8001/api/v1`, `VITE_WS_BASE_URL=ws://localhost:8001`. Không đổi port frontend/backend.
+- Dùng venv và cấu hình local hiện có; SQLite demo `services/backend/running_demo.db` được chỉ định bằng đường dẫn tuyệt đối. Secret truyền trong bộ nhớ môi trường tiến trình, không in hoặc sao chép ra file. Startup schema/worker là tác dụng phụ được cho phép. Không khởi động simulator.
+- `/health` trả 200/status ok; OpenAPI runtime xác nhận các API mới. Giữ hai dịch vụ chạy để người dùng sử dụng. Không chạy thêm uvicorn ở workspace FE hoặc cổng 8000 song song.
+
+## API và UX đã nối
+
+1. Route: GET/PUT `/api/v1/races/{race_id}/route`, PATCH `/api/v1/checkpoints/{checkpoint_id}` tiếp tục dùng đúng payload. Đọc `route_profile`, min/max nullable, `route_status`, `editable`, `locked`, `locked_reason`; đối chiếu metadata route/dashboard. CUSTOM không còn bị ép 400–450 m. NEU_DEMO dùng giới hạn API thực trả; chỉ form tạo giải mô tả mặc định backend 400–450 m khi bỏ trống. Giới hạn null khác 0/thiếu field. Chiều dài ước tính cộng đoạn cuối–đầu đúng một lần, vẫn kiểm tra 5–500 điểm, đầu/cuối <=2 m, đủ neo đúng một lần và thứ tự neo theo chu kỳ sequence_no. Không đoán tuyến từ checkpoint.
+2. Khóa: ưu tiên flag backend; thiếu/mâu thuẫn thì chặn lưu. Có run, kể cả COMPLETED, vẫn khóa. Đọc lại trước lưu và xử lý khóa/xung đột server. Draft riêng, không bị refetch ghi đè; runner không trở thành đối tượng chỉnh sửa.
+3. Matching: GET và PATCH `/api/v1/races/{race_id}/checkpoint-matching`. Form chỉ mở sau GET hợp lệ, hiện cấu hình/khóa/version thật. `min_lap_interval_seconds` chỉ đọc, không gửi PATCH vì schema PATCH không hỗ trợ. Đọc lại trước/sau lưu; giữ draft khi lỗi, yêu cầu tải lại khi version thay đổi. Không dùng giá trị mặc định như dữ liệu đã lưu.
+4. Mô phỏng tại `/races`: POST `/api/v1/simulations`, GET `/api/v1/simulations/{simulation_id}`, POST `/api/v1/simulations/{simulation_id}/stop`. Modal nêu rõ 5 sinh viên/4 vòng, mode, seed, interval 0.5–5 giây. Admin chủ động bắt đầu/dừng; không tự ghi khi mở trang. GPS kết hợp Arduino mô phỏng không chứng minh kit thật online. Stop không tự gọi finish run; trạng thái do backend quyết định.
+5. Polling job: một chuỗi request, backoff lỗi tối đa 30 giây và dừng sau 5 lỗi; giảm tần suất khi tab ẩn, dừng ở terminal/404/unmount. Lưu ID job/race theo API base trong sessionStorage, không lưu key. Mất response POST không tự retry; 404 sau restart không đồng nghĩa race đã xóa. Mở race là thao tác riêng và kiểm tra race còn tồn tại.
+6. DELETE `/api/v1/races/{race_id}` trong “Thao tác khác”. Xác nhận chính xác `XÓA`, hiện tên/ID/phạm vi dữ liệu bị xóa; hồ sơ sinh viên/wearable toàn hệ thống được giữ. Chặn nếu biết còn run ACTIVE; đọc lại trước gửi và xử lý 409. Backend có thể dừng simulator thuộc quyền quản lý trong DELETE; frontend không gọi stop/finish để vượt điều kiện. Mất response phải GET danh sách kiểm chứng trước kết luận/retry. Sau xác nhận xóa, dọn cache, selection, snapshot và socket đúng race, về danh sách.
+7. Form tạo giải bổ sung profile và giới hạn min/max tùy chọn đúng schema mới. Không tự tạo checkpoint/run.
+
+REST chống dữ liệu cũ ghi đè realtime và các trạng thái match/lap giữ nguyên. Không có WebSocket job/route/delete mới được phát minh. Đã làm unsubscribe idempotent để đóng socket an toàn cả khi xóa race và effect cleanup.
+
+## Kiểm tra thực tế
+
+- Lint: đạt, không warning. Typecheck: đạt (tsc trong build). Unit: 35/35, 7 file. Build: đạt; cảnh báo bundle JS khoảng 592 kB minified (>500 kB), chưa tách bundle trong phạm vi này.
+- Browser editor cô lập: validation/payload/khóa/draft/lỗi, 4 request ghi bị intercept, 0 ghi thật.
+- Browser quản trị mới cô lập: tạo job một POST, polling dừng terminal/unmount, stop đọc lại GET, job404 sau restart, matching GET/PATCH lỗi và readback, xóa typed confirmation/409/mất response, dọn socket/cache, chặn run ACTIVE và chặn retry POST chưa rõ kết quả. 8 request ghi bị intercept, 0 ghi thật; không có page error.
+- Browser tạo giải cô lập: empty state, validation/422, payload/busy/refetch, mất mạng không retry, Escape/hủy. 3 request ghi bị intercept, 0 ghi thật.
+- Backend thật: đọc 8 race; route và dashboard thống nhất metadata. 7 race khóa/chưa có điểm tuyến; 1 race chưa khóa/có 5 điểm. Các race đọc được có CUSTOM và min/max null. GET matching thành công, trạng thái khóa nhất quán. Không chỉnh dữ liệu để làm số liệu khớp nhau.
+- Browser chỉ đọc backend thật: đăng nhập, dashboard 4 viewport (1366×768, 1440×900, 1920×1080, tablet), tìm bib/drawer/focus, COMPLETED, bản đồ chọn/pan, checkpoint tabs, đổi race/reconnect một socket/logout; 0 request ghi, 0 page error. WS kết nối/resync được kiểm tra; chưa có message nghiệp vụ trong phiên test (0), không khẳng định đã kiểm chứng GPS streaming thật.
+- Ảnh fixture mới: `test-results/current/races-1366.png`, `races-1920.png`, `matching.png`, `delete-confirm.png`. Ảnh backend thật: `test-results/ux/`. Các thư mục test-results bị ignore, không chứa secret; fixture chỉ trong test, không fallback ở ứng dụng.
+
+## Giới hạn và xác nhận
+
+Chưa E2E ghi route/checkpoint/matching, tạo/dừng simulator hoặc DELETE trên dữ liệu thật. Chưa có dữ liệu kiểm thử được cho phép cho các thao tác đó. Không phát hiện lỗi backend được chứng minh qua các lần đọc; lỗi fixture không được ghi thành lỗi backend. Job registry backend nằm trong RAM, không có API danh sách job; giao diện chỉ khôi phục job gần nhất của trình duyệt. Route chưa có ETag/version chống ghi đồng thời; đọc lại giảm rủi ro nhưng không bảo đảm loại bỏ race condition giữa nhiều admin.
+
+Nếu sau này cần nghiệm thu ghi thật: chỉ sau khi người dùng cho phép, tạo một job GPS_ONLY seed 42 interval 0.5, ghi lại race_id/job_id mới; kiểm tra trạng thái, dừng đúng job (run có thể bị hủy, không hoàn thành), xác nhận xóa chỉ race mới đó. Route/matching cần race thử riêng chưa có run. Chưa thực hiện các bước này.
+
+Không chỉnh source/.env/dependency/schema/tài liệu backend thủ công; phần backend trong checkout FE chỉ thay đổi do fast-forward upstream được cho phép. Không xóa/sửa dữ liệu lịch sử, không seed/migration riêng, không simulator, không commit/push/deploy. `git diff -- services/backend` rỗng; worktree backend sạch.
+
+File FE sửa: LiveProvider; LiveMap/MapEditor; Checkpoints; Races/CreateRace/MatchingSettings; mới SimulationPanel/DeleteRace; contract/matchingContract/matchingService/mapEditorService/raceCreation/apiAdapter/liveService và mới adminOperations; styles; unit mapEditorService; script verify-map-editor và mới verify-admin-current; README/API_COVERAGE/report. Thay đổi `.gitignore` của người dùng được giữ nguyên.
+
+---
+
 # Sửa điểm tuyến thiếu tọa độ — 11/10/2026
 
 Editor trước đây cho thêm điểm nhập tay có tọa độ trống rồi tiếp tục thêm điểm khác; điểm trống bị ẩn khỏi bản đồ khiến người dùng khó nhận biết. Nay validation chỉ rõ thứ tự điểm lỗi và thanh lưu có nút Sửa tọa độ điểm N (chọn/focus input). Khi còn điểm không hợp lệ, thao tác thêm điểm đưa về điểm đó; thêm điểm nhập tay tắt công cụ click bản đồ. Không tự xóa điểm, thay GPS hoặc đoán tọa độ. Không báo sai chiều dài/khép vòng khi chưa tính được do thiếu tọa độ. Unit test kiểm tra chỉ số điểm lỗi và không phát sinh lỗi hình học dây chuyền.

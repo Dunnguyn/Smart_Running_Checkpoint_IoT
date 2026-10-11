@@ -5,7 +5,7 @@ import { Panel } from "../../components/ui";
 import { Modal } from "../../components/Modal";
 import { CheckpointJournal } from "./CheckpointJournal";
 import { RegisterDevice } from "./RegisterDevice";
-import { hasRuns, lockedMessage } from "../../services/mapEditorService";
+import { hasRuns, routeAccess } from "../../services/mapEditorService";
 export function Checkpoints() {
   const { snapshot, raceId } = useLive();
   const [params, setParams] = useSearchParams();
@@ -15,7 +15,11 @@ export function Checkpoints() {
     race: string;
     checkpoint: string;
   } | null>(null);
-  const locked = hasRuns(snapshot?.dashboard);
+  const access = routeAccess(
+    snapshot?.dashboard?.race,
+    hasRuns(snapshot?.dashboard),
+  );
+  const locked = access.blocked;
   if (!snapshot)
     return (
       <div className="skeleton" role="status">
@@ -62,7 +66,7 @@ export function Checkpoints() {
           title="Trạm và thiết bị"
           subtitle="Danh sách thiết bị và trạng thái online chưa được backend hỗ trợ."
         >
-          {locked && <p className="map-note">{lockedMessage}</p>}
+          {locked && <p className="map-note">{access.reason}</p>}
           <div className="table-scroll">
             <table>
               <thead>
@@ -103,7 +107,7 @@ export function Checkpoints() {
                           <button
                             className="button"
                             disabled
-                            title={lockedMessage}
+                            title={access.reason}
                           >
                             Chỉnh sửa
                           </button>

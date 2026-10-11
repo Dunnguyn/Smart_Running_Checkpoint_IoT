@@ -1,5 +1,9 @@
 import { request, RequestError } from "./client";
-import type { BackendRoute, BackendCheckpoint } from "./contract";
+import type {
+  BackendRoute,
+  BackendCheckpoint,
+  RouteMetadata,
+} from "./contract";
 import { validPosition } from "./contract";
 import type { DashboardDto } from "./matchingContract";
 export type RoutePoint = Omit<BackendRoute["points"][number], "sequence_no">;
@@ -26,6 +30,7 @@ export function meters(a: RoutePoint, b: RoutePoint) {
 export function validateRoute(
   points: RoutePoint[],
   checkpoints: BackendCheckpoint[],
+  rules: RouteMetadata = {},
 ) {
   const errors: string[] = [];
   const invalidPoints = points.flatMap((p, i) =>
@@ -33,7 +38,8 @@ export function validateRoute(
   );
   const valid = invalidPoints.length === 0;
   const distance = valid
-    ? points.slice(1).reduce((sum, p, i) => sum + meters(points[i], p), 0)
+    ? points.slice(1).reduce((sum, p, i) => sum + meters(points[i], p), 0) +
+      (points.length > 1 ? meters(points.at(-1)!, points[0]) : 0)
     : NaN;
   const gap =
     valid && points.length > 1 ? meters(points[0], points.at(-1)!) : NaN;
@@ -46,8 +52,26 @@ export function validateRoute(
     );
   if (points.length < 5 || points.length > 500)
     errors.push("Tuyến cần 5–500 điểm.");
-  if (valid && !(distance >= 400 && distance <= 450))
-    errors.push("Chiều dài tuyến cần trong 400–450 m.");
+  if (!validRules(rules))
+    errors.push(
+      "Chưa có giới hạn tuyến hợp lệ từ backend. Tải lại dữ liệu trước khi lưu.",
+    );
+  if (
+    valid &&
+    rules.route_length_min_m != null &&
+    distance < rules.route_length_min_m
+  )
+    errors.push(`Chiều dài tuyến cần ít nhất ${rules.route_length_min_m} m.`);
+  if (
+    valid &&
+    rules.route_length_max_m != null &&
+    distance > rules.route_length_max_m
+  )
+    errors.push(
+      `Chiều dài tuyến không được quá ${rules.route_length_max_m} m.`,
+    );
+  if (!checkpoints.length)
+    errors.push("Cần tạo checkpoint trước khi lưu tuyến.");
   if (valid && !(gap <= 2))
     errors.push(
       "Đầu và cuối phải cách nhau tối đa 2 m; thêm điểm cuối bằng thao tác của bạn.",
@@ -63,6 +87,23 @@ export function validateRoute(
     errors.push(
       "Cần đúng một neo cho từng checkpoint của giải, không dùng checkpoint giải khác.",
     );
+  const sequence = anchors.map(
+    (id) => checkpoints.find((c) => c.checkpoint_id === id)?.sequence_no,
+  );
+  if (sequence.every((n) => n !== undefined) && sequence.length) {
+    const sorted = [...sequence].sort((a, b) => a! - b!);
+    if (
+      new Set(sorted).size !== sorted.length ||
+      !sorted.some(
+        (_, i) =>
+          JSON.stringify([...sorted.slice(i), ...sorted.slice(0, i)]) ===
+          JSON.stringify(sequence),
+      )
+    )
+      errors.push(
+        "Neo checkpoint phải theo thứ tự sequence_no quanh vòng (cho phép đổi điểm bắt đầu).",
+      );
+  }
   return {
     errors,
     distance,
@@ -103,6 +144,45 @@ export const checkpointPayload = (
       .filter((k) => draft[k] !== original[k])
       .map((k) => [k, draft[k]]),
   );
+export function validRules(m?: RouteMetadata): boolean {
+  if (!m || !["CUSTOM", "NEU_DEMO"].includes(m.route_profile ?? ""))
+    return false;
+  const values = [m.route_length_min_m, m.route_length_max_m];
+  if (
+    values.some(
+      (v) =>
+        v !== null && (typeof v !== "number" || !Number.isFinite(v) || v <= 0),
+    )
+  )
+    return false;
+  return !(
+    m.route_length_min_m != null &&
+    m.route_length_max_m != null &&
+    m.route_length_min_m >= m.route_length_max_m
+  );
+}
+export function routeAccess(m?: RouteMetadata, runs = false) {
+  if (!m || typeof m.editable !== "boolean" || typeof m.locked !== "boolean")
+    return {
+      blocked: true,
+      reason: "Chưa xác định được trạng thái khóa từ backend.",
+    };
+  if (m.editable === m.locked || (runs && m.editable))
+    return {
+      blocked: true,
+      reason: "Trạng thái khóa backend mâu thuẫn; không thể lưu. Hãy tải lại.",
+    };
+  return {
+    blocked: m.locked,
+    reason: m.locked
+      ? m.locked_reason || lockedMessage
+      : "Có thể chỉnh sửa trước khi tạo phiên chạy.",
+  };
+}
+export function routeLimits(m?: RouteMetadata) {
+  if (!validRules(m)) return "Chưa có giới hạn hợp lệ từ backend";
+  return `${m!.route_length_min_m == null ? "Không đặt cận dưới" : `Tối thiểu ${m!.route_length_min_m} m`} · ${m!.route_length_max_m == null ? "không đặt cận trên" : `tối đa ${m!.route_length_max_m} m`}`;
+}
 export async function readMap(raceId: string, signal?: AbortSignal) {
   const base = `/races/${encodeURIComponent(raceId)}`;
   const [route, dashboard] = await Promise.all([
@@ -118,13 +198,26 @@ export async function readMap(raceId: string, signal?: AbortSignal) {
       0,
       "Thiếu metadata hoặc dữ liệu không thuộc giải đang chọn.",
     );
+  const keys: (keyof RouteMetadata)[] = [
+    "route_profile",
+    "route_length_min_m",
+    "route_length_max_m",
+    "editable",
+    "locked",
+    "route_status",
+  ];
+  if (keys.some((k) => route[k] !== dashboard.race[k]))
+    throw new RequestError(
+      409,
+      "Route và dashboard trả metadata khác nhau. Tải lại để có snapshot thống nhất.",
+    );
   return { route, dashboard, checkpoints: dashboard.checkpoints };
 }
 export type MapData = Awaited<ReturnType<typeof readMap>>;
 export const fingerprint = (data: MapData) =>
   JSON.stringify([
     data.dashboard.race.config_version,
-    data.route.points,
+    data.route,
     data.checkpoints,
   ]);
 export const mapEditorService = {
@@ -147,7 +240,8 @@ export function mapFailure(error: RequestError) {
     return lockedMessage;
   const messages: Record<string, string> = {
     ROUTE_NOT_CLOSED: "Tuyến chưa khép kín trong 2 m.",
-    ROUTE_LENGTH_OUT_OF_RANGE: "Tuyến sau thay đổi phải dài 400–450 m.",
+    ROUTE_LENGTH_OUT_OF_RANGE:
+      "Chiều dài tuyến không đáp ứng giới hạn đã cấu hình của giải.",
     DUPLICATE_ROUTE_CHECKPOINT: "Neo checkpoint bị lặp.",
     ROUTE_CHECKPOINT_MISMATCH: "Tuyến thiếu hoặc thừa neo checkpoint.",
     CHECKPOINT_RACE_MISMATCH: "Neo không thuộc giải này.",

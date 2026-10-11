@@ -17,6 +17,9 @@ export function CreateRace({
   onRefresh: () => void;
 }) {
   const [draft, setDraft] = useState<RaceDraft>({
+    route_profile: "CUSTOM",
+    route_length_min_m: "",
+    route_length_max_m: "",
     name: "",
     route_name: "",
     start_at: "",
@@ -97,6 +100,41 @@ export function CreateRace({
           className="editor-fields"
           style={{ border: 0, padding: 0 }}
         >
+          <label>
+            Loại tuyến
+            <select
+              disabled={busy || uncertain}
+              value={draft.route_profile}
+              onChange={(e) => input("route_profile", e.target.value)}
+            >
+              <option value="CUSTOM">Tuyến tùy chỉnh</option>
+              <option value="NEU_DEMO">Tuyến demo NEU</option>
+            </select>
+          </label>
+          <p>
+            {draft.route_profile === "CUSTOM"
+              ? "Để trống cận chiều dài nếu không muốn đặt giới hạn."
+              : "Nếu để trống, backend dùng cận mặc định demo: 400–450 m."}
+          </p>
+          {(["route_length_min_m", "route_length_max_m"] as const).map(
+            (key) => (
+              <label key={key}>
+                {key === "route_length_min_m"
+                  ? "Chiều dài tối thiểu (m)"
+                  : "Chiều dài tối đa (m)"}
+                <input
+                  type="number"
+                  step="any"
+                  max="100000"
+                  value={draft[key] ?? ""}
+                  onChange={(e) => input(key, e.target.value)}
+                />
+                {fields[key] && (
+                  <span className="field-error">{fields[key]}</span>
+                )}
+              </label>
+            ),
+          )}
           {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (
             <label key={key}>
               {labels[key]}

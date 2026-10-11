@@ -1,3 +1,21 @@
+# Bổ sung đối chiếu cba5339 — 11/10/2026
+
+Runtime 8001 dùng worktree `backend-current-main`. Các API mới đã nối giao diện:
+
+| API | Tích hợp |
+| --- | --- |
+| GET `/api/v1/races/{race_id}/checkpoint-matching` | Form đọc cấu hình/khóa thật trước sửa; PATCH hiện có tiếp tục được nối. |
+| POST `/api/v1/simulations` | Modal tạo mô phỏng, Admin key, chống gửi lặp/mất response. |
+| GET `/api/v1/simulations/{simulation_id}` | Poll job, terminal/404 dừng, log_tail. |
+| POST `/api/v1/simulations/{simulation_id}/stop` | Xác nhận dừng và đọc lại trạng thái, không gọi finish run. |
+| DELETE `/api/v1/races/{race_id}` | Xác nhận XÓA, kiểm tra run, readback khi không rõ kết quả, dọn cache/socket. |
+
+Route/dashboard metadata và POST race đã cập nhật profile/giới hạn động/khóa. Matching `min_lap_interval_seconds` chỉ đọc; PATCH schema chưa nhận field này. Chưa có API danh sách simulation job hoặc WS job/route/delete; không tự phát minh. Các API tạo sinh viên, wearable, checkpoint, participant, run/finish và GET device-events dưới đây vẫn chưa có giao diện riêng; không mở rộng phạm vi lượt này. Các thao tác ghi mới chỉ test bằng fixture cô lập, chưa E2E ghi thật. Xem [báo cáo](INTEGRATION_REPORT.md).
+
+Phần dưới là kiểm kê bản **42e5478** trước đây, không phải tổng số operation của runtime hiện tại.
+
+---
+
 # Đối chiếu API backend và Admin Web — 10/10/2026
 
 Đối chiếu toàn bộ 29 operation HTTP trong OpenAPI runtime `http://127.0.0.1:8001/openapi.json`, source backend commit `42e547892e344e53a7dde89ba13597e6d6a47658` tại `C:\Users\Admin\.codex\worktrees\backend-route-integration\Smart_Running_Checkpoint_IoT\services\backend\app\main.py`, và các call site trong `src` của frontend. Không tính lời gọi trong test là tích hợp sản phẩm. Các path dưới đây có prefix `/api/v1`, trừ khi ghi rõ. Không gửi request ghi thật để kiểm kê.

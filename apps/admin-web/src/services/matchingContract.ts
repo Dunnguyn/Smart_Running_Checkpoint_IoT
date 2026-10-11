@@ -54,7 +54,7 @@ export interface CheckpointEvent {
 export interface DashboardDto {
   route?: BackendRoute;
   checkpoints?: BackendCheckpoint[];
-  race: {
+  race: import("./contract").RouteMetadata & {
     race_id: string;
     name: string;
     status: import("../types/domain").RaceStatus;
@@ -85,6 +85,10 @@ export interface DashboardDto {
   server_time: string;
 }
 export interface MatchingConfig {
+  locked?: boolean;
+  locked_at?: string | null;
+  locked_reason?: string | null;
+  min_lap_interval_seconds?: number;
   checkpoint_mode: CheckpointMode;
   inner_radius_m: number;
   outer_radius_m: number;

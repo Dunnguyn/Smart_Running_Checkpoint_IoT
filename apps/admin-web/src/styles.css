@@ -2697,15 +2697,89 @@ th button {
 }
 
 /* Keep draft actions reachable while the long point form scrolls. */
-.map-editor { padding-bottom: 100px; }
-.editor-actions { position: fixed; bottom: 0; left: 242px; right: 24px; margin: 0; }
-.sidebar-collapsed .editor-actions { left: 100px; }
-@media (max-width: 1100px) { .editor-actions { left: 100px; } }
-@media (max-width: 800px) { .editor-actions { left: 92px; right: 16px; } }
-@media (max-width: 480px) { .editor-actions { left: 88px; right: 12px; } }
+.map-editor {
+  padding-bottom: 100px;
+}
+.editor-actions {
+  position: fixed;
+  bottom: 0;
+  left: 242px;
+  right: 24px;
+  margin: 0;
+}
+.sidebar-collapsed .editor-actions {
+  left: 100px;
+}
+@media (max-width: 1100px) {
+  .editor-actions {
+    left: 100px;
+  }
+}
+@media (max-width: 800px) {
+  .editor-actions {
+    left: 92px;
+    right: 16px;
+  }
+}
+@media (max-width: 480px) {
+  .editor-actions {
+    left: 88px;
+    right: 12px;
+  }
+}
 
-.editor-save-status { flex: 1 1 420px; min-width: 0; max-height: 160px; overflow-y: auto; font-size: 13px; }
-.editor-save-status p { margin: 4px 0; }
-.editor-save-status .text-link { padding: 0; background: none; border: 0; cursor: pointer; text-decoration: underline; }
-.map-editor { padding-bottom: 220px; }
-@media (max-width: 800px) { .editor-save-status { flex-basis: 100%; max-height: 120px; } .map-editor { padding-bottom: 270px; } }
+.editor-save-status {
+  flex: 1 1 420px;
+  min-width: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+.editor-save-status p {
+  margin: 4px 0;
+}
+.editor-save-status .text-link {
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.map-editor {
+  padding-bottom: 220px;
+}
+@media (max-width: 800px) {
+  .editor-save-status {
+    flex-basis: 100%;
+    max-height: 120px;
+  }
+  .map-editor {
+    padding-bottom: 270px;
+  }
+}
+
+.simulation-log {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: #edf2f7;
+  font-size: 13px;
+}
+.simulation-status {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+.race-actions {
+  margin-top: 10px;
+}
+.race-actions summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.button.danger {
+  color: #a11c2d;
+  border-color: #e4a6ac;
+}
