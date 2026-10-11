@@ -1,207 +1,261 @@
-import { DashboardDetails } from "./DashboardDetails";
-import { dataMode } from "../../services";
 import { useState } from "react";
-import {
-  CalendarDays,
-  MapPin,
-  Flag,
-  Users,
-  Footprints,
-  CircleCheck,
-  ScanLine,
-  Play,
-  Pause,
-  RotateCcw,
-  ArrowUpRight,
-  Radio,
-} from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
-import { Badge, Empty } from "../../components/ui";
+import { Badge, Empty, Panel } from "../../components/ui";
 import { LiveMap } from "../live-map/LiveMap";
 import { WatchList } from "../live-map/WatchList";
-import { RunnerTable } from "../runners/RunnerTable";
-import { datetime } from "../../utils/format";
+import { EventStatus } from "../checkpoints/CheckpointJournal";
+import { datetime, duration, distance } from "../../utils/format";
+import { modeLabel } from "../../utils/labels";
+import { dataMode } from "../../services";
 export function SimulationControls() {
   const { snapshot, start, pause, reset } = useLive();
-  if (dataMode === "api")
-    return (
-      <span className="simulation-tag">
-        API thật · nguồn GPS xem ở chi tiết runner
-      </span>
-    );
+  if (dataMode !== "mock") return null;
   return (
-    <div className="simulation-controls">
-      <span className="simulation-tag">
-        <Radio size={13} /> Dữ liệu mô phỏng
-      </span>
-      <button
-        className={snapshot?.running ? "button" : "button primary"}
-        disabled={!snapshot}
-        onClick={snapshot?.running ? pause : start}
-      >
-        {snapshot?.running ? <Pause size={15} /> : <Play size={15} />}{" "}
+    <div className="row-actions">
+      <span>Dữ liệu minh họa</span>
+      <button className="button" onClick={snapshot?.running ? pause : start}>
         {snapshot?.running ? "Tạm dừng" : "Bắt đầu"}
       </button>
-      <button
-        className="icon-button reset"
-        aria-label="Đặt lại mô phỏng"
-        title="Đặt lại mô phỏng"
-        disabled={!snapshot}
-        onClick={reset}
-      >
-        <RotateCcw size={17} />
+      <button className="button" onClick={reset}>
+        Đặt lại minh họa
       </button>
     </div>
   );
 }
 export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
-  const { snapshot, error, raceId } = useLive();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  if (error)
-    return <Empty title="Dữ liệu không khả dụng" description={error} />;
+  const { snapshot, error, raceId, retry } = useLive();
+  const [params] = useSearchParams();
+  const [chosen, setChosen] = useState<{ race: string; id: string } | null>(
+    null,
+  );
+  const selectedId = chosen?.race === raceId ? chosen.id : params.get("runner");
+  const onSelect = (id: string) => setChosen({ race: raceId, id });
   if (!snapshot)
     return (
-      <div className="empty" role="status">
-        Đang tải không gian giải chạy…
+      <div className="panel skeleton" role="status">
+        Đang tải tổng quan giải…
+        {error && (
+          <>
+            <p role="alert">{error}</p>
+            <button className="button" onClick={retry}>
+              Thử lại
+            </button>
+          </>
+        )}
       </div>
     );
-  const race = snapshot.races.find((r) => r.race_id === raceId)!,
-    active =
-      snapshot.overview?.active ??
-      snapshot.runners.filter((r) => r.status === "ACTIVE").length,
-    completed =
-      snapshot.overview?.completed ??
-      snapshot.runners.filter((r) => r.status === "COMPLETED").length;
-  const kpis = [
+  const d = snapshot.dashboard,
+    s = d?.summary,
+    race = d?.race ?? snapshot.overview?.race;
+  const attention = s?.ambiguous_matches;
+  const cards = [
     {
-      label: "Tổng sinh viên tham gia",
-      value: snapshot.overview?.total ?? snapshot.runners.length,
-      icon: Users,
-      color: "blue",
-      note: "Đã đăng ký tham gia",
-      suffix: "sinh viên",
+      label: "Người tham gia",
+      value: s?.participants ?? snapshot.runners.length,
+      to: "/runners",
     },
     {
       label: "Đang chạy",
-      value: active,
-      icon: Footprints,
-      color: "teal",
-      note: `${Math.round((active / Math.max(1, snapshot.overview?.total ?? snapshot.runners.length)) * 100)}% tổng sinh viên`,
-      suffix: "sinh viên",
+      value: s?.active_runners ?? snapshot.overview?.active,
+      to: "/runners?status=ACTIVE",
     },
     {
-      label: "Đã hoàn thành",
-      value: completed,
-      icon: CircleCheck,
-      color: "purple",
-      note: "Kết quả phiên chạy",
-      suffix: "sinh viên",
+      label: "Hoàn thành",
+      value: s?.completed_runners ?? snapshot.overview?.completed,
+      to: "/runners?status=COMPLETED",
     },
     {
-      label: "Sự kiện checkpoint",
-      value: snapshot.overview?.checkpoint_events ?? snapshot.events.length,
-      icon: ScanLine,
-      color: "orange",
-      note:
-        dataMode === "api"
-          ? "Backend chưa cung cấp danh sách checkpoint"
-          : `${snapshot.checkpoints.length} checkpoint trên tuyến`,
-      suffix: "sự kiện",
+      label: "Sự kiện cần xác nhận",
+      value: attention,
+      to: "/checkpoints?tab=attention",
     },
   ];
   return (
     <>
       <div className="page-title">
         <div>
-          <div className="eyebrow">TỔNG QUAN GIẢI CHẠY</div>
           <h1>
-            {mapOnly ? "Bản đồ trực tiếp" : race.name}
-            <span className="year-pill">{race.name}</span>
+            {mapOnly ? "Bản đồ trực tiếp" : (race?.name ?? "Tổng quan giải")}
           </h1>
-          <p>Chào mừng trở lại! Cùng theo dõi hành trình của sinh viên NEU.</p>
-        </div>
-        <SimulationControls />
-      </div>
-      <section className="race-banner">
-        <div className="race-banner-icon">
-          <Flag size={24} />
-        </div>
-        <div className="race-banner-info">
-          <div>
-            <strong>{race.name}</strong>
-            <Badge status={race.status} />
-          </div>
           <p>
-            <span>
-              <CalendarDays size={14} />
-              {datetime(race.started_at)}
-            </span>
-            <span>
-              <MapPin size={14} />
-              {race.location}
-            </span>
-            <span>
-              <Flag size={14} />
-              {dataMode === "api" ? "—" : snapshot.checkpoints.length}{" "}
-              checkpoint · {race.total_laps ?? "—"} vòng
-            </span>
+            {mapOnly
+              ? "Chọn người chạy để xem vị trí; GPS cũ không đồng nghĩa phiên đã dừng."
+              : d?.race.checkpoint_mode === "GPS_AND_ARDUINO"
+                ? "Vòng chạy được ghi nhận khi GPS khớp với sự kiện tại trạm Arduino."
+                : "Vòng chạy được ghi nhận từ GPS tại điểm tính vòng."}
           </p>
         </div>
-        <span className="race-distance">
-          <strong>
-            {dataMode === "api" ? "—" : "5"}
-            <span> km</span>
-          </strong>
-          <small>MỤC TIÊU MỖI SINH VIÊN</small>
-        </span>
-      </section>
+        {race && <Badge status={race.status} />}
+        <SimulationControls />
+      </div>
       {!mapOnly && (
         <div className="kpi-grid">
-          {kpis.map(({ label, value, icon: Icon, color, note, suffix }) => (
-            <section className="kpi-card" key={label}>
-              <div className="kpi-top">
-                <span>{label}</span>
-                <span className={`kpi-icon ${color}`}>
-                  <Icon size={21} />
-                </span>
-              </div>
-              <div className="kpi-value">
-                {value.toLocaleString("vi-VN")}
-                <small>{suffix}</small>
-              </div>
-              <div className="kpi-note">
-                <span className={`kpi-note-dot ${color}`} />
-                {note}
-                <ArrowUpRight size={13} />
-              </div>
-            </section>
+          {cards.map((c) => (
+            <Link className="kpi-card" key={c.label} to={c.to}>
+              <span>{c.label}</span>
+              <strong className="kpi-value">{c.value ?? "—"}</strong>
+              <span className="text-link">Xem danh sách →</span>
+            </Link>
           ))}
         </div>
       )}
-      {!mapOnly && snapshot.dashboard && (
-        <DashboardDetails
-          data={snapshot.dashboard}
-          pending={snapshot.pendingPassages?.length ?? 0}
-        />
-      )}
-      <div className={`live-grid ${mapOnly ? "expanded-map" : ""}`}>
+      <div
+        className={`live-grid ${mapOnly ? "expanded-map" : "overview-map"} ${params.has("edit") ? "editing-grid" : ""}`}
+      >
         <LiveMap
           snapshot={snapshot}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={onSelect}
         />
-        <WatchList
-          snapshot={snapshot}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-        />
+        {!params.has("edit") &&
+          (mapOnly ? (
+            <WatchList
+              key={raceId}
+              snapshot={snapshot}
+              selectedId={selectedId}
+              onSelect={onSelect}
+            />
+          ) : (
+            <Panel
+              title="Việc cần chú ý"
+              subtitle={`Cập nhật ${datetime(snapshot.updated_at)}`}
+            >
+              <div className="attention-list">
+                <Link to="/checkpoints?tab=attention">
+                  <strong>
+                    {attention ?? "—"} sự kiện cần xác nhận người chạy
+                  </strong>
+                  <span>Mở danh sách ứng viên →</span>
+                </Link>
+                <Link to="/checkpoints?tab=journal&status=PENDING_MATCH">
+                  <strong>
+                    {s?.pending_matches ?? "—"} sự kiện đang đối chiếu
+                  </strong>
+                  <span>Chưa phải vòng đã tính →</span>
+                </Link>
+                <Link to="/live">
+                  <strong>
+                    {
+                      snapshot.runners.filter((r) => r.connection === "STALE")
+                        .length
+                    }{" "}
+                    người có GPS đã cũ
+                  </strong>
+                  <span>Xem thời điểm GPS cuối →</span>
+                </Link>
+                {!snapshot.route.length && (
+                  <p>
+                    Chưa có tuyến được lưu. Bản đồ vẫn hiển thị GPS hiện có.
+                  </p>
+                )}
+              </div>
+            </Panel>
+          ))}
       </div>
-      <p className="map-disclaimer">
-        {dataMode === "api"
-          ? "Backend chưa cung cấp geometry tuyến và API đọc checkpoint. Marker lấy từ GPS backend; không tự tính vòng. Mất cập nhật GPS sau 30 giây là nhãn hiển thị, không thay đổi trạng thái phiên."
-          : "Tuyến chạy minh họa, không phải tuyến chính thức của NEU. 8 sinh viên được mô phỏng di chuyển."}
-      </p>
-      {!mapOnly && <RunnerTable compact onSelect={setSelectedId} />}
+      {!mapOnly && d && (
+        <>
+          <div className="detail-grid">
+            <Panel
+              title="Top 5 người chạy"
+              subtitle="Theo thứ tự xếp hạng do server cung cấp"
+              action={
+                <Link className="text-link" to="/runners">
+                  Tất cả sinh viên →
+                </Link>
+              }
+            >
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Bib</th>
+                      <th>Sinh viên</th>
+                      <th>Vòng</th>
+                      <th>Thời gian</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.top_runners.slice(0, 5).map((r) => (
+                      <tr key={r.run_id ?? r.student_id}>
+                        <td>{r.bib_number ?? r.display_id ?? "—"}</td>
+                        <td>
+                          {r.run_id ? (
+                            <Link
+                              className="text-link"
+                              to={`/runners/${r.student_id}/runs/${r.run_id}`}
+                            >
+                              {r.full_name}
+                            </Link>
+                          ) : (
+                            r.full_name
+                          )}
+                        </td>
+                        <td>{r.lap_count}</td>
+                        <td>{duration(r.duration_total_s ?? null)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!d.top_runners.length && (
+                  <Empty
+                    title="Chưa có kết quả"
+                    description="Kết quả sẽ xuất hiện khi server ghi nhận phiên chạy."
+                  />
+                )}
+              </div>
+            </Panel>
+            <Panel
+              title="Sự kiện gần nhất"
+              action={
+                <Link className="text-link" to="/checkpoints?tab=journal">
+                  Mở nhật ký →
+                </Link>
+              }
+            >
+              <div className="recent-events">
+                {d.recent_checkpoint_events.slice(0, 5).map((e) => (
+                  <Link
+                    key={e.event_id}
+                    to={`/checkpoints?tab=journal&event=${e.event_id}`}
+                  >
+                    <small>{datetime(e.occurred_at)}</small>
+                    <strong>
+                      {snapshot.checkpoints.find(
+                        (c) => c.checkpoint_id === e.checkpoint_id,
+                      )?.name ?? "Checkpoint"}
+                    </strong>
+                    <EventStatus event={e} />
+                  </Link>
+                ))}
+                {!d.recent_checkpoint_events.length && (
+                  <Empty
+                    title="Chưa có sự kiện"
+                    description="Sự kiện tại trạm sẽ xuất hiện tại đây."
+                  />
+                )}
+              </div>
+            </Panel>
+          </div>
+          <details className="panel statistics">
+            <summary>Thống kê chi tiết</summary>
+            <dl className="info-list">
+              <dt>Chế độ</dt>
+              <dd>{modeLabel(d.race.checkpoint_mode)}</dd>
+              <dt>Chưa bắt đầu</dt>
+              <dd>{s?.not_started_runners}</dd>
+              <dt>Tổng vòng được ghi nhận</dt>
+              <dd>{s?.laps_recorded}</dd>
+              <dt>Đạt mục tiêu vòng</dt>
+              <dd>{s?.runners_at_lap_target}</dd>
+              <dt>Tổng quãng đường</dt>
+              <dd>{distance(s?.distance_total_m ?? 0)}</dd>
+              <dt>Tổng bước chân</dt>
+              <dd>{s?.steps_total.toLocaleString("vi-VN")}</dd>
+            </dl>
+          </details>
+        </>
+      )}
     </>
   );
 }

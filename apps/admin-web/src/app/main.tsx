@@ -1,6 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
+import {
+  createBrowserRouter,
+  createRoutesFromElements,
+  RouterProvider,
+  Route,
+  Link,
+} from "react-router-dom";
 import { Shell } from "../layouts/Shell";
 import { LiveProvider } from "./LiveProvider";
 import { Dashboard, SimulationControls } from "../features/dashboard/Dashboard";
@@ -47,32 +53,29 @@ function Placeholder({ title }: { title: string }) {
     </>
   );
 }
+const router = createBrowserRouter(
+  createRoutesFromElements(
+    <Route
+      element={
+        <LiveProvider>
+          <Shell />
+        </LiveProvider>
+      }
+    >
+      <Route index element={<Dashboard />} />
+      <Route path="live" element={<Dashboard mapOnly />} />
+      <Route path="runners" element={<RunnersPage />} />
+      <Route path="runners/:studentId/runs/:runId" element={<RunDetail />} />
+      <Route path="races" element={<Races />} />
+      <Route path="races/:raceId" element={<Races />} />
+      <Route path="checkpoints" element={<Checkpoints />} />
+      <Route path="checkpoints/:checkpointId" element={<Checkpoints />} />
+      <Route path="*" element={<Placeholder title="Không tìm thấy trang" />} />
+    </Route>,
+  ),
+);
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <LiveProvider>
-        <Routes>
-          <Route element={<Shell />}>
-            <Route index element={<Dashboard />} />
-            <Route path="live" element={<Dashboard mapOnly />} />
-            <Route path="runners" element={<RunnersPage />} />
-            <Route
-              path="runners/:studentId/runs/:runId"
-              element={<RunDetail />}
-            />
-            <Route path="races" element={<Races />} />
-            <Route path="races/:raceId" element={<Races />} />
-            <Route path="checkpoints" element={<Checkpoints />} />
-            <Route path="checkpoints/:checkpointId" element={<Checkpoints />} />
-            <Route path="reports" element={<Placeholder title="Báo cáo" />} />
-            <Route path="settings" element={<Placeholder title="Cài đặt" />} />
-            <Route
-              path="*"
-              element={<Placeholder title="Không tìm thấy trang" />}
-            />
-          </Route>
-        </Routes>
-      </LiveProvider>
-    </BrowserRouter>
+    <RouterProvider router={router} />
   </React.StrictMode>,
 );

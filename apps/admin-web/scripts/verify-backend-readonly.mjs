@@ -47,6 +47,9 @@ try {
     ["/races", "get"],
     ["/races/{race_id}/dashboard", "get"],
     ["/races/{race_id}/live", "get"],
+    ["/races/{race_id}/route", "get"],
+    ["/races/{race_id}/route", "put"],
+    ["/checkpoints/{checkpoint_id}", "patch"],
     ["/races/{race_id}/runners", "get"],
     ["/races/{race_id}/checkpoint-events", "get"],
     ["/checkpoint-events/{event_id}", "get"],
@@ -72,19 +75,34 @@ try {
   const races = await read("/races");
   if (!races.items.length)
     console.log("SKIP race data and WS: backend has no existing races");
-  for (const race of races.items.slice(0, 2)) {
+  for (const race of races.items) {
     const path = `/races/${encodeURIComponent(race.race_id)}`;
-    const [dashboard, live, runners, events] = await Promise.all([
+    const [dashboard, live, runners, events, route] = await Promise.all([
       read(path + "/dashboard"),
       read(path + "/live"),
       read(path + "/runners?page=1&page_size=10"),
       read(path + "/checkpoint-events?limit=10"),
+      read(path + "/route"),
     ]);
     if (
       dashboard.race.race_id !== race.race_id ||
       live.race_id !== race.race_id
     )
       throw new Error("Race identity mismatch");
+    if (route.race_id !== race.race_id || !Array.isArray(dashboard.checkpoints))
+      throw new Error("Route/checkpoint contract mismatch");
+    for (const geometry of [dashboard.route, live.route]) {
+      if (
+        JSON.stringify(geometry.points) !== JSON.stringify(route.points) ||
+        geometry.distance_m !== route.distance_m
+      )
+        throw new Error(
+          "Stored route differs between route/dashboard/live reads",
+        );
+    }
+    console.log(
+      `PASS stored route consistency: ${route.points.length} vertices; ${dashboard.checkpoints.length} checkpoints`,
+    );
     const runner = runners.items.find((r) => r.run_id);
     if (runner) {
       const detail = `/runners/${encodeURIComponent(runner.student_id)}/runs/${encodeURIComponent(runner.run_id)}`;

@@ -295,7 +295,16 @@ export function subscribeLive(
     };
   };
   const refresh = () => {
-    void sync();
+    // Manual refresh also restarts an exhausted connection without clearing
+    // the visible snapshot (or an independent map-editor draft).
+    void sync().then(() => {
+      if (alive() && state && (!socket || socket.readyState >= 2)) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+        retry = 0;
+        connect();
+      }
+    });
   };
   refreshListeners.set(id, refresh);
   handlers.onStatus?.("connecting");

@@ -1,3 +1,4 @@
+import { useLive } from "../../app/LiveProvider";
 import { useEffect, useRef, useState } from "react";
 import { Panel } from "../../components/ui";
 import { matchingService } from "../../services/matchingService";
@@ -7,6 +8,7 @@ export function RegisterDevice({
 }: {
   checkpointId?: string;
 }) {
+  const { snapshot } = useLive();
   const [checkpoint, setCheckpoint] = useState(checkpointId),
     [device, setDevice] = useState(""),
     [name, setName] = useState("");
@@ -18,7 +20,7 @@ export function RegisterDevice({
   return (
     <Panel
       title="Đăng ký thiết bị Gateway vào checkpoint"
-      subtitle="Nhập ID checkpoint do backend cấp. Chưa có API liệt kê/sửa/xóa thiết bị."
+      subtitle="Chọn trạm nhận thiết bị. Đăng ký thành công không xác nhận thiết bị đang online."
     >
       <form
         className="matching-form"
@@ -56,13 +58,21 @@ export function RegisterDevice({
         }}
       >
         <label>
-          Checkpoint ID
-          <input
+          Checkpoint
+          <select
+            aria-label="Checkpoint"
             required
             disabled={busy}
             value={checkpoint}
             onChange={(e) => setCheckpoint(e.target.value)}
-          />
+          >
+            <option value="">Chọn checkpoint</option>
+            {snapshot?.checkpoints.map((c) => (
+              <option key={c.checkpoint_id} value={c.checkpoint_id}>
+                {c.code} · {c.name}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Device ID

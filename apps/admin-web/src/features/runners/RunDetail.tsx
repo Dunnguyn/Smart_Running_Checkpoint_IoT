@@ -1,3 +1,4 @@
+import { sourceLabel } from "../../utils/labels";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Footprints, Timer, Flag, MapPin } from "lucide-react";
@@ -6,9 +7,15 @@ import { dataMode, raceService } from "../../services";
 import type { RunDetail as Detail } from "../../types/domain";
 import { Badge, Panel, Empty } from "../../components/ui";
 import { datetime, distance, duration } from "../../utils/format";
-export function RunDetail() {
-  const { studentId = "", runId = "" } = useParams(),
-    { snapshot, mergeRunners } = useLive();
+export function RunDetail({
+  studentId: suppliedStudent,
+  runId: suppliedRun,
+  embedded = false,
+}: { studentId?: string; runId?: string; embedded?: boolean } = {}) {
+  const params = useParams();
+  const studentId = suppliedStudent ?? params.studentId ?? "",
+    runId = suppliedRun ?? params.runId ?? "";
+  const { snapshot, mergeRunners } = useLive();
   const [refresh, setRefresh] = useState(0);
   const mockSnapshot = dataMode === "mock" ? snapshot : null;
   useEffect(() => {
@@ -71,15 +78,14 @@ export function RunDetail() {
       : detail.run;
   return (
     <>
-      <Link className="back-link" to="/runners">
-        <ArrowLeft size={16} /> Danh sách sinh viên
-      </Link>
+      {!embedded && (
+        <Link className="back-link" to="/runners">
+          <ArrowLeft size={16} /> Danh sách sinh viên
+        </Link>
+      )}
       <div className="page-title">
         <div>
-          <div className="eyebrow">
-            CHI TIẾT PHIÊN CHẠY ·{" "}
-            {dataMode === "api" ? "API THẬT" : "MOCK FRONTEND"}
-          </div>
+          <div className="eyebrow">CHI TIẾT PHIÊN CHẠY</div>
           <h1>{r.full_name}</h1>
           <p>
             #{r.bib} · {r.student_code} · {r.faculty}
@@ -87,6 +93,12 @@ export function RunDetail() {
         </div>
         <Badge status={r.status} />
       </div>
+      <Link
+        className="button"
+        to={`/live?runner=${encodeURIComponent(r.student_id)}`}
+      >
+        Xem vị trí trên bản đồ
+      </Link>
       <div className="detail-metrics">
         {[
           {
@@ -152,7 +164,7 @@ export function RunDetail() {
                     : "Chưa có vị trí"}
             </dd>
             <dt>Nguồn dữ liệu</dt>
-            <dd>{r.source}</dd>
+            <dd>{sourceLabel(r.source)}</dd>
           </dl>
         </Panel>
         <Panel

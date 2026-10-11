@@ -1,6 +1,5 @@
-import { dataMode } from "../../services";
-import { validPosition } from "../../services/apiAdapter";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   MapContainer,
   TileLayer,
@@ -8,38 +7,55 @@ import {
   Marker,
   Popup,
   useMap,
+  useMapEvents,
 } from "react-leaflet";
 import { divIcon, latLngBounds } from "leaflet";
-import { LocateFixed, Layers, Maximize2 } from "lucide-react";
+import { validPosition } from "../../services/contract";
+import { hasRuns, lockedMessage } from "../../services/mapEditorService";
+import { dataMode } from "../../services";
 import type { LiveSnapshot, RunSession } from "../../types/domain";
 import { Panel } from "../../components/ui";
-import { distance, time, statusLabels } from "../../utils/format";
-import { Link } from "react-router-dom";
+import { datetime, statusLabels } from "../../utils/format";
+import { gpsLabel } from "../../utils/labels";
+import { MapEditor } from "./MapEditor";
 function MapActions({
-  route,
+  positions,
   selected,
-  fitRequest,
+  follow,
+  stop,
+  fit,
 }: {
-  route: [number, number][];
-  selected: RunSession | undefined;
-  fitRequest: number;
+  positions: [number, number][];
+  selected?: RunSession;
+  follow: boolean;
+  stop: () => void;
+  fit: number;
 }) {
-  const map = useMap();
+  const map = useMap(),
+    fitted = useRef(-1);
+  useMapEvents({
+    dragstart: stop,
+    zoomstart: () => {
+      /* Explicit zoom preserves the follow choice. */
+    },
+  });
   useEffect(() => {
-    if (route.length)
-      map.fitBounds(latLngBounds(route), { padding: [45, 45], maxZoom: 17 });
-    // Refit on first position / explicit action, not on every GPS point.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, route.length, fitRequest]);
-  const id = selected?.student_id;
-  useEffect(() => {
-    if (selected?.last_latitude != null && selected.last_longitude != null)
-      map.flyTo([selected.last_latitude, selected.last_longitude], 17, {
-        duration: 0.7,
+    if (positions.length && fitted.current !== fit) {
+      map.fitBounds(latLngBounds(positions), {
+        padding: [45, 45],
+        maxZoom: 17,
       });
-    // Selection changes recenter the map. Live position updates preserve the viewport.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, map]);
+      fitted.current = fit;
+    }
+  }, [positions, fit, map]);
+  useEffect(() => {
+    if (
+      follow &&
+      selected &&
+      validPosition(selected.last_latitude, selected.last_longitude)
+    )
+      map.panTo([selected.last_latitude!, selected.last_longitude!]);
+  }, [follow, selected, map]);
   return null;
 }
 export function LiveMap({
@@ -51,63 +67,168 @@ export function LiveMap({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const [showRunners, setShowRunners] = useState(true),
-    [showCheckpoints, setShowCheckpoints] = useState(true),
-    [layers, setLayers] = useState(false),
-    [fit, setFit] = useState(0),
-    [tileError, setTileError] = useState(false);
-  const runners = snapshot.runners.filter(
-      (r) =>
-        (dataMode === "mock"
-          ? r.status === "ACTIVE" && r.connection === "ONLINE"
-          : r.status === "ACTIVE" || r.status === "COMPLETED") &&
-        r.last_latitude != null &&
-        r.last_longitude != null &&
-        validPosition(r.last_latitude, r.last_longitude),
+  const [params, setParams] = useSearchParams();
+  const [fit, setFit] = useState(0),
+    [all, setAll] = useState(false),
+    [follow, setFollow] = useState(false),
+    [tileError, setTileError] = useState(false),
+    [menu, setMenu] = useState(false);
+  const [showRunners, setShowRunners] = useState(true);
+  const [showCheckpoints, setShowCheckpoints] = useState(true);
+  const edit = params.get("edit"),
+    cpId = params.get("checkpoint");
+  const locked = hasRuns(snapshot.dashboard);
+  const runners = snapshot.runners.filter((r) =>
+    validPosition(r.last_latitude, r.last_longitude),
+  );
+  const selected = snapshot.runners.find((r) => r.student_id === selectedId);
+  const groups = new Map<string, RunSession[]>();
+  for (const r of runners) {
+    const key = `${r.last_latitude!.toFixed(5)},${r.last_longitude!.toFixed(5)}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  const markerPositions: [number, number][] = [
+    ...snapshot.checkpoints
+      .filter((c) => validPosition(c.latitude, c.longitude))
+      .map((c) => [c.latitude!, c.longitude!] as [number, number]),
+    ...runners.map(
+      (r) => [r.last_latitude!, r.last_longitude!] as [number, number],
     ),
-    selected = snapshot.runners.find((r) => r.student_id === selectedId);
-  const moving = dataMode === "api" ? runners : runners.slice(0, 8);
+  ];
+  function open(mode: string, id?: string) {
+    setMenu(false);
+    setFollow(false);
+    const p = new URLSearchParams(params);
+    p.set("edit", mode);
+    if (id) p.set("checkpoint", id);
+    else p.delete("checkpoint");
+    setParams(p);
+  }
+  if ((edit === "route" || edit === "checkpoint") && dataMode === "api")
+    return (
+      <MapEditor
+        key={`${snapshot.dashboard?.race.race_id}:${edit}:${cpId ?? ""}`}
+        mode={edit}
+        checkpointId={cpId ?? undefined}
+        onClose={() => {
+          const p = new URLSearchParams(params);
+          p.delete("edit");
+          p.delete("checkpoint");
+          setParams(p);
+        }}
+      />
+    );
   return (
     <Panel
-      title="Bản đồ trực tiếp"
-      subtitle="Theo dõi từng bước chân trên hành trình"
+      title="Bản đồ giải chạy"
+      subtitle="Vị trí GPS được giữ nguyên; chọn một người để theo dõi."
       className="map-panel"
       action={
-        <span className="live-label">
-          <i />
-          {snapshot.dashboard?.race.status === "COMPLETED"
-            ? "ĐÃ HOÀN THÀNH"
-            : snapshot.running
-              ? "ĐANG CẬP NHẬT"
-              : "ĐÃ TẠM DỪNG"}
-        </span>
+        <Link className="text-link" to="/live">
+          Mở rộng bản đồ →
+        </Link>
       }
     >
+      <div className="map-toolbar">
+        <button
+          className="button"
+          onClick={() => {
+            setFollow(false);
+            setAll(false);
+            setFit((n) => n + 1);
+          }}
+        >
+          Xem toàn tuyến
+        </button>
+        <button
+          className="button"
+          onClick={() => {
+            setFollow(false);
+            setAll(true);
+            setFit((n) => n + 1);
+          }}
+        >
+          Xem tất cả vị trí
+        </button>
+        <button
+          className="button"
+          disabled={
+            !selected ||
+            !validPosition(selected.last_latitude, selected.last_longitude)
+          }
+          aria-pressed={follow}
+          onClick={() => setFollow(!follow)}
+        >
+          {follow ? "Dừng theo dõi" : "Theo dõi runner đã chọn"}
+        </button>
+        {dataMode === "api" && (
+          <button
+            className="button"
+            disabled={locked}
+            title={locked ? lockedMessage : undefined}
+            aria-expanded={menu}
+            onClick={() => setMenu(!menu)}
+          >
+            Chỉnh sửa bản đồ
+          </button>
+        )}
+        <details className="map-layers">
+          <summary>Lớp bản đồ</summary>
+          <label>
+            <input
+              type="checkbox"
+              checked={showRunners}
+              onChange={(e) => setShowRunners(e.target.checked)}
+            />{" "}
+            Người chạy
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={showCheckpoints}
+              onChange={(e) => setShowCheckpoints(e.target.checked)}
+            />{" "}
+            Checkpoint
+          </label>
+        </details>
+      </div>
+      {menu && !locked && (
+        <div className="map-toolbar">
+          <button
+            className="button"
+            disabled={!snapshot.checkpoints.length}
+            onClick={() => open("checkpoint")}
+          >
+            Chỉnh vị trí checkpoint
+          </button>
+          <button className="button" onClick={() => open("route")}>
+            Chỉnh tuyến chạy
+          </button>
+          <small>Trạng thái khóa sẽ được backend kiểm tra khi lưu.</small>
+        </div>
+      )}
+      {locked && <p className="map-note">{lockedMessage}</p>}
       <div className="map-wrap">
         <MapContainer
-          center={[21.0011, 105.8441]}
-          zoom={16}
-          scrollWheelZoom={false}
+          key={
+            snapshot.dashboard?.race.race_id ?? snapshot.overview?.race.race_id
+          }
+          center={[0, 0]}
+          zoom={2}
+          scrollWheelZoom
           className="leaflet-map"
         >
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             eventHandlers={{ tileerror: () => setTileError(true) }}
           />
-          <Polyline
-            positions={snapshot.route}
-            pathOptions={{ color: "#fff", weight: 10, opacity: 0.95 }}
-          />
-          <Polyline
-            positions={snapshot.route}
-            pathOptions={{
-              color: "#3778f6",
-              weight: 5,
-              opacity: 0.95,
-              dashArray: "10 7",
-            }}
-          />
+          {!!snapshot.route.length && (
+            <Polyline
+              positions={snapshot.route}
+              pathOptions={{ color: "#2563eb", weight: 5 }}
+            />
+          )}
           {showCheckpoints &&
             snapshot.checkpoints
               .filter((c) => validPosition(c.latitude, c.longitude))
@@ -115,10 +236,11 @@ export function LiveMap({
                 <Marker
                   key={c.checkpoint_id}
                   title={`${c.code} · ${c.name}`}
-                  position={[c.latitude, c.longitude]}
+                  position={[c.latitude!, c.longitude!]}
+                  draggable={false}
                   icon={divIcon({
                     className: "checkpoint-marker",
-                    html: `<span>${c.order === 1 ? "⚑" : c.order}</span>`,
+                    html: "<span>⚑</span>",
                     iconSize: [30, 30],
                     iconAnchor: [15, 15],
                   })}
@@ -127,139 +249,105 @@ export function LiveMap({
                     <strong>
                       {c.code} · {c.name}
                     </strong>
-                    <p>{c.device}</p>
+                    <p>
+                      {c.type === "START_FINISH"
+                        ? "Điểm tính vòng"
+                        : "Điểm trung gian"}{" "}
+                      · {c.radius_m ?? "—"} m
+                    </p>
+                    <button
+                      className="button"
+                      disabled={locked}
+                      title={locked ? lockedMessage : undefined}
+                      onClick={() => open("checkpoint", c.checkpoint_id)}
+                    >
+                      Chỉnh vị trí
+                    </button>
                   </Popup>
                 </Marker>
               ))}
           {showRunners &&
-            moving.map((r) => (
-              <Marker
-                key={r.run_id || r.student_id}
-                title={`Bib ${r.bib} · ${r.full_name}`}
-                position={[r.last_latitude!, r.last_longitude!]}
-                eventHandlers={{ click: () => onSelect(r.student_id) }}
-                icon={divIcon({
-                  className: `runner-marker ${r.student_id === selectedId ? "selected" : ""}`,
-                  html: `<span style="background:${r.color}">${r.bib.replace(/[<>&"']/g, "")}</span>`,
-                  iconSize: [38, 38],
-                  iconAnchor: [19, 19],
-                })}
-              >
-                <Popup>
-                  <strong>
-                    #{r.bib} · {r.full_name}
-                  </strong>
-                  <p>
-                    {statusLabels[r.status]} · {distance(r.distance_total_m)}
-                    {r.connection === "STALE" && " · GPS đã cũ"}
-                    {r.connection === "FINISHED" && " · Vị trí cuối phiên"}
-                  </p>
-                  <Link to={`/runners/${r.student_id}/runs/${r.run_id}`}>
-                    Xem phiên chạy →
-                  </Link>
-                </Popup>
-              </Marker>
-            ))}
-          {showRunners &&
-            selected &&
-            !moving.some((r) => r.student_id === selectedId) &&
-            selected.last_latitude != null &&
-            selected.last_longitude != null &&
-            validPosition(selected.last_latitude, selected.last_longitude) && (
-              <Marker
-                title={`Bib ${selected.bib} · ${selected.full_name}`}
-                position={[selected.last_latitude, selected.last_longitude]}
-                icon={divIcon({
-                  className: "runner-marker selected",
-                  html: `<span style="background:${selected.color}">${selected.bib.replace(/[<>&"']/g, "")}</span>`,
-                  iconSize: [38, 38],
-                })}
-              >
-                <Popup>{selected.full_name}</Popup>
-              </Marker>
-            )}
+            [...groups].map(([key, group]) => {
+              const r = group[0],
+                chosen = group.some((x) => x.student_id === selectedId);
+              return (
+                <Marker
+                  key={key}
+                  title={
+                    group.length > 1
+                      ? `${group.length} người tại vị trí này`
+                      : `Bib ${r.bib} · ${r.full_name}`
+                  }
+                  position={[r.last_latitude!, r.last_longitude!]}
+                  draggable={false}
+                  eventHandlers={{
+                    click: () => {
+                      if (group.length === 1) onSelect(r.student_id);
+                    },
+                  }}
+                  icon={divIcon({
+                    className: `runner-marker ${chosen ? "selected" : ""} ${r.connection === "STALE" ? "stale-marker" : ""}`,
+                    html: `<span style="background:${group.length > 1 ? "#334155" : r.color}">${group.length > 1 ? `×${group.length}` : r.bib.replace(/[<>&"']/g, "")}</span>`,
+                    iconSize: [38, 38],
+                    iconAnchor: [19, 19],
+                  })}
+                >
+                  <Popup>
+                    <strong>
+                      {group.length > 1
+                        ? `${group.length} người cùng vị trí (× là số lượng)`
+                        : r.full_name}
+                    </strong>
+                    <div className="cluster-list">
+                      {group.map((x) => (
+                        <div key={x.student_id}>
+                          <button
+                            className="text-link"
+                            onClick={() => onSelect(x.student_id)}
+                          >
+                            #{x.bib} · {x.full_name}
+                          </button>
+                          <p>
+                            {statusLabels[x.status]} · {gpsLabel(x.connection)}
+                          </p>
+                          <small>{datetime(x.last_seen_at)}</small>
+                          <Link
+                            className="text-link"
+                            to={`/runners/${x.student_id}/runs/${x.run_id}`}
+                          >
+                            Chi tiết phiên →
+                          </Link>
+                        </div>
+                      ))}
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
           <MapActions
-            route={
-              snapshot.route.length
-                ? snapshot.route
-                : runners.map(
-                    (r) =>
-                      [r.last_latitude!, r.last_longitude!] as [number, number],
-                  )
+            positions={
+              !all && snapshot.route.length ? snapshot.route : markerPositions
             }
             selected={selected}
-            fitRequest={fit}
+            follow={follow}
+            stop={() => setFollow(false)}
+            fit={fit}
           />
         </MapContainer>
-        <div className="map-caption">
-          <span className="route-dot" />{" "}
-          {dataMode === "api"
-            ? "Chưa có geometry tuyến từ backend"
-            : "Tuyến minh họa · 1 km / vòng"}
-        </div>
-        <div className="map-buttons">
-          <button
-            className="icon-button"
-            title="Về toàn tuyến"
-            aria-label="Về toàn tuyến"
-            onClick={() => setFit((f) => f + 1)}
-          >
-            <LocateFixed size={18} />
-          </button>
-          <button
-            className="icon-button"
-            title="Lớp bản đồ"
-            aria-label="Lớp bản đồ"
-            aria-expanded={layers}
-            onClick={() => setLayers(!layers)}
-          >
-            <Layers size={18} />
-          </button>
-          <Link
-            className="icon-button"
-            to="/live"
-            title="Mở bản đồ"
-            aria-label="Mở bản đồ"
-          >
-            <Maximize2 size={17} />
-          </Link>
-        </div>
-        {layers && (
-          <div className="layer-menu">
-            <strong>Lớp hiển thị</strong>
-            <label>
-              <input
-                type="checkbox"
-                checked={showRunners}
-                onChange={(e) => setShowRunners(e.target.checked)}
-              />{" "}
-              Sinh viên
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={showCheckpoints}
-                onChange={(e) => setShowCheckpoints(e.target.checked)}
-              />{" "}
-              Checkpoint
-            </label>
-          </div>
-        )}
         {tileError && (
-          <div role="status" className="map-warning">
-            Không tải được một số ô bản đồ nền. Tuyến, vị trí và số liệu vẫn
-            hoạt động.
-          </div>
+          <p className="map-warning" role="status">
+            Không tải được nền bản đồ. Vị trí và tuyến vẫn hiển thị.
+          </p>
         )}
       </div>
-      <div className="map-footer">
-        <div>
-          <span className="legend-route" /> Tuyến chạy{" "}
-          <span className="legend-checkpoint" /> Checkpoint{" "}
-          <span className="legend-runner" /> Sinh viên (bib)
-        </div>
-        <span>Cập nhật {time(snapshot.updated_at)}</span>
-      </div>
+      <p className="map-note">
+        {snapshot.route.length
+          ? `Tuyến đã lưu · ${snapshot.routeDistance_m ?? "—"} m`
+          : snapshot.routeMessage?.includes("không hợp lệ")
+            ? snapshot.routeMessage
+            : "Giải này chưa có tuyến được lưu. Bản đồ đang hiển thị vị trí GPS hiện có."}{" "}
+        {follow ? "Đang theo dõi; kéo bản đồ để dừng." : "Khung nhìn tự do."}
+      </p>
     </Panel>
   );
 }

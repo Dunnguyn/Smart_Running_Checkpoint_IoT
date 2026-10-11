@@ -1,4 +1,8 @@
-import type { BackendRunner } from "./contract";
+import type {
+  BackendRunner,
+  BackendRoute,
+  BackendCheckpoint,
+} from "./contract";
 export type MatchStatus =
   "PENDING_MATCH" | "MATCHED" | "AMBIGUOUS" | "UNASSIGNED" | "REJECTED";
 export type LapStatus = "NOT_EVALUATED" | "COUNTED" | "NOT_COUNTED";
@@ -48,12 +52,15 @@ export interface CheckpointEvent {
   telemetry_source: string | null;
 }
 export interface DashboardDto {
+  route?: BackendRoute;
+  checkpoints?: BackendCheckpoint[];
   race: {
     race_id: string;
     name: string;
     status: import("../types/domain").RaceStatus;
     checkpoint_mode: CheckpointMode;
     total_laps: number;
+    min_lap_interval_seconds?: number;
     config_version: number;
   };
   summary: {
@@ -96,14 +103,14 @@ export interface Resolution {
   reason: string;
 }
 export const matchLabels: Record<MatchStatus, string> = {
-  PENDING_MATCH: "Chờ đối chiếu",
-  MATCHED: "Đã ghép",
-  AMBIGUOUS: "Cần xác nhận",
-  UNASSIGNED: "Chưa gán",
+  PENDING_MATCH: "Đang đối chiếu",
+  MATCHED: "Đã xác định người chạy",
+  AMBIGUOUS: "Cần xác nhận người chạy",
+  UNASSIGNED: "Chưa xác định người chạy",
   REJECTED: "Đã loại bỏ",
 };
 export const lapLabels: Record<LapStatus, string> = {
-  NOT_EVALUATED: "Chưa xét vòng",
+  NOT_EVALUATED: "Chưa xét tính vòng",
   COUNTED: "Đã tính vòng",
   NOT_COUNTED: "Không tính vòng",
 };
