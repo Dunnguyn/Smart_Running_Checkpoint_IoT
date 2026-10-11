@@ -113,7 +113,7 @@ def position_at(points: list[dict], lengths: list[float], along_m: float) -> tup
 
 
 def main() -> None:
-    """Create five simultaneous demo runners and move GPS/steps over four laps."""
+    """Create five moving demo runners and stream GPS/steps over four laps."""
     parser = argparse.ArgumentParser(description="Mô phỏng sinh viên chạy quanh tòa Thế Kỷ NEU với 4 checkpoint/vòng.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Địa chỉ API backend")
     parser.add_argument("--interval", type=float, default=0.5, help="Chu kỳ gửi GPS, mặc định 0.5 giây")
@@ -122,9 +122,18 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="Seed để tái lập cùng tốc độ từng runner")
     parser.add_argument("--mode", choices=("GPS_ONLY", "GPS_AND_ARDUINO"), default="GPS_ONLY",
                         help="GPS_ONLY mô phỏng GPS/bước chân; combined kiểm tra ghép event Arduino")
+    parser.add_argument("--start-gap", type=float, default=None,
+                        help="Khoảng cách thời gian giữa runner; mặc định 8 giây ở GPS_AND_ARDUINO, 0 ở GPS_ONLY")
     args = parser.parse_args()
     if args.interval < 0.5 or args.laps < 1 or not 1 <= args.students <= 100:
         parser.error("interval phải >= 0.5 giây, laps >= 1 và students nằm trong 1..100")
+    if args.start_gap is not None and not 0 <= args.start_gap <= 12:
+        parser.error("start-gap phải nằm trong 0..12 giây")
+    start_gap_seconds = args.start_gap
+    if start_gap_seconds is None:
+        start_gap_seconds = 8.0 if args.mode == "GPS_AND_ARDUINO" else 0.0
+    if (args.students - 1) * start_gap_seconds > 55:
+        parser.error("Tổng độ giãn thời điểm xuất phát vượt cửa sổ 60 giây của API; giảm --start-gap hoặc --students")
 
     admin_key = os.getenv("ADMIN_API_KEY", "dev-admin-key-change-me")
     simulator_key = os.getenv("SIMULATOR_API_KEY", "dev-simulator-key-change-me")
@@ -186,7 +195,12 @@ def main() -> None:
     safe_max_speed = min(13.35, server_speed_limit, route_length / (min_lap_seconds + 1.5))
     if safe_max_speed <= 0.5:
         raise RuntimeError("Cấu hình MIN_LAP_INTERVAL_SECONDS hoặc MAX_SIMULATOR_SPEED_MPS không phù hợp để mô phỏng.")
-    safe_min_speed = min(12.7, safe_max_speed - min(0.6, safe_max_speed / 2))
+    if args.mode == "GPS_AND_ARDUINO":
+        # Seeded paces stay close; start waves separate anonymous Arduino events.
+        pace_span = min(0.10, max(0.0, safe_max_speed - 0.5))
+        safe_min_speed = safe_max_speed - pace_span
+    else:
+        safe_min_speed = min(12.7, safe_max_speed - min(0.6, safe_max_speed / 2))
     pace_levels = [round(safe_min_speed + index * (safe_max_speed - safe_min_speed) / 7, 2)
                    for index in range(8)]
     speed_schedule = [pace_levels[index % len(pace_levels)] for index in range(args.students)]
@@ -218,33 +232,38 @@ def main() -> None:
             "wearable_id": wearable_id, "run_id": None,
             "lap_seconds": lap_seconds, "speed_mps": speed_mps,
             "stride_length_m": stride_schedule[number - 1],
+            "start_delay_seconds": (number - 1) * start_gap_seconds,
             "finish_elapsed": finish_elapsed, "last_steps": 0,
             "done": False, "last_checkpoint_keys": set(),
         })
 
-    # Run rows share one future timestamp so the API start is simultaneous,
-    # even though registrations and database inserts happen one after another.
+    # GPS_ONLY starts everyone together; combined mode defaults to separated waves.
     simulator_started_at = datetime.now(timezone.utc) + timedelta(seconds=2)
     for runner in runners:
         run = request_json(args.base_url, "/api/v1/runs", "POST", {
             "race_id": race_id, "student_id": runner["student_id"],
             "wearable_device_id": runner["wearable_id"], "source": "SIMULATOR",
-            "started_at": timestamp(simulator_started_at),
+            "started_at": timestamp(simulator_started_at + timedelta(seconds=runner["start_delay_seconds"])),
             "idempotency_key": f"sim-run-{run_tag}-{runner['display_id']}",
         }, simulator_key, sim_header)
         runner["run_id"] = run["run_id"]
 
     print(f"Race {race_id}: {args.students} sinh viên, {args.laps} vòng, 4 checkpoint/vòng.")
     print(f"Tuyến polyline mô phỏng: khoảng {route_length:.1f}m/vòng, xuất phát/đích vòng tại NEU-C01.")
+    if args.mode == "GPS_AND_ARDUINO":
+        print(f"GPS_AND_ARDUINO: cách nhau {start_gap_seconds:.1f}s/runner để event có thể ghép duy nhất; nếu cửa sổ vẫn chồng lấn, backend giữ AMBIGUOUS.")
+    else:
+        print("GPS_ONLY: các runner xuất phát đồng thời.")
     print(f"GPS + bước chân chuyển động liên tục; pace mô phỏng tăng tốc {min(r['speed_mps'] for r in runners):.2f}–{max(r['speed_mps'] for r in runners):.2f} m/s.")
     print("Bib / pace / độ dài bước: " + ", ".join(
         f"{r['display_id']}={r['speed_mps']:.2f}m/s,{r['stride_length_m']:.2f}m"
         for r in runners) + ".")
-    print(f"Giữ MIN_LAP_INTERVAL_SECONDS={race.get('min_lap_interval_seconds', 30)}; 4 vòng dự kiến khoảng {min(r['finish_elapsed'] for r in runners):.0f}–{max(r['finish_elapsed'] for r in runners):.0f} giây cộng độ trễ API.")
+    finish_ranges = [r["start_delay_seconds"] + r["finish_elapsed"] for r in runners]
+    print(f"Giữ MIN_LAP_INTERVAL_SECONDS={race.get('min_lap_interval_seconds', 30)}; hoàn thành dự kiến khoảng {min(finish_ranges):.0f}–{max(finish_ranges):.0f} giây cộng độ trễ API.")
     while datetime.now(timezone.utc) < simulator_started_at:
         time.sleep(0.02)
     simulator_started = time.monotonic()
-    expected_finish = max(runner["finish_elapsed"] for runner in runners)
+    expected_finish = max(runner["start_delay_seconds"] + runner["finish_elapsed"] for runner in runners)
     last_progress_print = -1
     event_ids: list[str] = []
     rejected_gps_points = 0
@@ -255,9 +274,12 @@ def main() -> None:
             if runner["done"]:
                 continue
             point_time = datetime.now(timezone.utc)
+            runner_started_at = simulator_started_at + timedelta(seconds=runner["start_delay_seconds"])
+            if point_time < runner_started_at:
+                continue
             # Tie each synthetic coordinate to its exact source timestamp.
             # This avoids inflating speed because runners are posted sequentially.
-            point_elapsed = max(0.0, (point_time - simulator_started_at).total_seconds())
+            point_elapsed = max(0.0, (point_time - runner_started_at).total_seconds())
             travelled_m = start_offset_m + runner["speed_mps"] * point_elapsed
             latitude, longitude = position_at(points, segment_lengths, travelled_m)
             runner["last_steps"] = int(travelled_m / runner["stride_length_m"])
@@ -290,8 +312,8 @@ def main() -> None:
                 raise
             runner["done"] = bool(accepted.get("is_done"))
 
-            # In Arduino mode, send a gateway event when a lap-finish passage is
-            # detected. Closely packed runners may correctly become AMBIGUOUS.
+            # Send anonymous Arduino events for lap passages. Never identify a
+            # runner by simulator identity; real overlap remains AMBIGUOUS.
             if args.mode == "GPS_AND_ARDUINO":
                 finish_cp = created_checkpoints[0]
                 for crossing in accepted.get("checkpoint_crossings", []):

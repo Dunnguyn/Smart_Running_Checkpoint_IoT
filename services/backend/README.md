@@ -11,7 +11,7 @@
 - Arduino event được xác thực và ghép sau cửa sổ thời gian; một ứng viên có thể ghép tự động, nhiều ứng viên chuyển `AMBIGUOUS` để Admin xác nhận, không tự chọn người gần nhất.
 - Khi runner đạt `total_laps`, phiên tự chuyển `COMPLETED`, chốt thời gian và dừng bộ đếm. Race chuyển `COMPLETED` khi mọi participant đã hoàn tất.
 - Kiểm tra tọa độ/thời điểm/bước tăng dần, chống gửi lặp và cộng khoảng cách Haversine.
-- API Admin khởi động mặc định 5 sinh viên mô phỏng, gán bib `01`–`05`, tạo wearable/run đồng bộ thời điểm, rồi phát GPS/bước chân chuyển động quanh tòa Thế Kỷ.
+- API Admin khởi động mặc định 5 sinh viên mô phỏng, gán bib `01`–`05`, tạo wearable/run rồi phát GPS/bước chân chuyển động quanh tòa Thế Kỷ. `GPS_ONLY` cho runner xuất phát đồng thời; `GPS_AND_ARDUINO` mặc định giãn runner 8 giây để tách các event ẩn danh.
 - Simulator chạy liên tục theo polyline khép kín khoảng 425 m/vòng, đi qua bốn tọa độ checkpoint bạn cung cấp; có thêm các điểm bẻ tuyến mô phỏng để đạt 400–450 m. Các điểm bẻ hiện chưa được xác minh là đường chạy thực địa và có thể thay bằng điểm lấy từ bản đồ.
 - API khởi chạy simulator ở chế độ `GPS_ONLY` hoặc `GPS_AND_ARDUINO`; dữ liệu giả được ghi rõ nguồn, không chứng minh danh tính người thật trước cảm biến.
 - Nhận lap event chỉ từ nguồn có runner ID, kiểm tra giải, thời gian tối thiểu và sự kiện trùng.
@@ -52,7 +52,7 @@
 5. Chạy mô phỏng trực tiếp qua API, không cần mở cửa sổ terminal thứ hai:
 
    - Trong `/docs`, bấm **Authorize** và nhập giá trị `ADMIN_API_KEY` vào header `X-Admin-Key`.
-   - Gọi `POST /api/v1/simulations` với `{"checkpoint_mode":"GPS_ONLY","seed":42,"interval_seconds":0.5}`. Backend tự tạo giải demo, 5 runner `01`–`05`, 4 checkpoint, route, wearable và phiên chạy; 5 phiên có cùng thời điểm xuất phát.
+   - Gọi `POST /api/v1/simulations` với `{"checkpoint_mode":"GPS_ONLY","seed":42,"interval_seconds":0.5}`. Backend tự tạo 5 runner `01`–`05`; ở `GPS_ONLY` cả 5 phiên xuất phát cùng lúc. Trong `GPS_AND_ARDUINO`, mặc định giãn runner 8 giây; thêm `"runner_start_gap_seconds":0` để cố ý kiểm tra tình huống `AMBIGUOUS`.
    - Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và `race_id`; dùng `GET /api/v1/races/{race_id}/dashboard` để theo dõi.
    - Nếu muốn dừng sớm, gọi `POST /api/v1/simulations/{simulation_id}/stop`. Sau đó có thể xóa giải bằng `DELETE /api/v1/races/{race_id}`.
 

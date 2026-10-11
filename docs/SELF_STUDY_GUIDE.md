@@ -135,9 +135,9 @@ Mở `http://127.0.0.1:8000/docs`, nhấn **Authorize** và nhập `ADMIN_API_KE
 {"checkpoint_mode":"GPS_ONLY","seed":42,"interval_seconds":0.5}
 ```
 
-API tự khởi chạy 5 runner `01`–`05`, tạo race mới và cho cả 5 phiên cùng thời điểm bắt đầu. Mỗi runner di chuyển liên tục trên tuyến đã lưu quanh A1/A2; tốc độ có khác nhau để tạo nhóm dẫn trước/sau. Bước chân tăng theo quãng đường với stride mô phỏng 0.62–0.82 m (xấp xỉ 6–9 bước/5 m). GPS và bước chân là dữ liệu giả lập, không phải số đo phần cứng. Route demo khoảng 425 m; giữ luật 30 giây tối thiểu/vòng nên bốn vòng mất khoảng 2 phút cộng độ trễ API.
+API tự khởi chạy 5 runner `01`–`05`, tạo race mới và di chuyển liên tục trên tuyến đã lưu quanh A1/A2. Ở `GPS_ONLY`, các phiên xuất phát đồng thời. Ở `GPS_AND_ARDUINO`, thời điểm xuất phát mặc định cách nhau 8 giây để Arduino event có một ứng viên GPS; có thể thêm `"runner_start_gap_seconds":0` để cố ý thử `AMBIGUOUS`. GPS và bước chân là dữ liệu mô phỏng; backend vẫn không tự chọn runner khi có nhiều ứng viên.
 
-Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và `race_id`; gọi `GET /api/v1/races/{race_id}/dashboard` để xem bảng xếp hạng, GPS và checkpoint. Có thể chọn `GPS_AND_ARDUINO` trong body để minh họa ghép; các runner đến sát checkpoint có thể tạo `AMBIGUOUS`. Dừng bằng `POST /api/v1/simulations/{simulation_id}/stop`; sau đó xóa giải bằng `DELETE /api/v1/races/{race_id}`. Tuyến hiện có các điểm bẻ giả lập chưa được khảo sát tại thực địa.
+Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và `race_id`; gọi `GET /api/v1/races/{race_id}/dashboard` để xem bảng xếp hạng. Dùng nhịp mặc định để minh họa auto-match; đặt `runner_start_gap_seconds=0` để kiểm tra `AMBIGUOUS`. Backend không tự chọn người gần nhất.
 
 ## 11. Tự nối frontend và thiết bị thật sau này
 

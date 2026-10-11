@@ -409,6 +409,8 @@ class SimulationStartIn(BaseModel):
     checkpoint_mode: str = "GPS_ONLY"
     seed: int = 42
     interval_seconds: float = Field(default=0.5, ge=0.5, le=5)
+    # Set 0 to deliberately reproduce close-pack AMBIGUOUS events.
+    runner_start_gap_seconds: float | None = Field(default=None, ge=0, le=12)
 
 
 class GpsIn(BaseModel):
@@ -957,6 +959,8 @@ def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
                    "--mode", data.checkpoint_mode,
                    "--seed", str(data.seed),
                    "--interval", str(data.interval_seconds)]
+        if data.runner_start_gap_seconds is not None:
+            command.extend(["--start-gap", str(data.runner_start_gap_seconds)])
         child_env = os.environ.copy()
         child_env["PYTHONUNBUFFERED"] = "1"
         try:
@@ -1294,8 +1298,8 @@ def create_run(data: RunIn, auth_role: str = Depends(run_create_auth), db: Sessi
         if auth_role != "SIMULATOR":
             envelope_error("SIMULATOR_START_TIME_ONLY", "Chỉ Simulator API key mới được đồng bộ thời điểm xuất phát.", 403)
         requested_start = aware(data.started_at)
-        if requested_start < started_at or requested_start > started_at + timedelta(seconds=10):
-            envelope_error("INVALID_SIMULATOR_START_TIME", "Thời điểm xuất phát đồng bộ phải nằm trong 10 giây tới.", 422)
+        if requested_start < started_at or requested_start > started_at + timedelta(seconds=60):
+            envelope_error("INVALID_SIMULATOR_START_TIME", "Thời điểm xuất phát mô phỏng phải nằm trong 60 giây tới.", 422)
         started_at = requested_start
     wearable = get_or_404(db, RunnerWearable, data.wearable_device_id, "thiết bị đeo")
     if wearable.student_id != data.student_id or wearable.status != "ACTIVE":
