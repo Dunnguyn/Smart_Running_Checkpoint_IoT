@@ -1,10 +1,12 @@
+> Cập nhật 11/10/2026: backend **cba5339** ở worktree `backend-current-main`, cổng **8001**; FE **1891dcc** + thay đổi local. Trang `/races` có tạo/dừng mô phỏng bằng Admin API và xóa giải có xác nhận. Xem [báo cáo hiện tại](INTEGRATION_REPORT.md) để vận hành đúng runtime; hướng dẫn/commit cũ bên dưới là lịch sử. Test mới cô lập: `node scripts/verify-admin-current.mjs` (không gửi ghi thật).
+
 > Đã có form **Tạo giải chạy** tại `/races`. Xem [API_COVERAGE.md](API_COVERAGE.md) để biết các API đã nối/chưa nối. Kiểm thử form không ghi thật: `node scripts/verify-race-create.mjs` (cần frontend dev tại 5173).
 
 > UX/UI và editor bản đồ đã cập nhật ngày 10/10/2026. Xem [bàn giao và giới hạn kiểm thử](INTEGRATION_REPORT.md). `npm run test:ui:editor` kiểm thử editor bằng API fixture cô lập; `npm run test:ui:readonly` kiểm thử đọc backend đang chạy, cần ADMIN_API_KEY trong môi trường tiến trình. Không chạy thao tác ghi thật để kiểm thử. Các ví dụ port 8000 phía dưới là lịch sử; runtime hiện tại dùng 8001.
 
 # NEU Smart Running · Admin Web
 
-Frontend React/TypeScript/Vite hiện dùng FastAPI thật qua REST và WebSocket; giữ chế độ mock độc lập. Backend quyết định danh tính liên kết, số vòng, bước chân, quãng đường, thứ tự top runner và hoàn thành. Frontend không gửi GPS/Gateway event và không chạy simulator trong luồng ứng dụng.
+Frontend React/TypeScript/Vite hiện dùng FastAPI thật qua REST và WebSocket; giữ chế độ mock độc lập. Backend quyết định danh tính liên kết, số vòng, bước chân, quãng đường, thứ tự top runner và hoàn thành. Frontend không gửi GPS/Gateway event; Admin có thể yêu cầu backend quản lý mô phỏng qua API tại trang Giải chạy.
 
 ## Chạy local
 

@@ -17,6 +17,8 @@ import {
   mapEditorService,
   readMap,
   hasRuns,
+  routeAccess,
+  routeLimits,
   lockedMessage,
   fingerprint,
   validateRoute,
@@ -101,17 +103,31 @@ export function MapEditor({
           draft.longitude !==
             (cp.longitude == null ? "" : String(cp.longitude)) ||
           draft.radius_m !== String(cp.radius_m)));
-  const blocked =
-    locked || hasRuns(snapshot?.dashboard) || hasRuns(base?.dashboard);
+  const access = routeAccess(base?.route, hasRuns(base?.dashboard));
+  const latestAccess = routeAccess(
+    snapshot?.dashboard?.race,
+    hasRuns(snapshot?.dashboard),
+  );
+  const blocked = locked || access.blocked || latestAccess.blocked;
   const changedOnServer =
     conflict ||
     (!!base &&
       snapshot?.dashboard?.race.race_id === raceId &&
       snapshot.dashboard.race.config_version >
         base.dashboard.race.config_version);
-  const validation = validateRoute(points, base?.checkpoints ?? []);
+  const validation = validateRoute(
+    points,
+    base?.checkpoints ?? [],
+    base?.route,
+  );
   const saveProblems = blocked
-    ? [lockedMessage]
+    ? [
+        locked
+          ? lockedMessage
+          : access.blocked
+            ? access.reason
+            : latestAccess.reason,
+      ]
     : changedOnServer
       ? ["Dữ liệu trên server đã thay đổi. Tải lại và kiểm tra trước khi lưu."]
       : !dirty
@@ -254,7 +270,7 @@ export function MapEditor({
     try {
       const current = await readMap(raceId, signal);
       if (signal.aborted) return;
-      if (hasRuns(current.dashboard)) {
+      if (routeAccess(current.route, hasRuns(current.dashboard)).blocked) {
         setLocked(true);
         setError(lockedMessage + " Thay đổi chưa được lưu.");
         return;
@@ -772,10 +788,25 @@ export function MapEditor({
                   tabIndex={-1}
                 >
                   <h3>Kiểm tra tuyến (ước tính)</h3>
-                  <p>{points.length} / 5–500 điểm</p>
                   <p>
-                    Chiều dài: {numberText(validation.distance)} / 400–450 m
+                    {base.route.route_profile === "NEU_DEMO"
+                      ? "Tuyến demo NEU"
+                      : base.route.route_profile === "CUSTOM"
+                        ? "Tuyến tùy chỉnh"
+                        : "Chưa biết loại tuyến"}
                   </p>
+                  <p>{routeLimits(base.route)}</p>
+                  <p>{access.reason}</p>
+                  <p>
+                    Trạng thái tuyến:{" "}
+                    {base.route.route_status === "CONFIGURED"
+                      ? "Đã có tuyến"
+                      : base.route.route_status === "NOT_CONFIGURED"
+                        ? "Chưa cấu hình"
+                        : (base.route.route_status ?? "Chưa biết")}
+                  </p>
+                  <p>{points.length} / 5–500 điểm</p>
+                  <p>Chiều dài ước tính: {numberText(validation.distance)} m</p>
                   <p>Đầu–cuối: {numberText(validation.gap)} / tối đa 2 m</p>
                   <p>
                     Neo: {validation.anchors} / {base.checkpoints.length}{" "}
@@ -822,8 +853,8 @@ export function MapEditor({
               {mode === "route" && (
                 <p>
                   {points.length} điểm · Chiều dài ước tính{" "}
-                  {numberText(validation.distance)} m (cần 400–450 m) · Đầu–cuối{" "}
-                  {numberText(validation.gap)} m (tối đa 2 m)
+                  {numberText(validation.distance)} m ({routeLimits(base.route)}
+                  ) · Đầu–cuối {numberText(validation.gap)} m (tối đa 2 m)
                 </p>
               )}
               {!busy &&

@@ -18,153 +18,225 @@ const fields = [
   ["max_future_skew_seconds", "Độ lệch tương lai (giây)", 0, 60, "1"],
 ] as const;
 export function MatchingSettings() {
-  const { snapshot, raceId } = useLive();
-  if (!snapshot?.dashboard || snapshot.dashboard.race.race_id !== raceId)
-    return null;
-  return (
-    <ConfigForm
-      key={raceId}
-      raceId={raceId}
-      initialMode={snapshot.dashboard.race.checkpoint_mode}
-      version={snapshot.dashboard.race.config_version}
-    />
-  );
+  const { raceId } = useLive();
+  return <ConfigForm key={raceId} raceId={raceId} />;
 }
-function ConfigForm({
-  raceId,
-  initialMode,
-  version,
-}: {
-  raceId: string;
-  initialMode: CheckpointMode;
-  version: number;
-}) {
-  const { refreshData } = useLive();
-  const [modeOverride, setMode] = useState<CheckpointMode | null>(null),
-    [draft, setDraft] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState<MatchingConfig | null>(null),
-    [blocked, setBlocked] = useState(false),
-    [busy, setBusy] = useState(false),
-    [message, setMessage] = useState("");
+function ConfigForm({ raceId }: { raceId: string }) {
+  const { refreshData, snapshot, setDirty } = useLive();
+  const [saved, setSaved] = useState<MatchingConfig | null>(null);
+  const [mode, setMode] = useState<CheckpointMode | null>(null);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [message, setMessage] = useState(""),
+    [reload, setReload] = useState(0),
+    [conflict, setConflict] = useState(false);
   const controller = useRef<AbortController | null>(null),
     guard = useRef(false);
+  const dirty = Object.keys(draft).length > 0 || mode !== null;
+  useEffect(() => {
+    setDirty(dirty || busy);
+    return () => setDirty(false);
+  }, [dirty, busy, setDirty]);
   useEffect(() => () => controller.current?.abort(), []);
-  const readOnly = blocked;
-  const currentSaved = saved && saved.config_version >= version ? saved : null;
-  const serverMode = currentSaved?.checkpoint_mode ?? initialMode;
-  const mode = modeOverride ?? serverMode;
+  useEffect(() => {
+    const c = new AbortController();
+    setLoading(true);
+    setError("");
+    matchingService
+      .readConfig(raceId, c.signal)
+      .then((data) => {
+        if (!c.signal.aborted) {
+          setSaved(data);
+          setDraft({});
+          setMode(null);
+          setConflict(false);
+        }
+      })
+      .catch((e) => {
+        if (!c.signal.aborted) setError(e.message);
+      })
+      .finally(() => {
+        if (!c.signal.aborted) setLoading(false);
+      });
+    return () => c.abort();
+  }, [raceId, reload]);
+  const changed =
+    conflict ||
+    !!(
+      saved &&
+      snapshot?.dashboard?.race.race_id === raceId &&
+      snapshot.dashboard.race.config_version > saved.config_version
+    );
+  const readOnly = loading || !saved || saved.locked !== false || changed;
+  const reloadConfig = () => {
+    if (!dirty || confirm("Bỏ cấu hình chưa lưu và tải lại?"))
+      setReload((n) => n + 1);
+  };
   return (
     <Panel
       title="Cấu hình ghép GPS / Arduino"
-      subtitle={`Phiên bản cấu hình: ${currentSaved?.config_version ?? version}`}
+      subtitle={
+        saved
+          ? `Phiên bản cấu hình: ${saved.config_version}`
+          : "Đang đọc cấu hình backend"
+      }
     >
-      <p className="form-message">
-        {readOnly
-          ? "Cấu hình đã khóa sau khi có phiên chạy. Tạo race demo mới để thử cấu hình khác."
-          : "Chưa có dữ liệu trạng thái khóa: API đọc chưa hỗ trợ trường này. Backend kiểm tra khi lưu; màn hình không suy đoán từ số phiên chạy."}
-      </p>
-      <p className="form-message">
-        API đọc hiện chỉ trả mode và phiên bản; các thông số chưa biết hiển thị
-        “—”. Chỉ những ô bạn nhập mới được gửi; không tự điền giá trị demo. Giá
-        trị đã lưu chỉ hiện trong phiên màn hình này.
-      </p>
-      <form
-        className="matching-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (readOnly || guard.current) return;
-          const values: Partial<Omit<MatchingConfig, "config_version">> = {};
-          if (modeOverride !== null && modeOverride !== serverMode)
-            values.checkpoint_mode = modeOverride;
-          for (const [key] of fields)
-            if (draft[key]?.trim()) values[key] = Number(draft[key]);
-          const inner = values.inner_radius_m ?? currentSaved?.inner_radius_m,
-            outer = values.outer_radius_m ?? currentSaved?.outer_radius_m;
-          if (inner !== undefined && outer !== undefined && inner >= outer) {
-            setMessage("Bán kính trong phải nhỏ hơn bán kính ngoài.");
-            return;
-          }
-          if (!Object.keys(values).length) {
-            setMessage("Chưa có thay đổi để lưu.");
-            return;
-          }
-          guard.current = true;
-          setBusy(true);
-          setMessage("");
-          controller.current = new AbortController();
-          try {
-            const result = await matchingService.config(
-              raceId,
-              values,
-              controller.current.signal,
-            );
-            setSaved(result);
-            setMode(null);
-            setDraft({});
-            setMessage("Backend đã lưu cấu hình.");
-            refreshData();
-          } catch (error) {
-            const e = error as RequestError;
-            if (!controller.current.signal.aborted) {
-              setMessage(
-                `${e.message} ${e.code ?? ""} ${Object.values(e.fields ?? {}).join("; ")}`,
-              );
-              if (e.status === 409) {
-                if (e.code === "MATCHING_CONFIG_LOCKED") setBlocked(true);
-                refreshData();
-              }
-            }
-          } finally {
-            guard.current = false;
-            setBusy(false);
-          }
-        }}
-      >
-        <label>
-          Chế độ
-          <select
-            aria-label="Chế độ"
-            value={readOnly ? serverMode : mode}
-            disabled={readOnly || busy}
-            onChange={(e) => setMode(e.target.value as CheckpointMode)}
-          >
-            <option value="GPS_ONLY">{modeLabel("GPS_ONLY")}</option>
-            <option value="GPS_AND_ARDUINO">
-              {modeLabel("GPS_AND_ARDUINO")}
-            </option>
-          </select>
-        </label>
-        {fields.map(([key, label, min, max, step]) => (
-          <label key={key}>
-            {label}
-            <small>Hiện tại: {currentSaved?.[key] ?? "—"}</small>
-            <input
-              type="number"
-              min={min}
-              max={max}
-              step={step}
-              placeholder="Giữ nguyên"
-              disabled={readOnly || busy}
-              value={draft[key] ?? ""}
-              onChange={(e) =>
-                setDraft((s) => ({ ...s, [key]: e.target.value }))
-              }
-            />
-          </label>
-        ))}
+      {loading && <p role="status">Đang tải cấu hình…</p>}
+      {error && <p role="alert">{error}</p>}
+      {(!saved || error || changed) && (
         <button
-          className="button primary"
-          disabled={readOnly || busy}
-          type="submit"
+          className="button"
+          type="button"
+          onClick={reloadConfig}
+          disabled={busy}
         >
-          {busy ? "Đang lưu…" : "Lưu cấu hình ghép"}
+          Tải lại cấu hình
         </button>
-      </form>
-      {message && (
-        <p role="status" className="form-message">
-          {message}
+      )}
+      {changed && (
+        <p role="alert">
+          Cấu hình server đã thay đổi. Draft được giữ lại; tải lại trước khi
+          lưu.
         </p>
       )}
+      {saved && (
+        <>
+          <p>
+            {saved.locked === true
+              ? saved.locked_reason ||
+                "Cấu hình đã khóa vì giải đã có phiên chạy."
+              : saved.locked === false
+                ? "Cấu hình có thể sửa trước khi tạo phiên chạy."
+                : "Chưa xác định trạng thái khóa; chưa thể lưu."}
+          </p>
+          <p>
+            Thời gian tối thiểu giữa hai vòng:{" "}
+            {saved.min_lap_interval_seconds ?? "Chưa được backend cung cấp"}
+            {saved.min_lap_interval_seconds != null ? " giây" : ""} (chỉ đọc)
+          </p>
+          <form
+            className="matching-form"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (readOnly || guard.current || !dirty) return;
+              const values: Partial<MatchingConfig> = {};
+              if (mode !== null && mode !== saved.checkpoint_mode)
+                values.checkpoint_mode = mode;
+              for (const [key] of fields) {
+                if (draft[key] !== undefined) {
+                  const n = Number(draft[key]);
+                  if (!draft[key].trim() || !Number.isFinite(n)) {
+                    setError("Nhập đủ thông số hợp lệ.");
+                    return;
+                  }
+                  if (n !== saved[key]) values[key] = n;
+                }
+              }
+              if (
+                (values.inner_radius_m ?? saved.inner_radius_m) >=
+                (values.outer_radius_m ?? saved.outer_radius_m)
+              ) {
+                setError("Bán kính trong phải nhỏ hơn bán kính ngoài.");
+                return;
+              }
+              if (!Object.keys(values).length) {
+                setDraft({});
+                setMode(null);
+                return;
+              }
+              guard.current = true;
+              setBusy(true);
+              setError("");
+              setMessage("");
+              const c = new AbortController();
+              controller.current = c;
+              try {
+                const current = await matchingService.readConfig(
+                  raceId,
+                  c.signal,
+                );
+                if (
+                  current.locked !== false ||
+                  current.config_version !== saved.config_version
+                ) {
+                  setConflict(true);
+                  setError(
+                    current.locked_reason ||
+                      "Cấu hình đã thay đổi; chưa gửi lưu.",
+                  );
+                  return;
+                }
+                await matchingService.config(raceId, values, c.signal);
+                const confirmed = await matchingService.readConfig(
+                  raceId,
+                  c.signal,
+                );
+                if (!c.signal.aborted) {
+                  setSaved(confirmed);
+                  setDraft({});
+                  setMode(null);
+                  setMessage("Đã đọc lại cấu hình sau lưu.");
+                  refreshData();
+                }
+              } catch (e) {
+                if (!c.signal.aborted) {
+                  const f = e as RequestError;
+                  setError(
+                    `${f.message} ${f.code ?? ""} ${Object.values(f.fields ?? {}).join("; ")}`,
+                  );
+                  if (f.status === 409 || f.status === 0 || f.status >= 500)
+                    setConflict(true);
+                }
+              } finally {
+                guard.current = false;
+                if (!c.signal.aborted) setBusy(false);
+              }
+            }}
+          >
+            <label>
+              Chế độ
+              <select
+                aria-label="Chế độ"
+                disabled={readOnly || busy}
+                value={mode ?? saved.checkpoint_mode}
+                onChange={(e) => setMode(e.target.value as CheckpointMode)}
+              >
+                <option value="GPS_ONLY">{modeLabel("GPS_ONLY")}</option>
+                <option value="GPS_AND_ARDUINO">
+                  {modeLabel("GPS_AND_ARDUINO")}
+                </option>
+              </select>
+            </label>
+            {fields.map(([key, label, min, max, step]) => (
+              <label key={key}>
+                {label}
+                <input
+                  aria-label={label}
+                  required
+                  type="number"
+                  min={min}
+                  max={max}
+                  step={step}
+                  disabled={readOnly || busy}
+                  value={draft[key] ?? String(saved[key])}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, [key]: e.target.value }))
+                  }
+                />
+              </label>
+            ))}
+            <button
+              className="button primary"
+              disabled={readOnly || busy || !dirty}
+            >
+              {busy ? "Đang lưu…" : "Lưu cấu hình ghép"}
+            </button>
+          </form>
+        </>
+      )}
+      {message && <p role="status">{message}</p>}
     </Panel>
   );
 }

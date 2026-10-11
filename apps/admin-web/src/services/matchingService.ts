@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request, RequestError } from "./client";
 import { utc } from "./contract";
 import type {
   CheckpointEvent,
@@ -54,6 +54,31 @@ export const matchingService = {
         signal,
       }),
     );
+  },
+  async readConfig(id: string, signal?: AbortSignal) {
+    const config = await request<MatchingConfig>(
+      `/races/${part(id)}/checkpoint-matching`,
+      { signal },
+    );
+    const keys = [
+      "inner_radius_m",
+      "outer_radius_m",
+      "match_window_seconds",
+      "late_grace_seconds",
+      "max_sample_gap_seconds",
+      "max_event_age_seconds",
+      "max_future_skew_seconds",
+      "config_version",
+    ] as const;
+    if (
+      typeof config.locked !== "boolean" ||
+      keys.some((k) => !Number.isFinite(config[k]))
+    )
+      throw new RequestError(
+        0,
+        "Backend trả cấu hình thiếu thông số hoặc trạng thái khóa; chưa thể lưu.",
+      );
+    return config;
   },
   config(
     id: string,

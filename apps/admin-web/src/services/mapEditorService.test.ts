@@ -3,7 +3,8 @@ import {
   checkpointErrors,
   checkpointPayload,
   routePayload,
-  validateRoute,
+  validateRoute as validateRouteRaw,
+  routeAccess,
   meters,
   hasRuns,
   mapEditorService,
@@ -12,6 +13,16 @@ import {
 } from "./mapEditorService";
 import { setAdminKey, RequestError } from "./client";
 import type { DashboardDto } from "./matchingContract";
+const custom = {
+  route_profile: "CUSTOM" as const,
+  route_length_min_m: null,
+  route_length_max_m: null,
+};
+const validateRoute: typeof validateRouteRaw = (
+  points,
+  checkpoints,
+  rules = custom,
+) => validateRouteRaw(points, checkpoints, rules);
 const cp = {
   checkpoint_id: "cp",
   code: "01",
@@ -121,4 +132,54 @@ it("identifies incomplete vertices and does not report unmeasurable geometry as 
   expect(result.errors).toHaveLength(1);
   expect(result.errors[0]).toContain("Điểm 2");
   expect(result.errors[0]).not.toContain("400–450");
+});
+
+it("uses API bounds and adds the closing leg exactly once", () => {
+  const open = points.map((p, i) =>
+    i === 4 ? { ...p, latitude: p.latitude + 0.000005 } : p,
+  );
+  const expected =
+    open.slice(1).reduce((sum, p, i) => sum + meters(open[i], p), 0) +
+    meters(open.at(-1)!, open[0]);
+  expect(validateRoute(open, [cp], custom).distance).toBeCloseTo(expected, 8);
+  expect(validateRoute(points, [cp], custom).distance).toBeCloseTo(
+    points.slice(1).reduce((sum, p, i) => sum + meters(points[i], p), 0),
+    8,
+  );
+  expect(
+    validateRoute(points, [cp], {
+      ...custom,
+      route_length_max_m: 300,
+    }).errors.join(),
+  ).toContain("300");
+  expect(
+    validateRoute(points, [cp], {
+      ...custom,
+      route_profile: "NEU_DEMO",
+      route_length_min_m: 500,
+      route_length_max_m: 600,
+    }).errors.join(),
+  ).toContain("500");
+  expect(validateRoute(points, [cp], custom).errors).toEqual([]);
+  expect(
+    validateRoute(points, [cp], {
+      ...custom,
+      route_length_min_m: 0,
+    }).errors.join(),
+  ).toContain("Chưa có giới hạn");
+  expect(validateRoute(points, [], custom).errors.join()).toContain(
+    "Cần tạo checkpoint",
+  );
+});
+it("blocks missing and contradictory edit flags", () => {
+  expect(routeAccess(undefined).blocked).toBe(true);
+  expect(routeAccess({ editable: true, locked: true }).blocked).toBe(true);
+  expect(routeAccess({ editable: true, locked: false }, true).blocked).toBe(
+    true,
+  );
+  expect(
+    routeAccess({ editable: false, locked: true, locked_reason: "Có run" })
+      .reason,
+  ).toBe("Có run");
+  expect(routeAccess({ editable: true, locked: false }).blocked).toBe(false);
 });

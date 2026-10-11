@@ -16,7 +16,7 @@ import {
   reconcileSnapshot,
   sameRun,
 } from "../services/reconcile";
-import { clearApiCache } from "../services/apiAdapter";
+import { clearApiCache, evictRace } from "../services/apiAdapter";
 import {
   setAdminKey,
   RequestError,
@@ -36,6 +36,8 @@ interface LiveContextValue {
   mergeRunners: (rows: RunSession[]) => void;
   selectRace: (id: string) => void;
   retry: () => void;
+  reloadRaces: (signal?: AbortSignal) => Promise<Race[]>;
+  forgetRace: (id: string) => void;
   refreshData: () => void;
   connection: string;
   start: () => void;
@@ -51,6 +53,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [raceId, setRaceId] = useState(
     () => sessionStorage.getItem("neu-race-id") ?? "",
   );
+  const liveCleanup = useRef<(() => void) | null>(null);
   const [dirty, setDirty] = useState(false);
   const blocker = useBlocker(dirty);
   useEffect(() => {
@@ -187,11 +190,46 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       onError: fail,
       onStatus: setConnection,
     });
+    liveCleanup.current = unsubscribe;
     return () => {
       disposed = true;
       unsubscribe();
+      if (liveCleanup.current === unsubscribe) liveCleanup.current = null;
     };
   }, [raceId, ready, listed, revision]);
+  const reloadRaces = useCallback(async (signal?: AbortSignal) => {
+    const items = await raceService.listRaces(signal);
+    if (signal?.aborted) return [];
+    setRaces(items);
+    setListed(true);
+    setSnapshot((s) =>
+      s
+        ? {
+            ...s,
+            races: items.map(
+              (r) => s.races.find((old) => old.race_id === r.race_id) ?? r,
+            ),
+          }
+        : s,
+    );
+    return items;
+  }, []);
+  const forgetRace = (id: string) => {
+    evictRace(id);
+    setRaces((rows) => rows.filter((r) => r.race_id !== id));
+    if (raceId === id) {
+      liveCleanup.current?.();
+      liveCleanup.current = null;
+      setDirty(false);
+      setSnapshot(null);
+      setRaceId("");
+      sessionStorage.removeItem("neu-race-id");
+      setConnection("disconnected");
+    } else
+      setSnapshot((s) =>
+        s ? { ...s, races: s.races.filter((r) => r.race_id !== id) } : s,
+      );
+  };
   return (
     <Context.Provider
       value={{
@@ -208,6 +246,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         selectRace,
         mergeRunners,
         retry,
+        reloadRaces,
+        forgetRace,
         refreshData: () => refreshRaceLive(raceId),
         connection,
         start: dataMode === "mock" ? simulator.start : () => {},

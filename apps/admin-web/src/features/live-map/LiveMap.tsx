@@ -11,7 +11,7 @@ import {
 } from "react-leaflet";
 import { divIcon, latLngBounds } from "leaflet";
 import { validPosition } from "../../services/contract";
-import { hasRuns, lockedMessage } from "../../services/mapEditorService";
+import { hasRuns, routeAccess } from "../../services/mapEditorService";
 import { dataMode } from "../../services";
 import type { LiveSnapshot, RunSession } from "../../types/domain";
 import { Panel } from "../../components/ui";
@@ -77,7 +77,11 @@ export function LiveMap({
   const [showCheckpoints, setShowCheckpoints] = useState(true);
   const edit = params.get("edit"),
     cpId = params.get("checkpoint");
-  const locked = hasRuns(snapshot.dashboard);
+  const access = routeAccess(
+    snapshot.dashboard?.race,
+    hasRuns(snapshot.dashboard),
+  );
+  const locked = access.blocked;
   const runners = snapshot.runners.filter((r) =>
     validPosition(r.last_latitude, r.last_longitude),
   );
@@ -165,7 +169,7 @@ export function LiveMap({
           <button
             className="button"
             disabled={locked}
-            title={locked ? lockedMessage : undefined}
+            title={locked ? access.reason : undefined}
             aria-expanded={menu}
             onClick={() => setMenu(!menu)}
           >
@@ -207,7 +211,7 @@ export function LiveMap({
           <small>Trạng thái khóa sẽ được backend kiểm tra khi lưu.</small>
         </div>
       )}
-      {locked && <p className="map-note">{lockedMessage}</p>}
+      {locked && <p className="map-note">{access.reason}</p>}
       <div className="map-wrap">
         <MapContainer
           key={
@@ -258,7 +262,7 @@ export function LiveMap({
                     <button
                       className="button"
                       disabled={locked}
-                      title={locked ? lockedMessage : undefined}
+                      title={locked ? access.reason : undefined}
                       onClick={() => open("checkpoint", c.checkpoint_id)}
                     >
                       Chỉnh vị trí

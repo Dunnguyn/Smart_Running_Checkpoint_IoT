@@ -327,7 +327,10 @@ export function subscribeLive(
         if (alive() && state && !socket) connect();
       });
   }, 15000);
+  let cleaned = false;
   return () => {
+    if (cleaned) return;
+    cleaned = true;
     if (refreshListeners.get(id) === refresh) refreshListeners.delete(id);
     stopped = true;
     controller.abort();

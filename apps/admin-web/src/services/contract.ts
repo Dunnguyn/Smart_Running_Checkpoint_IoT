@@ -1,3 +1,12 @@
+export interface RouteMetadata {
+  route_profile?: "CUSTOM" | "NEU_DEMO";
+  route_length_min_m?: number | null;
+  route_length_max_m?: number | null;
+  editable?: boolean;
+  locked?: boolean;
+  locked_reason?: string | null;
+  route_status?: string;
+}
 import type { RunSession, RaceStatus, RunDetail } from "../types/domain";
 export interface BackendRace {
   race_id: string;
@@ -5,7 +14,7 @@ export interface BackendRace {
   status: RaceStatus;
   start_at: string | null;
 }
-export interface BackendRoute {
+export interface BackendRoute extends RouteMetadata {
   points: {
     sequence_no: number;
     latitude: number;
