@@ -176,7 +176,8 @@ it("reconnects with backoff, resyncs and cancels old race requests and timers", 
   const load = vi.fn((_id: string, _signal?: AbortSignal) =>
     Promise.resolve(snapshot(1)),
   );
-  const stop = subscribeLive("race", { onSnapshot: vi.fn() }, load);
+  const onSnapshot = vi.fn();
+  const stop = subscribeLive("race", { onSnapshot }, load);
   await vi.advanceTimersByTimeAsync(0);
   const first = Socket.instances[0];
   first.readyState = 1;
@@ -191,10 +192,19 @@ it("reconnects with backoff, resyncs and cancels old race requests and timers", 
   Socket.instances[1].readyState = 1;
   Socket.instances[1].onopen?.();
   await vi.advanceTimersByTimeAsync(0);
-  expect(load).toHaveBeenCalledTimes(3);
-  await vi.advanceTimersByTimeAsync(30000);
-  expect(load).toHaveBeenCalledTimes(3);
+  const beforePoll = load.mock.calls.length;
+  // No business message arrives: periodic REST still discovers a new run.
+  const added = {...runner, student_id: "new-student", run_id: "new-run"};
+  load.mockImplementation(() => Promise.resolve({...snapshot(1), runners: [runner, added]}));
+  await vi.advanceTimersByTimeAsync(999);
+  expect(load).toHaveBeenCalledTimes(beforePoll);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(load).toHaveBeenCalledTimes(beforePoll + 1);
+  expect(onSnapshot.mock.lastCall?.[0].runners).toContainEqual(expect.objectContaining({run_id: "new-run", student_id: "new-student"}));
   stop();
+  const calls = load.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(30000);
+  expect(load).toHaveBeenCalledTimes(calls);
   expect(load.mock.calls[0][1]?.aborted).toBe(true);
   expect(Socket.instances[1].close).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(0);

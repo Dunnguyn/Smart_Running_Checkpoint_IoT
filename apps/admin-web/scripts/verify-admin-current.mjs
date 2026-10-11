@@ -168,16 +168,33 @@ try {
   await expect(
     modal.getByText(/chưa phải dữ liệu từ kit Arduino thật/),
   ).toBeVisible();
+  await expect(
+    modal.getByLabel("Khoảng cách xuất phát giữa hai người (giây)"),
+  ).toHaveValue("8");
+  await modal
+    .getByLabel("Khoảng cách xuất phát giữa hai người (giây)")
+    .fill("0");
+  await modal.getByLabel("Chế độ mô phỏng").selectOption("GPS_ONLY");
+  await modal.getByLabel("Chế độ mô phỏng").selectOption("GPS_AND_ARDUINO");
+  await expect(
+    modal.getByLabel("Khoảng cách xuất phát giữa hai người (giây)"),
+  ).toHaveValue("0");
   await modal.getByRole("button", { name: "Bắt đầu mô phỏng" }).click();
+  expect(
+    writes.find((w) => w.path === "/api/v1/simulations").body
+      .runner_start_gap_seconds,
+  ).toBe(0);
   await expect(page.getByText("Đang mô phỏng", { exact: true })).toBeVisible();
   expect(startCount).toBe(1);
   await expect.poll(() => polls).toBeGreaterThan(1);
   await page.locator('a[href="/races/a"]').click();
-  await expect(page.getByRole("link", {name:"← Tất cả giải chạy"})).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "← Tất cả giải chạy" }),
+  ).toBeVisible();
   const unmountedPolls = polls;
   await page.waitForTimeout(1800);
   expect(polls).toBe(unmountedPolls);
-  await page.getByRole("link", {name:"← Tất cả giải chạy"}).click();
+  await page.getByRole("link", { name: "← Tất cả giải chạy" }).click();
   jobStatus = "COMPLETED";
   await expect(page.getByText("Đã hoàn tất", { exact: true })).toBeVisible();
   const terminalPolls = polls;
@@ -186,6 +203,7 @@ try {
   for (const [width, height] of [
     [1366, 768],
     [1920, 1080],
+    [768, 1024],
   ]) {
     await page.setViewportSize({ width, height });
     expect(
@@ -212,7 +230,7 @@ try {
   await page.reload();
   await page.getByLabel("Admin key", { exact: true }).fill("fixture");
   await page.getByRole("button", { name: "Kết nối", exact: true }).click();
-  await expect(page.getByText(/Backend có thể đã khởi động lại/)).toBeVisible();
+  await expect(page.getByText(/Máy chủ có thể đã khởi động lại/)).toBeVisible();
   const missingPolls = polls;
   await page.waitForTimeout(1700);
   expect(polls).toBe(missingPolls);
@@ -262,8 +280,10 @@ try {
   await expect(page.getByLabel("Chọn giải chạy")).not.toHaveValue("a");
   await expect.poll(() => sockets.size).toBe(0);
   expect(page.url()).toContain("/races");
-  await page.getByRole("button", {name:"Mở bản đồ giải"}).click();
-  await expect(page.getByText(/Giải của mô phỏng không còn trong danh sách/)).toBeVisible();
+  await page.getByRole("button", { name: "Mở bản đồ giải" }).click();
+  await expect(
+    page.getByText(/Giải của mô phỏng không còn trong danh sách/),
+  ).toBeVisible();
   expect(page.url()).toContain("/races");
   active = 1;
   const rowB = page.getByRole("row").filter({ hasText: "Giải thứ hai" });
@@ -273,8 +293,9 @@ try {
   await del.getByLabel("Nhập XÓA để xác nhận").fill("XÓA");
   await expect(
     del.getByRole("button", { name: "Xóa giải", exact: true }),
-  ).toBeDisabled();
-  await del.getByRole("button", { name: "Hủy", exact: true }).click();
+  ).toBeEnabled();
+  await del.getByRole("button", { name: "Xóa giải", exact: true }).click();
+  await expect(del).toHaveCount(0);
   lostStart = true;
   await page.getByRole("button", { name: "Tạo mô phỏng", exact: true }).click();
   await modal.getByRole("button", { name: "Bắt đầu mô phỏng" }).click();
@@ -291,7 +312,7 @@ try {
       "404 after restart stops poll and keeps race link",
       "matching GET initializes form; PATCH error preserves draft and success rereads",
       "delete confirmation/409/lost-response readback, selected cache and socket cleanup",
-      "active run blocks DELETE",
+      "active run warning allows confirmed DELETE",
       "ambiguous simulation creation no retry",
       "1366 and 1920 overflow/screenshots",
     ],

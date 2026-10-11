@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useLocation } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
 import { Badge, Panel, Empty } from "../../components/ui";
 import { SimulationPanel } from "./SimulationPanel";
@@ -11,6 +11,7 @@ import { MatchingSettings } from "./MatchingSettings";
 import { datetime } from "../../utils/format";
 import { modeLabel } from "../../utils/labels";
 export function Races() {
+  const location = useLocation();
   const {
       snapshot,
       races,
@@ -70,6 +71,7 @@ export function Races() {
       {deleting && (
         <DeleteRace race={deleting} onClose={() => setDeleting(null)} />
       )}
+      {location.state?.notice && <p role="status">{location.state.notice}</p>}
       {!selected && dataMode === "api" && <SimulationPanel />}
       {creating && (
         <CreateRace

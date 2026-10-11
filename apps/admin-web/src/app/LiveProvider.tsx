@@ -18,6 +18,7 @@ import {
 } from "../services/reconcile";
 import { clearApiCache, evictRace } from "../services/apiAdapter";
 import {
+  apiBase,
   setAdminKey,
   RequestError,
   request,
@@ -51,7 +52,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
   const [races, setRaces] = useState<Race[]>([]);
   const [raceId, setRaceId] = useState(
-    () => sessionStorage.getItem("neu-race-id") ?? "",
+    () => sessionStorage.getItem(`neu-race-id:${apiBase}`) ?? "",
   );
   const liveCleanup = useRef<(() => void) | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -99,7 +100,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     setAdminKey("");
     clearApiCache();
-    sessionStorage.removeItem("neu-race-id");
+    sessionStorage.removeItem(`neu-race-id:${apiBase}`);
     setRaceId("");
     setDirty(false);
     setReady(false);
@@ -165,7 +166,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setSnapshot(null);
     if (!ready || !listed || !raceId) return;
-    sessionStorage.setItem("neu-race-id", raceId);
+    sessionStorage.setItem(`neu-race-id:${apiBase}`, raceId);
     let disposed = false;
     setError("");
     const accept = (s: LiveSnapshot) => {
@@ -223,7 +224,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       setDirty(false);
       setSnapshot(null);
       setRaceId("");
-      sessionStorage.removeItem("neu-race-id");
+      sessionStorage.removeItem(`neu-race-id:${apiBase}`);
       setConnection("disconnected");
     } else
       setSnapshot((s) =>

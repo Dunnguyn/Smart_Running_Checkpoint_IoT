@@ -174,6 +174,8 @@ export function subscribeLive(
       dirty = true;
       return;
     }
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
     loading = true;
     lastSync = Date.now();
     buffer = [];
@@ -207,7 +209,7 @@ export function subscribeLive(
           refreshTimer = undefined;
           void sync();
         },
-        Math.max(1500, 5000 - (Date.now() - lastSync)),
+        Math.max(250, 1000 - (Date.now() - lastSync)),
       );
   };
   const connect = () => {
@@ -322,11 +324,14 @@ export function subscribeLive(
       };
       emit();
     }
-    if (alive() && socket?.readyState !== 1)
+    // A connected socket does not guarantee a run-created event or delivery
+    // from another backend worker. Discover new runners even on a quiet socket.
+    const interval = typeof document !== "undefined" && document.hidden ? 15000 : 1000;
+    if (alive() && !loading && Date.now() - lastSync >= interval)
       void sync().then(() => {
         if (alive() && state && !socket) connect();
       });
-  }, 15000);
+  }, 1000);
   let cleaned = false;
   return () => {
     if (cleaned) return;

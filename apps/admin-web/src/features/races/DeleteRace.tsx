@@ -55,7 +55,10 @@ export function DeleteRace({
   }, [read, reload]);
   async function finish(signal: AbortSignal) {
     forgetRace(race.race_id);
-    navigate("/races", { replace: true });
+    navigate("/races", {
+      replace: true,
+      state: { notice: "Đã xóa giải chạy." },
+    });
     await reloadRaces(signal).catch(() => {});
     if (!signal.aborted) onClose();
   }
@@ -73,7 +76,7 @@ export function DeleteRace({
         Mã giải: <code>{race.race_id}</code>
       </p>
       <p>
-        Xóa vĩnh viễn tuyến, checkpoint/thiết bị trạm, đăng ký, phiên chạy, GPS,
+        Mọi phiên đang chạy tại thời điểm xóa sẽ bị hủy. Xóa vĩnh viễn tuyến, checkpoint/thiết bị trạm, đăng ký, phiên chạy, GPS,
         vòng chạy và sự kiện/audit thuộc giải. Hồ sơ sinh viên và wearable toàn
         hệ thống được giữ lại.
       </p>
@@ -85,8 +88,8 @@ export function DeleteRace({
         <p>Chưa xác minh điều kiện xóa.</p>
       ) : active > 0 ? (
         <p role="alert">
-          Giải có {active} phiên đang chạy. Chưa thể xóa; hãy xử lý các phiên
-          trước.
+          Giải có {active} phiên đang chạy. Các phiên này sẽ bị hủy và dữ liệu
+          thuộc giải sẽ bị xóa.
         </p>
       ) : (
         <p>Hiện không có phiên đang chạy. Backend sẽ kiểm tra lại khi xóa.</p>
@@ -130,7 +133,7 @@ export function DeleteRace({
         </>
       ) : (
         <>
-          {(active === null || active > 0) && (
+          {active === null && (
             <button
               className="button"
               disabled={busy}
@@ -143,7 +146,7 @@ export function DeleteRace({
             className="editor-fields"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (guard.current || confirmText !== "XÓA" || active !== 0)
+              if (guard.current || confirmText !== "XÓA" || active === null)
                 return;
               guard.current = true;
               setBusy(true);
@@ -154,10 +157,6 @@ export function DeleteRace({
               try {
                 const current = await read(c.signal);
                 setActive(current);
-                if (current > 0) {
-                  setError("Giải vừa có phiên đang chạy. Chưa gửi xóa.");
-                  return;
-                }
                 sent = true;
                 const result = await adminOperations.deleteRace(
                   race.race_id,
@@ -226,7 +225,7 @@ export function DeleteRace({
               </button>
               <button
                 className="button danger"
-                disabled={busy || confirmText !== "XÓA" || active !== 0}
+                disabled={busy || confirmText !== "XÓA" || active === null}
               >
                 {busy ? "Đang kiểm tra / xóa…" : "Xóa giải"}
               </button>

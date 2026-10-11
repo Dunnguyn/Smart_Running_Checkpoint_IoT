@@ -2,7 +2,7 @@ import { chromium, expect } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 const key = process.env.ADMIN_API_KEY;
 if (!key) throw new Error("ADMIN_API_KEY required in test process only");
-const base = process.env.VITE_API_BASE_URL || "http://localhost:8001/api/v1";
+const base = process.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1";
 const read = async (path) => {
   const r = await fetch(base + path, { headers: { "X-Admin-Key": key } });
   if (!r.ok) throw new Error(`GET failed ${r.status}`);
@@ -95,10 +95,13 @@ try {
   );
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole("link", { name: "Sinh viên", exact: true }).click();
-  await page.getByLabel("Tìm tên, mã sinh viên, bib").fill("01");
+  const completedRunner = done.runners.find(r=>r.status==="COMPLETED");
+  if(!completedRunner) throw new Error("No completed runner in loaded dashboard");
+  const searchCode = completedRunner.student_code;
+  await page.getByLabel("Tìm tên, mã sinh viên, bib").fill(searchCode);
   await expect(page.locator("tbody tr")).toHaveCount(1);
   const row = page.locator("tbody tr").first();
-  await expect(row).toContainText("01");
+  await expect(row).toContainText(searchCode);
   await row.getByRole("button", { name: "Chi tiết", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByRole("dialog")).toContainText("Hoàn thành");
@@ -108,7 +111,7 @@ try {
   });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByLabel("Tìm tên, mã sinh viên, bib")).toHaveValue("01");
+  await expect(page.getByLabel("Tìm tên, mã sinh viên, bib")).toHaveValue(searchCode);
   await expect(
     row.getByRole("button", { name: "Chi tiết", exact: true }),
   ).toBeFocused();
