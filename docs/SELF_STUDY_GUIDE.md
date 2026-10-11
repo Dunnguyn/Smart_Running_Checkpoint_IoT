@@ -75,6 +75,8 @@ Mục đích tách key: Admin cấu hình/đọc dashboard; Simulator gửi run 
 1. Viết helper so sánh header `X-Admin-Key`, `X-Simulator-Key`, `X-Wearable-Key`, `X-Gateway-Key` với cấu hình môi trường; thiếu/sai trả HTTP 401.
 2. Tạo `POST /api/v1/auth/admin-key`. Frontend gửi key trong header; chỉ mở dashboard khi nhận 200. Sai key trả 401 và có thể thử lại không giới hạn; không xây cơ chế khóa sau N lần.
 3. Tạo API tạo race/student/checkpoint/participant và đăng ký wearable.
+   - Luồng thêm sinh viên: `POST /api/v1/students` tạo hồ sơ, dùng `student_id` để gọi `POST /api/v1/races/{race_id}/participants`; nếu không gửi `bib_number`, backend gán tiếp `01`, `02`, ...; frontend tải lựa chọn qua `GET /api/v1/students?q=...` và roster qua `GET /api/v1/races/{race_id}/participants`.
+   - `DELETE /api/v1/races/{race_id}` dừng simulator backend quản lý, chốt timer run ACTIVE rồi xóa dữ liệu của race; hồ sơ sinh viên và wearable được giữ lại. Thiết bị/simulator ngoài backend cần ngừng gửi sau khi race bị xóa.
 4. Gán `bib_number` theo race cho mỗi participant (`01`, `02`, ...). Đây là nhãn để hiển thị, không thay thế UUID `student_id` khi liên kết API.
 5. Tạo `PUT /api/v1/races/{race_id}/route` để lưu polyline đóng, cùng một điểm anchor cho mỗi checkpoint; profile `NEU_DEMO` áp cận 400–450 m, còn `CUSTOM` dùng cận tùy chọn. Tạo `GET` để frontend tải tuyến và trạng thái khóa, `PATCH /api/v1/checkpoints/{checkpoint_id}` để sửa marker/radius. Khóa thay đổi khi đã có run để tránh đổi tuyến giữa cuộc đua.
 5. Tạo `POST /api/v1/runs`: xác nhận participant đã đăng ký, wearable thuộc đúng student, không có phiên ACTIVE khác; lưu `started_at` từ server.
@@ -135,9 +137,9 @@ Mở `http://127.0.0.1:8000/docs`, nhấn **Authorize** và nhập `ADMIN_API_KE
 {"checkpoint_mode":"GPS_ONLY","seed":42,"interval_seconds":0.5}
 ```
 
-API tự khởi chạy 5 runner `01`–`05`, tạo race mới và cho cả 5 phiên cùng thời điểm bắt đầu. Mỗi runner di chuyển liên tục trên tuyến đã lưu quanh A1/A2; tốc độ có khác nhau để tạo nhóm dẫn trước/sau. Bước chân tăng theo quãng đường với stride mô phỏng 0.62–0.82 m (xấp xỉ 6–9 bước/5 m). GPS và bước chân là dữ liệu giả lập, không phải số đo phần cứng. Route demo khoảng 425 m; giữ luật 30 giây tối thiểu/vòng nên bốn vòng mất khoảng 2 phút cộng độ trễ API.
+API tự khởi chạy 5 runner `01`–`05`, tạo race mới và di chuyển liên tục trên tuyến đã lưu quanh A1/A2. Ở `GPS_ONLY`, các phiên xuất phát đồng thời. Ở `GPS_AND_ARDUINO`, thời điểm xuất phát mặc định cách nhau 8 giây để Arduino event có một ứng viên GPS; có thể thêm `"runner_start_gap_seconds":0` để cố ý thử `AMBIGUOUS`. GPS và bước chân là dữ liệu mô phỏng; backend vẫn không tự chọn runner khi có nhiều ứng viên.
 
-Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và `race_id`; gọi `GET /api/v1/races/{race_id}/dashboard` để xem bảng xếp hạng, GPS và checkpoint. Có thể chọn `GPS_AND_ARDUINO` trong body để minh họa ghép; các runner đến sát checkpoint có thể tạo `AMBIGUOUS`. Dừng bằng `POST /api/v1/simulations/{simulation_id}/stop`; sau đó xóa giải bằng `DELETE /api/v1/races/{race_id}`. Tuyến hiện có các điểm bẻ giả lập chưa được khảo sát tại thực địa.
+Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và `race_id`; gọi `GET /api/v1/races/{race_id}/dashboard` để xem bảng xếp hạng. Dùng nhịp mặc định để minh họa auto-match; đặt `runner_start_gap_seconds=0` để kiểm tra `AMBIGUOUS`. Backend không tự chọn người gần nhất.
 
 ## 11. Tự nối frontend và thiết bị thật sau này
 
@@ -164,7 +166,7 @@ Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và
 | Tạo giải, sinh viên, wearable, checkpoint | [`app/main.py`](../app/main.py:915), [`app/main.py`](../app/main.py:1051), [`app/main.py`](../app/main.py:1060), [`app/main.py`](../app/main.py:1071) | API quản trị chuẩn bị giải và các điểm nối thiết bị. |
 | Khởi chạy 5 runner từ Admin API | [`app/main.py`](../app/main.py:944), [`app/simulator.py`](../app/simulator.py:115) | `POST /api/v1/simulations`; bib `01`–`05`, đồng bộ giờ xuất phát, GPS/bước chân di chuyển. |
 | Xem trạng thái và dừng mô phỏng | [`app/main.py`](../app/main.py:981), [`app/main.py`](../app/main.py:986) | `GET /api/v1/simulations/{simulation_id}` và `POST /api/v1/simulations/{simulation_id}/stop`. |
-| Xóa giải và dữ liệu liên quan | [`app/main.py`](../app/main.py:1008) | `DELETE /api/v1/races/{race_id}`; dừng simulator thuộc giải, trả 409 nếu vẫn còn run ACTIVE khác. |
+| Xóa giải và dữ liệu liên quan | [`app/main.py`](../app/main.py:1008) | `DELETE /api/v1/races/{race_id}`; dừng simulator được quản lý, chốt run ACTIVE rồi xóa dữ liệu giải. |
 | Tạo run và nhận GPS + steps | [`app/main.py`](../app/main.py:1280), [`app/main.py`](../app/main.py:1318) | Frontend/Admin tạo run; simulator hoặc wearable gửi telemetry. |
 | Nhận checkpoint event và xử lý match | [`app/main.py`](../app/main.py:1459), [`app/main.py`](../app/main.py:1237) | Gateway gửi event; worker đối chiếu; Admin xử lý ambiguity. |
 | API dashboard / danh sách runner / polyline | [`app/main.py`](../app/main.py:1627), [`app/main.py`](../app/main.py:1694), [`app/main.py`](../app/main.py:1715), [`app/main.py`](../app/main.py:1085) | Trả KPI, bib hiển thị, checkpoint, tuyến và vị trí runner. |

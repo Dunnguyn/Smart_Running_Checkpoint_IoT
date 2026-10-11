@@ -11,7 +11,7 @@
 - Arduino event được xác thực và ghép sau cửa sổ thời gian; một ứng viên có thể ghép tự động, nhiều ứng viên chuyển `AMBIGUOUS` để Admin xác nhận, không tự chọn người gần nhất.
 - Khi runner đạt `total_laps`, phiên tự chuyển `COMPLETED`, chốt thời gian và dừng bộ đếm. Race chuyển `COMPLETED` khi mọi participant đã hoàn tất.
 - Kiểm tra tọa độ/thời điểm/bước tăng dần, chống gửi lặp và cộng khoảng cách Haversine.
-- API Admin khởi động mặc định 5 sinh viên mô phỏng, gán bib `01`–`05`, tạo wearable/run đồng bộ thời điểm, rồi phát GPS/bước chân chuyển động quanh tòa Thế Kỷ.
+- API Admin khởi động mặc định 5 sinh viên mô phỏng, gán bib `01`–`05`, tạo wearable/run rồi phát GPS/bước chân chuyển động quanh tòa Thế Kỷ. `GPS_ONLY` cho runner xuất phát đồng thời; `GPS_AND_ARDUINO` mặc định giãn runner 8 giây để tách các event ẩn danh.
 - Simulator chạy liên tục theo polyline khép kín khoảng 425 m/vòng, đi qua bốn tọa độ checkpoint bạn cung cấp; có thêm các điểm bẻ tuyến mô phỏng để đạt 400–450 m. Các điểm bẻ hiện chưa được xác minh là đường chạy thực địa và có thể thay bằng điểm lấy từ bản đồ.
 - API khởi chạy simulator ở chế độ `GPS_ONLY` hoặc `GPS_AND_ARDUINO`; dữ liệu giả được ghi rõ nguồn, không chứng minh danh tính người thật trước cảm biến.
 - Nhận lap event chỉ từ nguồn có runner ID, kiểm tra giải, thời gian tối thiểu và sự kiện trùng.
@@ -52,7 +52,7 @@
 5. Chạy mô phỏng trực tiếp qua API, không cần mở cửa sổ terminal thứ hai:
 
    - Trong `/docs`, bấm **Authorize** và nhập giá trị `ADMIN_API_KEY` vào header `X-Admin-Key`.
-   - Gọi `POST /api/v1/simulations` với `{"checkpoint_mode":"GPS_ONLY","seed":42,"interval_seconds":0.5}`. Backend tự tạo giải demo, 5 runner `01`–`05`, 4 checkpoint, route, wearable và phiên chạy; 5 phiên có cùng thời điểm xuất phát.
+   - Gọi `POST /api/v1/simulations` với `{"checkpoint_mode":"GPS_ONLY","seed":42,"interval_seconds":0.5}`. Backend tự tạo 5 runner `01`–`05`; ở `GPS_ONLY` cả 5 phiên xuất phát cùng lúc. Trong `GPS_AND_ARDUINO`, mặc định giãn runner 8 giây; thêm `"runner_start_gap_seconds":0` để cố ý kiểm tra tình huống `AMBIGUOUS`.
    - Gọi `GET /api/v1/simulations/{simulation_id}` để xem log, trạng thái và `race_id`; dùng `GET /api/v1/races/{race_id}/dashboard` để theo dõi.
    - Nếu muốn dừng sớm, gọi `POST /api/v1/simulations/{simulation_id}/stop`. Sau đó có thể xóa giải bằng `DELETE /api/v1/races/{race_id}`.
 
@@ -84,7 +84,8 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 - Màn hình nhập khóa gọi `POST /api/v1/auth/admin-key` kèm `X-Admin-Key`; `200` cho phép mở Admin Web, `401` giữ người dùng ở màn hình nhập. API không khóa tài khoản/key sau số lần sai, theo yêu cầu demo.
 - Số `01`–`05` là bib/display ID của participant trong demo; UUID `student_id` vẫn là khóa liên kết ổn định trong API.
 - Dashboard tổng hợp dùng `GET /api/v1/races/{race_id}/dashboard`; trả summary, bảng runners, top runners và checkpoint events mới nhất.
-- Admin bắt đầu demo bằng `POST /api/v1/simulations`; poll `GET /api/v1/simulations/{simulation_id}`, dừng bằng `POST /api/v1/simulations/{simulation_id}/stop`. `DELETE /api/v1/races/{race_id}` dừng simulator được quản lý thuộc giải đó rồi xóa dữ liệu race; các phiên ACTIVE không thuộc simulator được quản lý trả HTTP 409 và cần dừng/hoàn tất trước.
+- Admin bắt đầu demo bằng `POST /api/v1/simulations`; poll `GET /api/v1/simulations/{simulation_id}`, dừng bằng `POST /api/v1/simulations/{simulation_id}/stop`. `DELETE /api/v1/races/{race_id}` dừng simulator backend quản lý, chốt timer các phiên ACTIVE còn lại rồi xóa dữ liệu thuộc giải. Hồ sơ sinh viên và wearable vẫn được giữ. Simulator/thiết bị bên ngoài phải dừng gửi sau khi xóa, nếu không sẽ nhận 404 do race/run không còn tồn tại.
+- Để thêm sinh viên: `POST /api/v1/students` tạo hồ sơ dùng chung, sau đó `POST /api/v1/races/{race_id}/participants` đăng ký với `student_id`; nếu bỏ `bib_number`, backend cấp số tiếp theo (`01`, `02`, ...); frontend lấy danh sách lựa chọn từ `GET /api/v1/students?q=...` và roster giải từ `GET /api/v1/races/{race_id}/participants`.
 - Dashboard/live trả cả polyline route có thứ tự, tọa độ checkpoint và vị trí GPS mới nhất để frontend vẽ bản đồ/tiến độ.
 - Dashboard trả danh sách 4 checkpoint đã sắp theo `sequence_no`; frontend có thể nối các tọa độ để vẽ tuyến và vẽ vị trí GPS mới nhất của từng runner.
 - Admin Web đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, thay tuyến bằng `PUT /api/v1/races/{race_id}/route` (polyline đóng, có checkpoint anchor), sửa vị trí/bán kính bằng `PATCH /api/v1/checkpoints/{checkpoint_id}`. Profile `NEU_DEMO` áp cận 400–450 m; profile `CUSTOM` dùng cận tùy chọn. Sau khi lưu route/checkpoint, FE tải lại route/dashboard để đồng bộ trạng thái đã commit. Chỉ sửa trước khi tạo run.
