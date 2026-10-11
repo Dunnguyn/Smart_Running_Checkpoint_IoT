@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Modal } from "../../components/Modal";
-import { Panel } from "../../components/ui";
+import { Panel, Badge } from "../../components/ui";
 import { useLive } from "../../app/LiveProvider";
 import {
   adminOperations,
@@ -23,7 +23,7 @@ function restore(): { id: string; raceId: string | null } | null {
   }
 }
 export function SimulationPanel() {
-  const { reloadRaces, selectRace } = useLive();
+  const { reloadRaces, selectRace, races } = useLive();
   const navigate = useNavigate();
   const [saved, setSaved] = useState(restore),
     [job, setJob] = useState<SimulationJob | null>(null);
@@ -31,6 +31,8 @@ export function SimulationPanel() {
     [mode, setMode] = useState("GPS_ONLY"),
     [seed, setSeed] = useState("42"),
     [interval, setIntervalValue] = useState("0.5");
+  const [gap, setGap] = useState("0");
+  const gapEdited = useRef(false);
   const [busy, setBusy] = useState(false),
     [uncertain, setUncertain] = useState(false),
     [missing, setMissing] = useState(false),
@@ -43,7 +45,9 @@ export function SimulationPanel() {
   function remember(value: SimulationJob) {
     const next = {
       id: value.simulation_id,
-      raceId: value.race_id ?? saved?.raceId ?? null,
+      raceId:
+        value.race_id ??
+        (saved?.id === value.simulation_id ? saved.raceId : null),
     };
     setJob(value);
     setSaved(next);
@@ -81,7 +85,7 @@ export function SimulationPanel() {
         if (f.status === 404) {
           setMissing(true);
           setError(
-            "Không còn truy xuất được trạng thái mô phỏng. Backend có thể đã khởi động lại.",
+            "Không còn truy xuất được trạng thái mô phỏng. Máy chủ có thể đã khởi động lại; thông tin theo dõi phiên mô phỏng không còn khả dụng.",
           );
           return;
         }
@@ -127,15 +131,17 @@ export function SimulationPanel() {
   return (
     <Panel
       title="Mô phỏng gần nhất trên trình duyệt này"
-      subtitle="Trạng thái job được đọc từ backend; đây không phải danh sách mọi mô phỏng của hệ thống."
+      subtitle="Chỉ theo dõi phiên mô phỏng gần nhất trên trình duyệt này."
+      action={
+        <button
+          className="button primary"
+          disabled={busy || uncertain || (!missing && jobActive(job?.status))}
+          onClick={() => setOpen(true)}
+        >
+          Tạo mô phỏng
+        </button>
+      }
     >
-      <button
-        className="button primary"
-        disabled={busy || uncertain || (!missing && jobActive(job?.status))}
-        onClick={() => setOpen(true)}
-      >
-        Tạo mô phỏng
-      </button>
       {uncertain && (
         <p role="alert">
           Chưa xác định request tạo đã thành công hay chưa. Không tự tạo thêm;
@@ -148,13 +154,28 @@ export function SimulationPanel() {
         <div className="simulation-status">
           <p>
             <strong>
+              Giải mô phỏng:{" "}
+              {races.find((r) => r.race_id === saved.raceId)?.name ??
+                "Chưa xác minh được tên giải"}
+            </strong>
+          </p>
+          <p>
+            <strong>
               {missing
-                ? "Không xác định trạng thái job"
+                ? "Chưa xác định trạng thái phiên mô phỏng"
                 : job
                   ? jobLabel(job.status)
                   : "Đang truy xuất mô phỏng…"}
             </strong>
           </p>
+          {races.find((r) => r.race_id === saved.raceId) && (
+            <p>
+              Trạng thái giải:{" "}
+              <Badge
+                status={races.find((r) => r.race_id === saved.raceId)!.status}
+              />
+            </p>
+          )}
           {job && !missing && (
             <p>
               {job.students} người · {job.laps_required} vòng · Bắt đầu{" "}
@@ -165,7 +186,7 @@ export function SimulationPanel() {
             </p>
           )}
           {job?.already_running && (
-            <p>Backend trả về mô phỏng đang chạy sẵn; không tạo job mới.</p>
+            <p>Đang theo dõi phiên mô phỏng đã chạy sẵn.</p>
           )}
           {saved.raceId && (
             <div className="filter-bar">
@@ -232,7 +253,7 @@ export function SimulationPanel() {
           )}
           <details>
             <summary>Định danh</summary>
-            <p>Job: {saved.id}</p>
+            <p>Phiên mô phỏng: {saved.id}</p>
             <p>Giải: {saved.raceId ?? "Chưa được backend trả về"}</p>
           </details>
         </div>
@@ -246,8 +267,8 @@ export function SimulationPanel() {
         >
           <p>Thao tác này tạo dữ liệu giải chạy mô phỏng mới.</p>
           <p>
-            5 người chạy · 4 vòng · Xuất phát đồng bộ (cấu hình cố định của
-            backend).
+            5 người chạy · 4 vòng. Thời điểm xuất phát tùy chế độ và khoảng cách
+            đã chọn.
           </p>
           <form
             className="editor-fields"
@@ -259,10 +280,14 @@ export function SimulationPanel() {
                 !seed.trim() ||
                 !interval.trim() ||
                 Number(interval) < 0.5 ||
-                Number(interval) > 5
+                Number(interval) > 5 ||
+                !gap.trim() ||
+                !Number.isFinite(Number(gap)) ||
+                Number(gap) < 0 ||
+                Number(gap) > 12
               ) {
                 setError(
-                  "Seed phải là số nguyên; chu kỳ GPS từ 0,5 đến 5 giây.",
+                  "Seed phải là số nguyên; chu kỳ GPS từ 0,5 đến 5 giây; khoảng cách xuất phát từ 0 đến 12 giây.",
                 );
                 return;
               }
@@ -277,6 +302,7 @@ export function SimulationPanel() {
                     checkpoint_mode: mode,
                     seed: Number(seed),
                     interval_seconds: Number(interval),
+                    runner_start_gap_seconds: Number(gap),
                   },
                   c.signal,
                 );
@@ -305,7 +331,11 @@ export function SimulationPanel() {
               <select
                 disabled={busy}
                 value={mode}
-                onChange={(e) => setMode(e.target.value)}
+                onChange={(e) => {
+                  setMode(e.target.value);
+                  if (!gapEdited.current)
+                    setGap(e.target.value === "GPS_AND_ARDUINO" ? "8" : "0");
+                }}
               >
                 <option value="GPS_ONLY">GPS — tính vòng bằng GPS</option>
                 <option value="GPS_AND_ARDUINO">
@@ -319,6 +349,27 @@ export function SimulationPanel() {
                 Arduino thật.
               </p>
             )}
+            <label>
+              Khoảng cách xuất phát giữa hai người (giây)
+              <input
+                required
+                type="number"
+                min="0"
+                max="12"
+                step="any"
+                disabled={busy}
+                value={gap}
+                onChange={(e) => {
+                  gapEdited.current = true;
+                  setGap(e.target.value);
+                }}
+              />
+            </label>
+            <p>
+              Giãn thời gian xuất phát giúp giảm trường hợp nhiều người cùng đi
+              qua checkpoint. Đặt 0 để thử tình huống xuất phát đồng thời. Vẫn
+              có thể cần xác nhận khi nhiều ứng viên trùng cửa sổ đối chiếu.
+            </p>
             <label>
               Seed tái lập
               <input

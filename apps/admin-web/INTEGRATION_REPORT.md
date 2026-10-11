@@ -1,3 +1,62 @@
+# Chu kỳ đồng bộ nền 1 giây — 11/10/2026
+
+Theo yêu cầu, giảm chu kỳ REST nền khi trang đang mở từ 5 giây xuống 1 giây. Tab ẩn vẫn 15 giây; request đang tải không bị chồng thêm. WebSocket tiếp tục cập nhật ngay, không đổi khung nhìn hoặc dữ liệu backend. Test fake timer kiểm tra chưa gọi ở 999 ms và gọi ở 1000 ms, cùng cleanup sau unmount.
+
+---
+
+# Bản đồ tự cập nhật khi có phiên chạy mới — 11/10/2026
+
+Giữ GPS cập nhật tức thời qua WebSocket; bổ sung REST resync nền mỗi 5 giây kể cả socket đang connected nhưng im lặng, 15 giây khi tab ẩn. Trước đây chỉ resync khi có message hoặc mất socket, nên có thể chưa thấy run mới nếu không nhận được sự kiện. Không tự đổi race, không phát request ghi, không fitBounds lại, không ghi đè draft. Không chồng request đang tải; hủy timer refresh đã lên lịch khi sync bắt đầu, giữ reconcile chống REST cũ ghi đè GPS mới và cleanup khi đổi race/logout.
+
+Sửa `src/services/liveService.ts`, bổ sung regression trong `reconcile.test.ts`: socket mở nhưng không có message vẫn tự nhận run mới, dừng subscription thì không còn request/timer. Không chạy simulator hoặc sửa backend để kiểm thử. GPS không phát sinh mẫu mới vẫn hiển thị cũ theo thời điểm thật, không tạo chuyển động giả.
+
+---
+
+# Đồng bộ runtime 8000 và contract ad6786c — 11/10/2026
+
+Mục này là trạng thái mới nhất; thông tin runtime 8001 và quy tắc chặn xóa ACTIVE bên dưới là lịch sử.
+
+## Runtime và đối chiếu
+
+- Source FE/BE đối chiếu: workspace `E:\Hocccc\Project\Smart_Running_Checkpoint_IoT`, nhánh fe, HEAD `ad6786c` (backend upstream `c4b8988`, frontend upstream `f972587`). Workspace sạch trước lượt này. Không checkout/reset/commit/push trong lượt này.
+- Runtime 8000: OpenAPI có GET `/api/v1/students`, GET `/api/v1/races/{race_id}/participants` và `SimulationStartIn.runner_start_gap_seconds` nullable, 0–12. Runtime 8001 thiếu cả ba. Không suy ra commit tiến trình chỉ từ health; contract runtime 8000 được đối chiếu với source ad6786c.
+- CORS health với Origin `http://localhost:5173` trả Access-Control-Allow-Origin đúng origin. FE `.env.local` đã đổi REST sang `http://localhost:8000/api/v1`, WS `ws://localhost:8000`, mode api. Vite nhận env mới; browser xác nhận socket nghiệp vụ cổng 8000 (không đếm socket HMR Vite 5173).
+- URL: `http://localhost:5173/races` và `/runners`. Không dừng/thay thế backend nào; 8000 và 8001 đều giữ nguyên. FE chỉ dùng 8000. Không chạy simulator. `.env.local` bị ignore, không chứa key được thêm vào source.
+- Namespace race selection theo API base; chỉ khôi phục ID có trong GET danh sách giải. Simulation ID đã có namespace theo API base. Sửa thêm lỗi phiên mô phỏng mới chưa trả race_id có thể kế thừa race_id của phiên cũ: chỉ giữ ID race khi đúng cùng simulation_id.
+
+## Thay đổi FE
+
+- **Xóa giải:** bỏ chặn ACTIVE; giữ đọc số run để cảnh báo. Thông báo rõ mọi run ACTIVE tại thời điểm xóa bị hủy và dữ liệu thuộc giải bị xóa; hồ sơ sinh viên/wearable toàn hệ thống được giữ. Nhập XÓA, focus mặc định nút Đóng an toàn trong dialog native, chống gửi lặp. Chỉ gửi DELETE, không gọi stop/finish từng tài nguyên. Đọc lại danh sách khi mất response; 401/403/500 không tự chứng minh xóa thành công. Sau xác nhận, dọn đúng cache/socket/selection và thông báo thành công.
+- **Mô phỏng:** thêm khoảng cách xuất phát 0–12 giây. Mặc định GPS_ONLY 0, GPS_AND_ARDUINO 8 theo simulator; đổi chế độ chỉ áp default nếu người dùng chưa chỉnh. Giá trị 0 được gửi nguyên. Nhãn thân thiện, tên giải mô phỏng và trạng thái giải tách trạng thái phiên mô phỏng; ID/log nằm trong details. Nút tạo nằm cùng heading, thông tin kết thúc gọn. 404 chỉ báo có thể máy chủ đã khởi động lại, không khẳng định race còn tồn tại. Mở giải vẫn đọc kiểm chứng trước điều hướng. Giữ backoff/cleanup/không tự retry POST chưa rõ kết quả.
+- **Sinh viên:** giữ trang `/runners`, thêm lựa chọn Phiên chạy / Đăng ký của giải / Sinh viên toàn hệ thống. GET students tìm trên server với q, limit=20, offset; debounce 300 ms và AbortController, không cho response cũ ghi đè. Không giả tổng số vì API không trả total. Có trang trước/tiếp, loading/error/retry/empty, giữ focus search.
+- **Đăng ký:** GET participants riêng từng race; ID liên kết không dùng bib; giữ `01`, phân biệt đăng ký với bằng chứng có run trong snapshot. Nếu không thấy run trong dữ liệu đã tải, không kết luận đang chạy hay chưa từng có run. Form dùng sinh viên thật từ GET students; POST participant chỉ student_id và bib_number nếu nhập. Bib trống bỏ field để backend cấp; BIB_NUMBER_EXISTS hiện gần input, giữ draft. Không tạo run. Sau lưu refetch roster/snapshot; đóng form cũng cho đọc lại để đối chiếu kết quả chưa rõ. Timeout POST không tự gửi lại.
+- **UX:** loading ban đầu có skeleton, nền giữ bảng khi refetch; bảng scroll trong vùng, thao tác rõ; spacing/readability, reduced-motion. Giữ editor/route/matching/map; không thay thư viện, không fake GPS/data.
+
+## File thay đổi
+
+`src/app/LiveProvider.tsx` (namespace), `src/app/main.tsx` (trang People), `src/features/races/{DeleteRace,Races,SimulationPanel}.tsx`, `src/services/adminOperations.ts`, mới `src/features/runners/People.tsx`, `src/services/enrollment.ts`, `enrollment.test.ts`, `src/styles.css`; scripts `verify-admin-current.mjs`, `verify-ux-readonly.mjs`, mới `verify-enrollment.mjs`, `verify-people-readonly.mjs`; `.env.local` (ignored), README/API_COVERAGE/report.
+
+## Kiểm thử
+
+- Typecheck/build đạt; 37/37 unit test, 8 file. Bao gồm CUSTOM/null limits, đóng vòng, khóa, reconcile và payload bib. Lint đạt sau loại biến không dùng trong test.
+- Fixture browser quản trị: 9 request ghi bị intercept, 0 ghi thật. ACTIVE được xác nhận xóa; nhập XÓA, 409 tương thích backend cũ, lost-response readback, dọn socket/cache; gap default 8 và 0 giữ qua đổi mode; polling dừng terminal/unmount; mất job không tạo mới. Viewport 1366, 1920, 768 không tràn ngang toàn trang.
+- Fixture enrollment: 2 POST bị intercept, 0 ghi thật. Bib trùng giữ input; bib trống bỏ field; hiển thị 01; response search/race cũ bị bỏ qua, search giữ focus; 3 viewport.
+- Browser đọc thật 8000: GET students/participants/dashboard/live thành công, WS nghiệp vụ chỉ 8000, 0 request ghi nghiệp vụ, 0 page error. POST xác thực Admin là kiểm tra key, không tính là ghi nghiệp vụ; secret chỉ trong bộ nhớ tiến trình kiểm thử.
+- Hồi quy đọc thật: overview/reflow, drawer Escape/focus, đúng runner COMPLETED, khóa editor, marker/list/pan, checkpoint tabs, đổi race/reconnect một socket, logout; 0 request ghi nghiệp vụ. 0 WS message nghiệp vụ trong phiên test; chưa chứng minh GPS streaming thật.
+- Test cũ giả định bib 01 đã COMPLETED không đúng dữ liệu hiện tại; đã chọn runner theo trạng thái backend, không sửa dữ liệu. Test kết nối mới ban đầu đếm cả HMR; đã chỉ đếm `/ws/v1/`. Đây là sửa test, không báo lỗi backend.
+- Build còn cảnh báo JS khoảng 600 kB minified / 185 kB gzip. Không phải lỗi chức năng; chưa tách module bản đồ để tránh mở rộng phạm vi. Không thêm dependency.
+
+## Ảnh và giới hạn
+
+Ảnh **API thật**: `test-results/new-runtime/students-1366.png`, `students-1920.png`, `students-768.png`, `participants.png`; hồi quy `test-results/ux/`.
+Ảnh **fixture**: `test-results/current/races-1366.png`, `races-1920.png`, `races-768.png`, `participants-1366.png`, `participants-1920.png`, `participants-768.png`, `delete-confirm.png`. Không chứa Admin key. Test-results bị ignore.
+
+Chưa E2E ghi thật DELETE ACTIVE, tạo/dừng mô phỏng, đăng ký, route/checkpoint/matching/resolve. Không phát hiện lỗi backend có bằng chứng trong luồng đọc lần này. API students không có total nên trang tiếp có thể rỗng khi tổng là bội số 20; không bịa tổng. API job không có danh sách toàn hệ thống và có thể mất sau restart. Giữ giới hạn chưa có ETag chống ghi route giữa nhiều admin.
+
+Xác nhận: chỉ sửa FE/cấu hình/tài liệu FE. `git diff -- services/backend` rỗng. Không sửa backend .env/database/migration, không tạo/xóa dữ liệu lịch sử, không chạy/dừng mô phỏng hay backend, không commit/push.
+
+---
+
 # Tích hợp backend main cba5339 — 11/10/2026
 
 Phần này thay thế thông tin runtime và contract trong các mục lịch sử bên dưới.

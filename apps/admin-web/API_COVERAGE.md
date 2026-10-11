@@ -1,3 +1,15 @@
+# Đồng bộ runtime 8000 — ad6786c — 11/10/2026
+
+- GET `/api/v1/students`: đã nối tab toàn hệ thống và picker đăng ký; q/limit/offset, không có total.
+- GET `/api/v1/races/{race_id}/participants`: đã nối tab đăng ký của giải.
+- POST `/api/v1/races/{race_id}/participants`: đã nối form; bib trống bỏ field, server tự cấp; BIB_NUMBER_EXISTS tại input.
+- DELETE race: đã bỏ chặn ACTIVE theo contract mới; server hủy run rồi xóa. FE không tự gọi finish/stop trước DELETE.
+- POST simulations: đã thêm runner_start_gap_seconds 0–12; default theo mode, giữ 0 và giá trị tự chỉnh.
+
+Các luồng đọc đã kiểm tra thật ở 8000; mutation chỉ fixture cô lập. Phần dưới là lịch sử và đã được thay thế ở các mục trên. Xem [báo cáo mới nhất](INTEGRATION_REPORT.md).
+
+---
+
 # Bổ sung đối chiếu cba5339 — 11/10/2026
 
 Runtime 8001 dùng worktree `backend-current-main`. Các API mới đã nối giao diện:

@@ -10,7 +10,7 @@ import {
 import { Shell } from "../layouts/Shell";
 import { LiveProvider } from "./LiveProvider";
 import { Dashboard, SimulationControls } from "../features/dashboard/Dashboard";
-import { RunnerTable } from "../features/runners/RunnerTable";
+import { People } from "../features/runners/People";
 import { RunDetail } from "../features/runners/RunDetail";
 import { Races } from "../features/races/Races";
 import { Checkpoints } from "../features/checkpoints/Checkpoints";
@@ -28,7 +28,7 @@ function RunnersPage() {
         </div>
         <SimulationControls />
       </div>
-      <RunnerTable />
+      <People />
     </>
   );
 }

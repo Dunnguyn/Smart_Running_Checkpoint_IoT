@@ -24,7 +24,12 @@ export const jobLabel = (status: string) =>
   })[status] ?? `Trạng thái: ${status}`;
 export const adminOperations = {
   start: (
-    body: { checkpoint_mode: string; seed: number; interval_seconds: number },
+    body: {
+      checkpoint_mode: string;
+      seed: number;
+      interval_seconds: number;
+      runner_start_gap_seconds: number;
+    },
     signal?: AbortSignal,
   ) => request<SimulationJob>("/simulations", { method: "POST", body, signal }),
   job: (id: string, signal?: AbortSignal) =>
@@ -37,8 +42,9 @@ export const adminOperations = {
       signal,
     }),
   deleteRace: (id: string, signal?: AbortSignal) =>
-    request<{ deleted: boolean; race_id: string }>(
-      `/races/${encodeURIComponent(id)}`,
-      { method: "DELETE", signal },
-    ),
+    request<{
+      deleted: boolean;
+      race_id: string;
+      cancelled_active_runs: number;
+    }>(`/races/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
 };

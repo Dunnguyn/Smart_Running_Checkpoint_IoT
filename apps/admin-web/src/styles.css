@@ -2783,3 +2783,51 @@ th button {
   color: #a11c2d;
   border-color: #e4a6ac;
 }
+
+.people-panel {
+  padding: 20px;
+  margin-top: 16px;
+}
+.people-panel input {
+  display: block;
+  width: 100%;
+  max-width: 520px;
+  margin-top: 8px;
+}
+.people-panel table {
+  width: 100%;
+  min-width: 520px;
+}
+.people-panel th,
+.people-panel td {
+  padding: 12px;
+  text-align: left;
+}
+.people-panel .table-scroll {
+  overflow-x: auto;
+}
+.simulation-status {
+  padding: 0 20px 16px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.people-panel > p {
+  margin: 12px 0;
+}
+.people-panel > .button {
+  margin: 0 8px 12px 0;
+}
+.people-panel th {
+  background: #eef3fb;
+}
+.races-table strong {
+  overflow-wrap: anywhere;
+}
