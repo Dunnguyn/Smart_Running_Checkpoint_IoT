@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, select, text, update
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, or_, select, text, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
@@ -1011,7 +1011,7 @@ def stop_demo_simulation(simulation_id: str):
 @app.delete("/api/v1/races/{race_id}", dependencies=[Depends(admin)])
 def delete_race(race_id: str, db: Session = Depends(db_session)):
     """Delete one race and its race-owned records while preserving student profiles."""
-    get_or_404(db, Race, race_id, "giải chạy")
+    race = get_or_404(db, Race, race_id, "giải chạy")
     for simulation_id, job in list(_simulation_jobs.items()):
         process = job.get("process")
         if not process or process.poll() is not None:
@@ -1021,9 +1021,19 @@ def delete_race(race_id: str, db: Session = Depends(db_session)):
             stop_demo_simulation(simulation_id)
         elif not snapshot.get("race_id"):
             envelope_error("SIMULATOR_STARTING", "Mô phỏng đang tạo giải; hãy đợi lấy được race_id hoặc dừng mô phỏng rồi thử lại.", 409)
+    # Removing a race is an explicit admin action. Freeze active timers first,
+    # then remove their data together with the race in the same transaction.
+    db.expire_all()
     active_runs = db.scalars(select(RunSession).where(RunSession.race_id == race_id, RunSession.status == "ACTIVE")).all()
-    if active_runs:
-        envelope_error("RACE_HAS_ACTIVE_RUNS", "Hãy hoàn thành hoặc dừng các phiên chạy ACTIVE trước khi xóa giải.", 409)
+    cancelled_active_runs = len(active_runs)
+    cancelled_at = now_utc()
+    for run in active_runs:
+        run.status = "CANCELLED"
+        run.ended_at = cancelled_at
+        run.duration_total_s = max(0, int((cancelled_at - aware(run.started_at)).total_seconds()))
+    if cancelled_active_runs:
+        race.status = "CANCELLED"
+        race.end_at = cancelled_at
 
     checkpoint_ids = db.scalars(select(Checkpoint.id).where(Checkpoint.race_id == race_id)).all()
     run_ids = db.scalars(select(RunSession.id).where(RunSession.race_id == race_id)).all()
@@ -1048,7 +1058,7 @@ def delete_race(race_id: str, db: Session = Depends(db_session)):
     db.query(Checkpoint).filter(Checkpoint.race_id == race_id).delete(synchronize_session=False)
     db.delete(db.get(Race, race_id))
     db.commit()
-    return {"deleted": True, "race_id": race_id}
+    return {"deleted": True, "race_id": race_id, "cancelled_active_runs": cancelled_active_runs}
 
 
 @app.post("/api/v1/students", status_code=201, dependencies=[Depends(admin)])
@@ -1057,6 +1067,30 @@ def create_student(data: StudentIn, db: Session = Depends(db_session)):
         envelope_error("STUDENT_CODE_EXISTS", "Mã sinh viên đã tồn tại.")
     student = Student(**data.model_dump()); db.add(student); db.commit(); db.refresh(student)
     return {"student_id": student.id, "student_code": student.student_code, "full_name": student.full_name}
+
+@app.get("/api/v1/students", dependencies=[Depends(admin)])
+def list_students(
+    q: str | None = Query(default=None, min_length=1, max_length=160),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(db_session),
+):
+    """Admin picker for existing student profiles when enrolling a runner."""
+    stmt = select(Student)
+    if q:
+        pattern = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Student.student_code.ilike(pattern), Student.full_name.ilike(pattern)))
+    students = db.scalars(stmt.order_by(Student.student_code).offset(offset).limit(limit)).all()
+    return {
+        "items": [
+            {"student_id": student.id, "student_code": student.student_code,
+             "full_name": student.full_name, "faculty": student.faculty,
+             "status": student.status}
+            for student in students
+        ],
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 # [DEVICE LINK: GPS + STEPS] Admin pairs a wearable ID with the runner before starting.
@@ -1259,12 +1293,43 @@ def patch_checkpoint_matching(race_id: str, data: MatchingConfigPatch, db: Sessi
             "locked_reason": "Phiên chạy đầu tiên đã được tạo." if race.matching_locked_at else None}
 
 
+@app.get("/api/v1/races/{race_id}/participants", dependencies=[Depends(admin)])
+def list_participants(race_id: str, db: Session = Depends(db_session)):
+    """Return a race roster with display bibs and linked student profile fields."""
+    get_or_404(db, Race, race_id, "giải chạy")
+    rows = db.execute(
+        select(RaceParticipant, Student)
+        .join(Student, Student.id == RaceParticipant.student_id)
+        .where(RaceParticipant.race_id == race_id)
+        .order_by(RaceParticipant.bib_number, Student.student_code)
+    ).all()
+    return {
+        "race_id": race_id,
+        "items": [
+            {"participant_id": participant.id, "student_id": student.id,
+             "student_code": student.student_code, "full_name": student.full_name,
+             "faculty": student.faculty, "display_id": participant.bib_number,
+             "bib_number": participant.bib_number,
+             "registration_status": participant.registration_status}
+            for participant, student in rows
+        ],
+    }
+
+
 @app.post("/api/v1/races/{race_id}/participants", status_code=201, dependencies=[Depends(admin)])
 def add_participant(race_id: str, data: ParticipantIn, db: Session = Depends(db_session)):
     get_or_404(db, Race, race_id, "giải chạy"); get_or_404(db, Student, data.student_id, "sinh viên")
     existing = db.scalar(select(RaceParticipant).where(RaceParticipant.race_id == race_id, RaceParticipant.student_id == data.student_id))
     if existing: envelope_error("ALREADY_REGISTERED", "Sinh viên đã đăng ký giải chạy.")
-    participant = RaceParticipant(race_id=race_id, **data.model_dump()); db.add(participant); db.commit()
+    bib_number = (data.bib_number or "").strip()
+    if not bib_number:
+        current_bibs = db.scalars(select(RaceParticipant.bib_number).where(RaceParticipant.race_id == race_id)).all()
+        used_numbers = [int(value) for value in current_bibs if value and value.isdigit()]
+        bib_number = f"{max(used_numbers, default=0) + 1:02d}"
+    if db.scalar(select(RaceParticipant.id).where(RaceParticipant.race_id == race_id, RaceParticipant.bib_number == bib_number)):
+        envelope_error("BIB_NUMBER_EXISTS", "Số báo danh đã được dùng trong giải.")
+    participant = RaceParticipant(race_id=race_id, student_id=data.student_id, bib_number=bib_number)
+    db.add(participant); db.commit()
     return {"race_id": race_id, "student_id": data.student_id, "registration_status": "REGISTERED", "display_id": participant.bib_number, "bib_number": participant.bib_number}
 
 
