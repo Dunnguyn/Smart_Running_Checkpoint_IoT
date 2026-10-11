@@ -1,3 +1,4 @@
+import { Link, useLocation, useBlocker } from "react-router-dom";
 import {
   createContext,
   useCallback,
@@ -25,10 +26,13 @@ import {
 } from "../services/client";
 import type { LiveSnapshot, Race, RunSession } from "../types/domain";
 interface LiveContextValue {
+  logout: () => void;
+  setDirty: (dirty: boolean) => void;
   snapshot: LiveSnapshot | null;
   error: string;
   raceId: string;
   races: Race[];
+  racesLoaded: boolean;
   mergeRunners: (rows: RunSession[]) => void;
   selectRace: (id: string) => void;
   retry: () => void;
@@ -40,11 +44,47 @@ interface LiveContextValue {
 }
 const Context = createContext<LiveContextValue | null>(null);
 export function LiveProvider({ children }: { children: ReactNode }) {
+  const location = useLocation();
   const [snapshot, setSnapshot] = useState<LiveSnapshot | null>(null);
   const [error, setError] = useState("");
   const [races, setRaces] = useState<Race[]>([]);
-  const [raceId, selectRace] = useState(
+  const [raceId, setRaceId] = useState(
     () => sessionStorage.getItem("neu-race-id") ?? "",
+  );
+  const [dirty, setDirty] = useState(false);
+  const blocker = useBlocker(dirty);
+  useEffect(() => {
+    if (blocker.state === "blocked") {
+      if (window.confirm("Có thay đổi chưa lưu. Bỏ thay đổi và rời trang?")) {
+        setDirty(false);
+        blocker.proceed();
+      } else blocker.reset();
+    }
+  }, [blocker]);
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  const selectRace = useCallback(
+    (id: string) => {
+      if (
+        id !== raceId &&
+        dirty &&
+        !window.confirm("Bỏ thay đổi bản đồ chưa lưu để đổi giải?")
+      )
+        return;
+      if (id !== raceId) {
+        setDirty(false);
+        setRaceId(id);
+      }
+    },
+    [dirty, raceId],
   );
   const [ready, setReady] = useState(dataMode === "mock");
   const [authBusy, setAuthBusy] = useState(false);
@@ -57,7 +97,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     setAdminKey("");
     clearApiCache();
     sessionStorage.removeItem("neu-race-id");
-    selectRace("");
+    setRaceId("");
+    setDirty(false);
     setReady(false);
     setSnapshot(null);
     setRaces([]);
@@ -104,7 +145,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         if (disposed) return;
         setRaces(items);
         setListed(true);
-        selectRace((current) =>
+        setRaceId((current) =>
           items.some((r) => r.race_id === current)
             ? current
             : (items[0]?.race_id ?? ""),
@@ -154,10 +195,16 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   return (
     <Context.Provider
       value={{
+        logout: () => {
+          if (!dirty || window.confirm("Bỏ thay đổi chưa lưu và đăng xuất?"))
+            logout();
+        },
+        setDirty,
         snapshot,
         error,
         raceId,
         races,
+        racesLoaded: listed,
         selectRace,
         mergeRunners,
         retry,
@@ -218,53 +265,21 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         </main>
       ) : (
         <>
-          <div className="connection-bar">
-            <span>
-              {dataMode === "api"
-                ? `API thật · WebSocket: ${connection}`
-                : "Mock frontend"}
-            </span>
-            <label>
-              Giải chạy{" "}
-              <select
-                aria-label="Chọn giải chạy"
-                value={raceId}
-                onChange={(e) => selectRace(e.target.value)}
-              >
-                {races.map((r) => (
-                  <option key={r.race_id} value={r.race_id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button className="button" onClick={retry}>
-              Thử lại / Làm mới
-            </button>
-            {dataMode === "api" && (
-              <button
-                className="button"
-                onClick={() => {
-                  logout();
-                  setError("");
-                }}
-              >
-                Đăng xuất
-              </button>
-            )}
-          </div>
           {error && (
             <div className="connection-error" role="alert">
               {error}
             </div>
           )}
-          {listed && !races.length ? (
+          {listed && !races.length && location.pathname !== "/races" ? (
             <div className="empty">
               <h2>Chưa có giải chạy</h2>
               <p>
-                Backend chưa trả về giải chạy. Nhờ người quản trị chuẩn bị giải
-                và dữ liệu demo được phép sử dụng, rồi nhấn Làm mới.
+                Chưa có giải chạy. Tạo giải và cấu hình tuyến trước khi bắt đầu
+                phiên chạy.
               </p>
+              <Link className="button primary" to="/races">
+                Tạo giải chạy
+              </Link>
             </div>
           ) : (
             children

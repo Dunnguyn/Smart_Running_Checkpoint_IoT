@@ -10,9 +10,11 @@
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview --host localhost --port 5174",
-    "test:ui": "node scripts/verify-ui.mjs",
+    "test:ui": "node scripts/verify-map-editor.mjs",
     "test:backend:read": "node scripts/verify-backend-readonly.mjs",
-    "format": "prettier --write src scripts *.json *.ts *.js *.html *.md"
+    "format": "prettier --write src scripts *.json *.ts *.js *.html *.md",
+    "test:ui:readonly": "node scripts/verify-ux-readonly.mjs",
+    "test:ui:editor": "node scripts/verify-map-editor.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

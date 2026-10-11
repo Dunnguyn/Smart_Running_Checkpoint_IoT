@@ -1,8 +1,14 @@
+> Đã có form **Tạo giải chạy** tại `/races`. Xem [API_COVERAGE.md](API_COVERAGE.md) để biết các API đã nối/chưa nối. Kiểm thử form không ghi thật: `node scripts/verify-race-create.mjs` (cần frontend dev tại 5173).
+
+> UX/UI và editor bản đồ đã cập nhật ngày 10/10/2026. Xem [bàn giao và giới hạn kiểm thử](INTEGRATION_REPORT.md). `npm run test:ui:editor` kiểm thử editor bằng API fixture cô lập; `npm run test:ui:readonly` kiểm thử đọc backend đang chạy, cần ADMIN_API_KEY trong môi trường tiến trình. Không chạy thao tác ghi thật để kiểm thử. Các ví dụ port 8000 phía dưới là lịch sử; runtime hiện tại dùng 8001.
+
 # NEU Smart Running · Admin Web
 
 Frontend React/TypeScript/Vite hiện dùng FastAPI thật qua REST và WebSocket; giữ chế độ mock độc lập. Backend quyết định danh tính liên kết, số vòng, bước chân, quãng đường, thứ tự top runner và hoàn thành. Frontend không gửi GPS/Gateway event và không chạy simulator trong luồng ứng dụng.
 
 ## Chạy local
+
+**Tích hợp hiện tại (10/10/2026):** FE ở nhánh `fe`; backend `42e5478` chạy từ worktree riêng tại cổng **8001**. Xem [INTEGRATION_REPORT.md](INTEGRATION_REPORT.md) để lấy đúng đường dẫn, commit và cấu hình startup. FE `.env` hiện dùng REST `http://localhost:8001/api/v1`, WS `ws://localhost:8001`; chạy `npm.cmd run dev -- --host 127.0.0.1 --port 5173 --strictPort` rồi mở `http://localhost:5173`. Các lệnh 8000 bên dưới là ví dụ cho checkout có backend phù hợp, không dùng để khởi động thêm backend cũ trong workspace FE này.
 
 Backend (PowerShell tại `services/backend`, cấu hình `.env` riêng theo README backend):
 
@@ -70,7 +76,7 @@ Dùng `/ws/v1/races/{race_id}/live?key=…` tạo bằng URL/URLSearchParams, kh
 ## Contract còn thiếu / giới hạn có chủ ý
 
 - Dashboard chỉ trả checkpoint_mode/config_version, **không trả các giá trị bán kính/cửa sổ/grace hoặc matching_locked_at**. FE hiển thị thông số chưa biết là “—”, gửi PATCH các trường được nhập; hiển thị giá trị PATCH trả về sau khi lưu. Không dùng PATCH rỗng làm API đọc. Không suy trạng thái khóa từ dashboard.started_runners: hiển thị chưa có dữ liệu khóa, chỉ khóa form sau 409 có code MATCHING_CONFIG_LOCKED. Cần endpoint GET cấu hình/flag khóa để hiển thị đầy đủ sau reload.
-- Chưa có GET danh sách/metadata/geometry checkpoint hoặc route. Không trộn mock; nhật ký hiển thị ID checkpoint và device ID. Form đăng ký cần checkpoint ID do backend cấp. Chưa có GET/sửa/xóa thiết bị.
+- Backend `42e5478` trả route (`points`, `distance_m`) và metadata checkpoint trong dashboard, route trong live và GET `/races/{race_id}/route`. FE vẽ tuyến đã lưu, marker checkpoint/GPS đúng tọa độ, báo rõ race thiếu tuyến; không nối checkpoint thành tuyến. Có bảng checkpoint và lọc nhật ký theo checkpoint UUID. Đã có editor tuyến/checkpoint với draft riêng, cảnh báo rời trang, validation/khóa và đọc lại sau lưu; xem báo cáo hiện hành. Chưa có GET/sửa/xóa thiết bị.
 - Candidate.available trong source là snapshot lưu trong candidates_json, có thể cũ khi passage đã bị event khác dùng. UI ghi rõ và backend kiểm tra lại khi resolve; 409 không tự chọn người khác.
 - Response chỉ có checkpoint_source=ARDUINO_GATEWAY, không có cờ Gateway giả/thật hay online đáng tin cậy. Không ghi “Arduino online”. telemetry_source hiển thị đúng backend (ví dụ SIMULATED_GPS); kết quả ghép không xác minh danh tính người thật trước sensor.
 - Không có GET passage đang chờ: thông báo passage mới từ WS là tạm thời, không được coi là toàn bộ backlog sau reload. Nhật ký event vẫn đọc từ backend.

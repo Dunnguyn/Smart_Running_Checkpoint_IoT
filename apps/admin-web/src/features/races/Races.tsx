@@ -1,132 +1,233 @@
-import { MatchingSettings } from "./MatchingSettings";
-import { useEffect } from "react";
-import { dataMode } from "../../services";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import {
-  Plus,
-  ArrowLeft,
-  CalendarDays,
-  MapPin,
-  Users,
-  Flag,
-} from "lucide-react";
 import { useLive } from "../../app/LiveProvider";
 import { Badge, Panel, Empty } from "../../components/ui";
+import { CreateRace } from "./CreateRace";
+import { dataMode } from "../../services";
+import { MatchingSettings } from "./MatchingSettings";
 import { datetime } from "../../utils/format";
+import { modeLabel } from "../../utils/labels";
 export function Races() {
-  const { snapshot, error, selectRace, races } = useLive(),
+  const {
+      snapshot,
+      races,
+      racesLoaded,
+      retry,
+      raceId: current,
+      selectRace,
+    } = useLive(),
     { raceId } = useParams();
+  const [query, setQuery] = useState(""),
+    [status, setStatus] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState("");
   useEffect(() => {
     if (raceId && races.some((r) => r.race_id === raceId)) selectRace(raceId);
   }, [raceId, races, selectRace]);
-  if (error)
-    return <Empty title="Dữ liệu không khả dụng" description={error} />;
-  if (!snapshot) return <div className="empty">Đang tải giải chạy…</div>;
-  const selected = snapshot.races.find((r) => r.race_id === raceId);
+  if (raceId && !snapshot)
+    return (
+      <div className="skeleton" role="status">
+        Đang tải giải chạy…
+      </div>
+    );
+  const selected = snapshot?.races.find((r) => r.race_id === raceId);
   if (raceId && !selected)
     return (
       <Empty
-        title="Không tìm thấy giải chạy"
-        description="Kiểm tra lại đường dẫn."
+        title="Không tìm thấy giải"
+        description="Chọn một giải trong danh sách."
       />
+    );
+  const rows = races
+    .map((r) => snapshot?.races.find((item) => item.race_id === r.race_id) ?? r)
+    .filter(
+      (r) =>
+        r.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
+        (!status || r.status === status),
     );
   return (
     <>
-      {raceId && (
-        <Link className="back-link" to="/races">
-          <ArrowLeft size={16} /> Tất cả giải chạy
-        </Link>
-      )}
       <div className="page-title">
         <div>
-          <div className="eyebrow">QUẢN LÝ SỰ KIỆN</div>
           <h1>{selected?.name ?? "Giải chạy"}</h1>
           <p>
-            Danh sách và thông tin giải chạy ·{" "}
-            {dataMode === "api" ? "API thật" : "Mock frontend"}
+            {selected
+              ? "Thông tin giải đang xem"
+              : "Chọn giải để theo dõi tiến độ và xử lý sự kiện."}
           </p>
         </div>
-        <div className="disabled-action">
-          <button
-            className="button"
-            disabled
-            title="Chưa có form tạo/sửa giải; backend có POST tạo, chưa có API sửa"
-          >
-            <Plus size={16} /> {selected ? "Chỉnh sửa" : "Tạo giải chạy"}
+        {selected && <Badge status={selected.status} />}
+        {!selected && dataMode === "api" && (
+          <button className="button primary" onClick={() => setCreating(true)}>
+            Tạo giải chạy
           </button>
-          <small>Chưa có form tạo / sửa</small>
-        </div>
+        )}
       </div>
-      {selected && dataMode === "api" && <MatchingSettings />}
-      {selected ? (
-        <Panel
-          title="Thông tin giải chạy"
-          action={<Badge status={selected.status} />}
-        >
-          <dl className="info-list">
-            <dt>Tên giải</dt>
-            <dd>{selected.name}</dd>
-            <dt>Thời gian</dt>
-            <dd>{datetime(selected.started_at)}</dd>
-            <dt>Địa điểm</dt>
-            <dd>{selected.location}</dd>
-            <dt>Sinh viên đăng ký</dt>
-            <dd>{selected.participant_count ?? "—"}</dd>
-            <dt>Số vòng</dt>
-            <dd>{selected.total_laps ?? "—"}</dd>
-            <dt>Số checkpoint</dt>
-            <dd>
-              {dataMode === "api"
-                ? "—"
-                : snapshot.checkpoints.filter(
-                    (c) => c.race_id === selected.race_id,
-                  ).length}
-            </dd>
-            <dt>Tuyến chạy</dt>
-            <dd>
-              {dataMode === "mock" && selected.race_id === "neu-2026"
-                ? "Tuyến minh họa nội bộ · 1 km/vòng"
-                : "Chưa có tuyến minh họa"}
-            </dd>
-          </dl>
-          {selected.status === "LIVE" && (
-            <Link className="panel-link" to="/live">
-              Mở bản đồ trực tiếp →
+      {creating && (
+        <CreateRace
+          onClose={() => setCreating(false)}
+          onCreated={(id) => {
+            setCreating(false);
+            setCreated(id);
+            setQuery("");
+            setStatus("");
+            retry();
+          }}
+          onRefresh={retry}
+        />
+      )}
+      {created && (
+        <p className="success-message" role="status">
+          Đã tạo giải chạy.{" "}
+          {races.some((r) => r.race_id === created) && (
+            <Link to={`/races/${created}`}>Mở giải vừa tạo</Link>
+          )}
+        </p>
+      )}
+      {selected && snapshot ? (
+        <>
+          <Link className="text-link" to="/races">
+            ← Tất cả giải chạy
+          </Link>
+          <Panel title="Thông tin giải">
+            <dl className="info-list">
+              <dt>Lịch chạy</dt>
+              <dd>
+                {selected.started_at
+                  ? datetime(selected.started_at)
+                  : "Chưa có lịch"}
+              </dd>
+              <dt>Địa điểm</dt>
+              <dd>
+                {selected.location === "—"
+                  ? "Chưa có địa điểm"
+                  : selected.location}
+              </dd>
+              <dt>Số vòng</dt>
+              <dd>{selected.total_laps ?? "Chưa có thông tin"}</dd>
+              <dt>Người tham gia</dt>
+              <dd>{selected.participant_count ?? "Đang tải"}</dd>
+              <dt>Checkpoint</dt>
+              <dd>{snapshot.checkpoints.length}</dd>
+              <dt>Tuyến</dt>
+              <dd>
+                {snapshot.routeMessage ??
+                  `${snapshot.routeDistance_m ?? "—"} m`}
+              </dd>
+              <dt>Chế độ</dt>
+              <dd>
+                {snapshot.dashboard
+                  ? modeLabel(snapshot.dashboard.race.checkpoint_mode)
+                  : "Chưa có thông tin"}
+              </dd>
+              <dt>Khoảng cách thời gian tối thiểu giữa hai vòng</dt>
+              <dd>
+                {snapshot.dashboard?.race.min_lap_interval_seconds ??
+                  "Chưa có thông tin"}{" "}
+                giây
+              </dd>
+            </dl>
+            <Link className="button primary" to="/">
+              Mở tổng quan giải
             </Link>
+            <details>
+              <summary>Định danh giải</summary>
+              <code>{selected.race_id}</code>
+            </details>
+          </Panel>
+          <details className="panel statistics">
+            <summary>Cấu hình GPS / Arduino</summary>
+            <MatchingSettings />
+          </details>
+        </>
+      ) : (
+        <Panel
+          title="Danh sách giải"
+          subtitle="Tìm và lọc trong toàn bộ danh sách giải đã tải."
+        >
+          <div className="filter-bar">
+            <label>
+              Tìm giải
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Tên giải chạy"
+              />
+            </label>
+            <label>
+              Trạng thái giải
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+              >
+                <option value="">Tất cả</option>
+                <option value="LIVE">Đang diễn ra</option>
+                <option value="COMPLETED">Hoàn thành</option>
+                <option value="DRAFT">Bản nháp</option>
+                <option value="SCHEDULED">Sắp diễn ra</option>
+                <option value="CANCELLED">Đã hủy</option>
+              </select>
+            </label>
+          </div>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Giải chạy</th>
+                  <th>Trạng thái</th>
+                  <th>Lịch chạy</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr
+                    key={r.race_id}
+                    className={r.race_id === current ? "current-race" : ""}
+                  >
+                    <td>
+                      <strong>{r.name}</strong>
+                      {r.race_id === current && <small>Đang xem</small>}
+                      {r.participant_count != null && (
+                        <small>
+                          {r.participant_count} người · {r.total_laps ?? "—"}{" "}
+                          vòng
+                        </small>
+                      )}
+                    </td>
+                    <td>
+                      <Badge status={r.status} />
+                    </td>
+                    <td>
+                      {r.started_at ? datetime(r.started_at) : "Chưa có lịch"}
+                    </td>
+                    <td>
+                      <Link
+                        className="button primary"
+                        to={`/races/${r.race_id}`}
+                      >
+                        Mở giải
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!racesLoaded && <p role="status">Đang tải danh sách giải…</p>}
+          {racesLoaded && !rows.length && (
+            <Empty
+              title={
+                races.length ? "Không có giải phù hợp" : "Chưa có giải chạy"
+              }
+              description={
+                races.length
+                  ? "Thay đổi từ khóa hoặc trạng thái lọc."
+                  : "Tạo giải để bắt đầu cấu hình."
+              }
+            />
           )}
         </Panel>
-      ) : (
-        <div className="race-cards">
-          {snapshot.races.map((r) => (
-            <Link
-              key={r.race_id}
-              to={`/races/${r.race_id}`}
-              className="panel race-card"
-            >
-              <div className="race-card-top">
-                <span className="kpi-icon blue">
-                  <Flag size={24} />
-                </span>
-                <Badge status={r.status} />
-              </div>
-              <h2>{r.name}</h2>
-              <p>
-                <CalendarDays size={16} />
-                {datetime(r.started_at)}
-              </p>
-              <p>
-                <MapPin size={16} />
-                {r.location}
-              </p>
-              <p>
-                <Users size={16} />
-                {r.participant_count ?? "—"} sinh viên · {r.total_laps ?? "—"}{" "}
-                vòng
-              </p>
-              <span className="panel-link">Xem chi tiết giải chạy →</span>
-            </Link>
-          ))}
-        </div>
       )}
     </>
   );

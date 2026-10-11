@@ -1,3 +1,141 @@
+# Sửa điểm tuyến thiếu tọa độ — 11/10/2026
+
+Editor trước đây cho thêm điểm nhập tay có tọa độ trống rồi tiếp tục thêm điểm khác; điểm trống bị ẩn khỏi bản đồ khiến người dùng khó nhận biết. Nay validation chỉ rõ thứ tự điểm lỗi và thanh lưu có nút Sửa tọa độ điểm N (chọn/focus input). Khi còn điểm không hợp lệ, thao tác thêm điểm đưa về điểm đó; thêm điểm nhập tay tắt công cụ click bản đồ. Không tự xóa điểm, thay GPS hoặc đoán tọa độ. Không báo sai chiều dài/khép vòng khi chưa tính được do thiếu tọa độ. Unit test kiểm tra chỉ số điểm lỗi và không phát sinh lỗi hình học dây chuyền.
+
+---
+
+# Bổ sung phản hồi nút lưu bản đồ — 11/10/2026
+
+Thanh Lưu/Hủy nay hiển thị lý do vô hiệu hóa và số đo tuyến ngay trong vùng nhìn: số điểm, chiều dài ước tính, khoảng cách đầu-cuối; hiển thị lỗi neo/khóa/xung đột/không có thay đổi. Có nút cuộn và focus tới Kiểm tra tuyến. Không nới validation hoặc thay tọa độ draft. Screenshot người dùng không đủ dữ liệu để kết luận ràng buộc cụ thể bị vi phạm; không coi nút disabled là lỗi API lưu.
+
+Browser fixture editor đã đạt, 4 request ghi bị intercept và 0 ghi thật; kiểm tra trực tiếp thông báo radius trên thanh lưu. Giữ nguyên backend và dữ liệu lịch sử.
+
+---
+
+# Bổ sung form tạo giải và kiểm kê API — 10/10/2026
+
+Kiểm tra lại ngày 11/10/2026: lint, typecheck và 32/32 unit test đạt; giữ nguyên giới hạn chưa gửi request tạo giải thật.
+
+Đã thêm form **Tạo giải chạy** tại `/races`, nối POST `/api/v1/races` đúng RaceIn runtime 8001. Có validation, khóa gửi lặp, lỗi theo field, xử lý kết quả chưa xác định khi mất response; tải lại danh sách/header sau thành công. Cho phép tạo giải đầu tiên khi backend chưa có race. Giải mới là DRAFT; không tự tạo checkpoint hoặc phiên chạy.
+
+[Kiểm kê đầy đủ 29 HTTP operation, WebSocket, API chưa nối và giới hạn](API_COVERAGE.md). Thay thế nhận xét lịch sử “chưa có form tạo giải” bên dưới; các form tạo checkpoint/sinh viên/wearable/participant/run vẫn chưa được thêm trong lượt này.
+
+File bổ sung/sửa: `src/features/races/CreateRace.tsx`, `src/features/races/Races.tsx`, `src/services/raceCreation.ts`, `src/services/raceCreation.test.ts`, `src/app/LiveProvider.tsx`, `scripts/verify-race-create.mjs`, `API_COVERAGE.md`, README/report. Giữ nguyên các thay đổi chưa commit khác.
+
+Kiểm tra: lint, typecheck, 32/32 test và build; browser fixture tạo giải đầu tiên/422/mất mạng/hủy/refetch đạt, 0 ghi thật. Không sửa backend hoặc dữ liệu lịch sử. Ảnh fixture ở `test-results/ux/create-race-isolated.png`.
+
+---
+
+# Bàn giao UX/UI và editor bản đồ — 10/10/2026
+
+Phần này là trạng thái hiện hành, thay thế các nhận xét “chưa có editor” trong lịch sử bên dưới. Giữ nguyên thay đổi tích hợp chưa commit có sẵn khi bắt đầu lượt UX/UI.
+
+## Runtime và phạm vi
+
+- FE: http://localhost:5173, workspace `E:\Hocccc\Project\Smart_Running_Checkpoint_IoT\apps\admin-web`.
+- Backend: `42e547892e344e53a7dde89ba13597e6d6a47658`, source `C:\Users\Admin\.codex\worktrees\backend-route-integration\Smart_Running_Checkpoint_IoT\services\backend`, listener `127.0.0.1:8001`. Đã đối chiếu command line, health và OpenAPI runtime.
+- Giữ cấu hình FE: `VITE_DATA_MODE=api`, `VITE_API_BASE_URL=http://localhost:8001/api/v1`, `VITE_WS_BASE_URL=ws://localhost:8001`.
+- Không sửa backend, backend .env, schema, dependency hoặc tài liệu backend. Không seed, simulator, migration riêng, ghi nghiệp vụ thử nghiệm, sửa dữ liệu lịch sử, commit/push/pull/merge. WAL/SHM đã có trong baseline được giữ nguyên; startup/worker backend có tác dụng phụ sẵn có như đã được cho phép.
+
+## Giao diện đã triển khai
+
+- **Chung:** header duy nhất chọn giải, kết nối, cập nhật, làm mới và tài khoản; sidebar thu gọn; logo/trắng-xanh giữ nguyên. Chữ và bảng lớn hơn, nội dung tận dụng chiều ngang, số tabular, focus rõ, nhãn tiếng Việt và mã kỹ thuật trong chi tiết. Không gán nguồn GPS chung cho race hỗn hợp.
+- **Tổng quan:** bốn thẻ điều hướng, bản đồ thu gọn, việc cần xử lý, top 5 theo backend, sự kiện gần nhất và thống kê mở rộng.
+- **Bản đồ:** tuyến/checkpoint/GPS thật, không dịch vị trí; toàn tuyến/tất cả vị trí, bật tắt lớp, chọn runner hai chiều, follow và dừng khi pan. Nhóm marker trùng điểm có ×N và danh sách chọn, phân biệt bib. Panel tìm tên/mã/bib, lọc trạng thái chạy và độ mới GPS độc lập; không loại runner chưa có GPS khỏi danh sách.
+- **Sinh viên:** tìm kiếm gồm bib giữ số 0, phân trang 10/20/50, sắp xếp rõ, cột phụ bật/tắt; chi tiết trong dialog có focus trap/Escape/trả focus; giữ bộ lọc và trang. COMPLETED dùng duration backend.
+- **Giải chạy:** bảng gọn, tìm/lọc trạng thái, giải đang chọn rõ, Mở giải chọn và điều hướng; thiếu lịch/địa điểm có thông báo có nghĩa.
+- **Checkpoint:** ba tab Cần xác nhận/Nhật ký/Trạm và thiết bị. Badge từ summary; select checkpoint thực, áp dụng/xóa bộ lọc, match/lap tách riêng, UUID trong chi tiết. Đăng ký thiết bị trong modal chọn sẵn checkpoint. Resolve giữ passage_id/version/idempotency/reason, không chọn trước ứng viên, không cập nhật vòng lạc quan.
+- **Realtime:** giữ cache theo race và chống REST cũ; cleanup/auth/reconnect/resync. Làm mới có thể kết nối lại socket đã đóng sau khi hết retry. Chỉ thay đổi giao diện không tạo request ghi.
+
+## Editor checkpoint và tuyến
+
+- Mặc định chỉ xem. Một editor tại một thời điểm; draft độc lập; cảnh báo rời trang/đổi race/đóng tab; hủy không ghi. Thanh Lưu/Hủy cố định, luôn nhìn thấy ở bốn viewport đã kiểm tra.
+- Checkpoint: kéo marker, nhập tọa độ/bán kính, công cụ chọn điểm rõ ràng; vòng bán kính xem trước. PATCH `/api/v1/checkpoints/{checkpoint_id}` chỉ gửi latitude/longitude/radius_m đã đổi. Tọa độ hữu hạn trong giới hạn; radius_m > 0 theo schema, không áp giới hạn trên tự đặt hoặc thay inner/outer matching.
+- Tuyến: GET/PUT `/api/v1/races/{race_id}/route`; kéo/nhập điểm, thêm sau điểm chọn, xóa điểm thường, bảo vệ neo, undo, khôi phục, fit. Điểm đầu/cuối đánh dấu Đ/C; neo có cờ và tên trong popup/select. Tuyến rỗng bắt đầu draft rỗng, cho click/nhập điểm và gán checkpoint thật; không tự nối checkpoint. Giữ thứ tự và checkpoint_id, không gửi sequence_no chỉ đọc.
+- Validation khớp source: 5–500 điểm; Haversine bán kính Trái Đất 6371000 m, tổng đoạn liên tiếp, không cộng đoạn khép ngầm; 400–450 m; đầu-cuối <= 2 m; mỗi checkpoint đúng một neo. Số FE ghi “ước tính”; so sánh trước làm tròn. Backend quyết định cuối cùng.
+- Khóa khi summary.started_runners > 0 hoặc có run_id. Không dùng ACTIVE=0 để kết luận mở khóa. Đọc lại trước lưu; xử lý ROUTE_LOCKED/CHECKPOINT_LOCKED/409 và giữ draft để sao chép. Sau lưu đọc lại route/dashboard/checkpoint; lỗi giữ draft. Mất response/5xx đọc lại trước khi cho gửi tiếp; có thay đổi server thì chặn ghi đè và cho tải lại/bỏ draft.
+- Backend chưa có ETag/version điều kiện cho PUT/PATCH: so fingerprint trước lưu giúp phát hiện thay đổi đã xảy ra, **không bảo đảm chống hai admin ghi đồng thời trong khoảng giữa đọc và ghi**.
+
+## Kiểm tra và bằng chứng
+
+- `npm run lint`, `npm run typecheck`, `npm run test`: đạt, 29/29 test. `npm run build`: đạt; cảnh báo bundle JS >500 kB, không phải lỗi build. `git diff --check`: đạt.
+- Browser đọc API thật: đăng nhập, chọn/đổi race, overview/runners, tìm bib 01, dialog và trả focus, COMPLETED, map chọn marker/follow/pan, tab nhật ký/chi tiết/đăng ký thiết bị, reconnect và logout. Không gửi ghi nghiệp vụ. Report: [readonly-report.json](test-results/ux/readonly-report.json).
+- Browser editor **fixture cô lập**, chặn toàn bộ API: kéo/chọn/nhập/hủy, radius lỗi, cảnh báo rời/đổi race, PATCH đúng field, PUT giữ neo/thứ tự, undo, 422/409, mất response đọc lại không gửi lặp, server đổi giữ draft, tạo tuyến rỗng bằng bàn phím. 4 request ghi được intercept, 0 request ghi thật. Report: [editor-isolated-report.json](test-results/ux/editor-isolated-report.json).
+- Kiểm tra overflow/ảnh ở 1366×768, 1440×900, 1920×1080 và tablet 820×1180, zoom mặc định 100%. Editor có assertion thanh lưu nằm trong viewport. Tiles được cố tình chặn trong script để kiểm tra thiếu nền; ảnh có cảnh báo nền **không phải bằng chứng lỗi nhà cung cấp hoặc backend**.
+- WS đã kiểm tra kết nối/đóng/reconnect, không nhận message nghiệp vụ trong cửa sổ quan sát (0 frame nghiệp vụ); không khẳng định đã E2E luồng GPS mới.
+- Sáu race thật quan sát đều đã có run và tuyến rỗng. Vì không có race thử nghiệm được phép ghi, chưa E2E lưu route/checkpoint/resolve/register trên backend thật, chưa chụp tuyến có sẵn thật. Hình editor dùng fixture được ghi rõ.
+
+Ảnh: [Tổng quan](test-results/ux/overview-1440.png), [tablet](test-results/ux/overview-820.png), [bản đồ](test-results/ux/live-map.png), [sinh viên](test-results/ux/runner-drawer.png), [nhật ký](test-results/ux/checkpoint-journal.png), [giải chạy](test-results/ux/races.png), [editor checkpoint cô lập](test-results/ux/editor-checkpoint-isolated.png), [editor tuyến cô lập](test-results/ux/editor-route-isolated.png). Ảnh/report nằm trong test-results được gitignore, không chứa key.
+
+## Giới hạn backend và phần chờ
+
+- Keyword runners hiện tìm tên/mã sinh viên, chưa tìm bib. Khi có chuỗi tìm, FE tải đủ các trang theo filter rồi lọc tên/mã/bib và phân trang local; không giả tìm toàn server từ một trang. Đổi lại chi phí request cao hơn với giải lớn.
+- Chưa có API danh sách/sửa/xóa thiết bị, trạng thái online đáng tin cậy, flag khóa map rõ ràng hay điều kiện version khi ghi map. Không dựng control hoặc giá trị lưu giả.
+- Các đề xuất simulator/ngưỡng vòng/khóa cấu hình/metadata tương lai vẫn chờ BE. Không sửa run legacy ACTIVE hoặc coi MATCHED là COUNTED. Không phát hiện lỗi backend mới từ kiểm thử đọc lượt này; lỗi fixture không được ghi thành lỗi backend.
+
+## File frontend liên quan
+
+- `src/app/{main,LiveProvider}.tsx`, `src/layouts/Shell.tsx`, `src/components/{Modal,ui}.tsx`, `src/utils/labels.ts`, `src/styles.css`.
+- `src/features/dashboard/Dashboard.tsx`; `src/features/live-map/{LiveMap,WatchList,MapEditor}.tsx`.
+- `src/features/runners/{RunnerTable,RunDetail}.tsx`; `src/features/races/{Races,MatchingSettings}.tsx`.
+- `src/features/checkpoints/{Checkpoints,CheckpointJournal,RegisterDevice}.tsx`.
+- `src/services/{apiAdapter,matchingContract,liveService,mapEditorService}.ts`, `src/services/mapEditorService.test.ts`.
+- `scripts/verify-ux-readonly.mjs`, `scripts/verify-map-editor.mjs`, `package.json`, `README.md`, `INTEGRATION_REPORT.md`.
+- Giữ các thay đổi tích hợp có sẵn ở contract/domain/routeAdapter/tests và script đọc backend; không ghi đè để làm sạch Git.
+
+Chạy lại: `npm run test:ui:editor` dùng fixture độc lập; `npm run test:ui:readonly` cần ADMIN_API_KEY trong môi trường tiến trình và hai server local. Script không ghi key ra report/storage. `npm run test:ui` trỏ editor cô lập; script verify-ui cũ là lịch sử, không dùng làm bằng chứng bản UX hiện tại.
+
+---
+
+# Lịch sử tích hợp trước lượt UX/UI
+
+# Tích hợp backend hiện tại — 10/10/2026, Asia/Saigon
+
+**Trạng thái hiện hành:** FE tương thích backend local `42e5478`, hai server đang chạy. Các mục bên dưới đường phân cách là lịch sử; kế hoạch ghi E2E và đề xuất API trong lịch sử **không được thực hiện trong lượt này**.
+
+## 1. Phiên bản và môi trường đang dùng
+
+- Workspace FE: `E:\Hocccc\Project\Smart_Running_Checkpoint_IoT`, nhánh `fe`, HEAD `00dfd59`. Git status đầu lượt sạch. `main` local ở `42e547892e344e53a7dde89ba13597e6d6a47658`, đã gồm PR #7; FE chưa chứa backend mới.
+- Backend source: `C:\Users\Admin\.codex\worktrees\backend-route-integration\Smart_Running_Checkpoint_IoT\services\backend`, worktree riêng từ **42e547892e344e53a7dde89ba13597e6d6a47658**. Không merge, pull, copy thư mục backend hay đổi nhánh FE.
+- Backend: `http://localhost:8001`, listener IPv4 `127.0.0.1:8001`. Command line đã xác minh trỏ đúng `--app-dir` worktree trên. Sau khi người dùng yêu cầu tiếp tục, hai listener cũ đã dừng; khởi động lại cùng cấu hình và xác minh lúc 15:30 ngày 10/10: backend PID `33152`, FE PID `32816`, FE HTTP 200 và health OK. Không có listener 8000 ở lần xác minh host.
+- Dùng Python `.venv` và cwd `.env` hiện có tại workspace gốc `services/backend`. Database đã xác minh là SQLite demo `services/backend/running_demo.db`. Truyền `DATABASE_URL` tuyệt đối trong môi trường tiến trình để backend worktree dùng đúng DB hiện có; không đổi `.env`, không sao chép secret. Python chạy `-B`, không ghi bytecode vào worktree.
+- Frontend: **http://localhost:5173/**. Dev server chạy `npm.cmd run dev -- --host 127.0.0.1 --port 5173 --strictPort` tại `apps/admin-web`. Cần IPv4 loopback trong môi trường này: listener `localhost` ban đầu bind `::1`, browser timeout; sau đổi listener, UI truy cập được.
+- `.env` FE hiện có đã đúng và được giữ nguyên: `VITE_DATA_MODE=api`, `VITE_API_BASE_URL=http://localhost:8001/api/v1`, `VITE_WS_BASE_URL=ws://localhost:8001`. REST client nối path sau `/api/v1`; WS dựng `/ws/v1/races/{race_id}/live?key=…`, không thêm prefix REST. Admin key chỉ vào bộ nhớ phiên/test; không có key Gateway/Simulator/Wearable trong cấu hình FE.
+- Các lệnh trong sandbox không thấy listener host; kiểm tra HTTP/process và browser integration cuối cùng chạy trên host bằng quyền công cụ được duyệt. Không suy phiên bản từ riêng `/health`.
+
+## 2. Contract đã đối chiếu và thay đổi FE
+
+- Đọc README, report lịch sử, source backend mới và OpenAPI runtime. `/health` 200; xác minh GET/PUT `/races/{race_id}/route`, PATCH `/checkpoints/{checkpoint_id}`, các API auth/dashboard/live/runners/history/events/resolve/matching/devices. WS source vẫn phân luồng theo race, dùng Admin key query và các message `runner.updated`, `runner.completed`, `checkpoint.passed`, `checkpoint.match.updated`.
+- `routeAdapter.ts`: map `route.points` theo `sequence_no`, giữ `[latitude, longitude]` đúng Leaflet, dùng `distance_m` backend; checkpoint lấy `checkpoint_id/code/name/sequence_no/kind/latitude/longitude/radius_m`. Không dùng bib làm ID, không nối checkpoint thay tuyến, không dịch GPS. Nếu có vertex không hợp lệ thì báo lỗi tuyến, không bỏ vertex rồi nối tắt qua khoảng trống.
+- `loadSnapshot` dùng route + checkpoint từ **cùng dashboard response**; không cần gọi GET route thêm ở mỗi resync. Kiểm tra race_id của dashboard/live trước khi nhận. GET route được kiểm tra đọc độc lập và so sánh với dashboard/live trong script kiểm tra backend.
+- Bản đồ vẽ polyline khi route có điểm, marker checkpoint/runner theo API; race chưa lưu tuyến có thông báo riêng. Fit một lần khi có tọa độ hoặc khi nhấn “Về toàn tuyến”, không fit lại vì số runner/điểm GPS thay đổi. Đổi race remount map; không giữ khung nhìn của race trước. Không có route thì fit marker hiện có, không dựng polyline thay thế. Tile lỗi chỉ báo nền bản đồ, marker/số liệu vẫn hoạt động.
+- Trang checkpoint thêm bảng metadata thật, tọa độ/bán kính/kind; link nhật ký/đăng ký dùng checkpoint UUID và lọc nhật ký theo ID trong URL. URL checkpoint không thuộc race đang xem không mở form đăng ký nhầm race.
+- Dashboard và trang race bỏ thông báo cũ “backend chưa có geometry/checkpoint”, dùng số checkpoint thật, route thật/trạng thái thiếu tuyến. Hiển thị `min_lap_interval_seconds` hiện backend đã trả, chỉ đọc, không tự gán mặc định.
+- Không có editor route/checkpoint hoạt động trước lượt này; ưu tiên map đọc theo yêu cầu. **Chưa thêm form PUT route/PATCH checkpoint**, chưa gửi hai API này. Contract ghi hiện tại vẫn là 5–500 điểm, 400–450 m, đầu/cuối tối đa 2 m, một anchor cho mỗi checkpoint, không lặp anchor ở điểm đóng vòng; backend quyết định hợp lệ/khóa (`ROUTE_LOCKED`, `CHECKPOINT_LOCKED`). Không áp dụng đề xuất nới giới hạn.
+- Giữ các luồng Admin key, runners/history, matching, đăng ký Gateway, resolve passage_id + expected_version + idempotency key hiện có. Không tự chọn AMBIGUOUS, không tự hoàn tất run legacy ACTIVE đạt target; giữ COMPLETED duration backend. Không thay cơ chế buffer/reconcile chống REST cũ, hủy request/socket và backoff/resync.
+
+## 3. Kiểm thử và dữ liệu thực tế
+
+- Lint, typecheck, build đạt. Vitest **25/25** đạt, gồm 2 test geometry mới: thứ tự lat/lon + sequence, ID, tuyến rỗng, tọa độ không hợp lệ không bị nối tắt; các test reconcile/realtime/matching cũ vẫn đạt.
+- Script `verify-backend-readonly.mjs`: health/OpenAPI, sai key 401/key đúng 200, đọc **5 race** hiện có; dashboard/live/runners/event detail/run detail/history và WS handshake đạt. GET route đồng nhất dashboard/live trong lần đọc. **Cả 5 race đều route.points=[]**, mỗi race có 1 checkpoint. Không tạo route/seed/simulator để lấp dữ liệu.
+- Browser Edge + backend thật (`integration-local-readonly.mjs`): đăng nhập sai/đúng, chọn race, bib `01`/UUID run, dashboard/runner, checkpoint marker + runner marker, empty route (không có polyline), fitBounds, chi tiết/history, COMPLETED duration trước/sau refresh giữ nguyên, MATCHED và COUNTED riêng, form matching khóa chưa biết, đổi race/GPS cũ, reconnect socket thật, reload phải nhập key lại, logout đóng socket đạt. Chặn mọi request ghi nghiệp vụ ngoài POST auth; `writes=[]`, `errors=[]`.
+- Browser fault injection chỉ dùng lỗi 500/401 để kiểm tra hiển thị và phục hồi, không thay response thành dữ liệu nghiệp vụ giả. Tile được **chủ động chặn** trong test để kiểm tra marker/cảnh báo; không coi đó là bằng chứng nhà cung cấp tile đang lỗi. Chưa kiểm tra khả năng tải tile ngoài ở mạng hiện tại.
+- Artifacts local (gitignored): `test-results/local-readonly-report.json`, `test-results/local-readonly-ui.png`. Browser đã mở tổng 8 socket qua nhiều phiên/đổi race/reconnect, một socket race ở trạng thái ổn định. Reload kiểm tra socket ở document mới vì Playwright có thể không phát close event cho handle thuộc document đã hủy.
+- **0 message WS nghiệp vụ thực tế** trong đợt kiểm tra. Handshake/reconnect/resync được xác minh, producer-to-UI khi có dữ liệu mới chưa E2E. Polyline có điểm mới được kiểm tra mapping frontend, chưa E2E trên API vì dữ liệu thật chưa có tuyến. Không kiểm thử ghi resolve/config/device hoặc route/checkpoint; không kiểm thử Arduino vật lý. Không kiểm thử empty race list bằng cách tạo/xóa hoặc thay dữ liệu API.
+
+## 4. Phần chờ backend / giới hạn còn lại
+
+- Runtime chưa có GET matching config/flag khóa, chưa trả các bán kính/window/grace trên dashboard; form hiện rõ chưa biết và chỉ xác nhận khóa khi backend trả lỗi đúng code. `min_lap_interval_seconds` đã có, không còn coi field này thiếu.
+- Metadata checkpoint và route **đã có**, không còn chờ hai dữ liệu này. Danh sách mapping thiết bị, heartbeat/provenance/hardware online vẫn chưa có endpoint đọc; không suy Arduino thật online từ event Gateway. Nguồn GPS/event hiển thị theo backend.
+- Đề xuất simulator speed, quy tắc ngưỡng vòng, khóa cấu hình và metadata bổ sung trong feedback chưa triển khai. Backend đã có cấu hình speed ở server và min interval đọc được; FE không cung cấp control giả cho cấu hình chưa có API quản trị.
+- Dữ liệu legacy ACTIVE đạt số vòng mục tiêu vẫn giữ nguyên. Chưa xác minh sửa chữa lịch sử hoặc producer mới; không coi hiện trạng legacy là lỗi mới của bản backend này.
+
+## 5. Ranh giới thực hiện
+
+Không sửa code, dependency, schema source, `.env` hoặc tài liệu backend; không commit/push/deploy/pull/stash/reset. Backend source diff ở workspace gốc rỗng; worktree backend giữ đúng commit. Không gửi thao tác ghi nghiệp vụ, không chỉnh sửa dữ liệu lịch sử, không migration riêng/seed/simulator. **Startup được người dùng cho phép có tác dụng phụ schema/worker/SQLite WAL**: workspace có `running_demo.db-wal` và `running_demo.db-shm` do backend đang chạy; không xóa, không khẳng định DB byte-for-byte bất biến. Giữ server và worktree để sử dụng local.
+
+---
+
 # Điều tra và kế hoạch E2E để duyệt — 07/10/2026, Asia/Saigon
 
 **Trạng thái mới nhất:** backend do người dùng chuyển sang **localhost:8001**. FE `.env` đã đổi cả REST và WS sang 8001. Không sửa backend hoặc dữ liệu nghiệp vụ. Các kết luận/cổng và cách suy luận khóa trong các bản ghi lịch sử bên dưới không còn là trạng thái hiện tại.

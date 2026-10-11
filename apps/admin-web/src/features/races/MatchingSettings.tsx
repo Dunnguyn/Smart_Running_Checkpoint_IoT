@@ -1,3 +1,4 @@
+import { modeLabel } from "../../utils/labels";
 import { useEffect, useRef, useState } from "react";
 import { useLive } from "../../app/LiveProvider";
 import { Panel } from "../../components/ui";
@@ -127,8 +128,10 @@ function ConfigForm({
             disabled={readOnly || busy}
             onChange={(e) => setMode(e.target.value as CheckpointMode)}
           >
-            <option>GPS_ONLY</option>
-            <option>GPS_AND_ARDUINO</option>
+            <option value="GPS_ONLY">{modeLabel("GPS_ONLY")}</option>
+            <option value="GPS_AND_ARDUINO">
+              {modeLabel("GPS_AND_ARDUINO")}
+            </option>
           </select>
         </label>
         {fields.map(([key, label, min, max, step]) => (

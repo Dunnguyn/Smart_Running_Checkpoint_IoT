@@ -18,6 +18,7 @@ import {
 import type { DashboardDto } from "./matchingContract";
 import { normalizeEvent } from "./matchingService";
 import { subscribeLive } from "./liveService";
+import { mapGeometry } from "./routeAdapter";
 export { validPosition, normalizeRunner } from "./contract";
 const segment = encodeURIComponent;
 export const racePath = (id: string) => `/races/${segment(id)}`;
@@ -48,6 +49,8 @@ export async function loadSnapshot(
       runners: (BackendRunner & LiveRow)[];
     }>(`${racePath(id)}/live`, { signal }),
   ]);
+  if (dashboard.race.race_id !== id || live.race_id !== id)
+    throw new RequestError(0, "Backend trả dữ liệu không thuộc giải đang xem.");
   const runners = dashboard.runners.map((row) => {
     const point = live.runners.find(
       (p) => p.run_id === row.run_id && p.student_id === row.student_id,
@@ -78,8 +81,7 @@ export async function loadSnapshot(
   return {
     races: races.map((r) => (r.race_id === id ? race : r)),
     runners,
-    route: [],
-    checkpoints: [],
+    ...mapGeometry(id, dashboard.route, dashboard.checkpoints),
     events: [],
     laps: [],
     updated_at: utc(dashboard.server_time)!,
@@ -145,6 +147,33 @@ export const apiAdapter: RaceService = {
     };
   },
   async listRunners(id, filters, signal) {
+    // Runtime keyword searches name/code only. For bib-inclusive search, read
+    // every filtered server page before searching; never pretend one page is global.
+    if (filters.search?.trim()) {
+      const query = runnerQuery({ ...filters, search: undefined });
+      query.delete("page");
+      query.delete("page_size");
+      const rows = await allPages<BackendRunner>(
+        `${racePath(id)}/runners?${query}`,
+        signal,
+      );
+      const term = filters.search.trim().toLocaleLowerCase();
+      const matched = rows.filter((r) =>
+        `${r.bib_number ?? r.display_id ?? ""} ${r.full_name ?? ""} ${r.student_code ?? ""}`
+          .toLocaleLowerCase()
+          .includes(term),
+      );
+      const page = filters.page ?? 1,
+        page_size = filters.page_size ?? 10;
+      return {
+        items: matched
+          .slice((page - 1) * page_size, page * page_size)
+          .map((r) => normalizeRunner(r, id)),
+        total: matched.length,
+        page,
+        page_size,
+      };
+    }
     const result = await request<PaginatedResponse<BackendRunner>>(
       `${racePath(id)}/runners?${runnerQuery(filters)}`,
       { signal },

@@ -50,8 +50,9 @@ export interface Checkpoint {
   type: "START_FINISH" | "INTERMEDIATE";
   order: number;
   device: string;
-  latitude: number;
-  longitude: number;
+  latitude: number | null;
+  longitude: number | null;
+  radius_m?: number;
 }
 export interface LapEvent {
   event_id: string;
@@ -119,6 +120,8 @@ export interface LiveSnapshot {
   runners: RunSession[];
   checkpoints: Checkpoint[];
   route: [number, number][];
+  routeDistance_m?: number;
+  routeMessage?: string;
   events: DeviceEvent[];
   laps: LapEvent[];
   updated_at: string;

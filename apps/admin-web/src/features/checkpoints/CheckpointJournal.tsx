@@ -1,5 +1,6 @@
+import { Modal } from "../../components/Modal";
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useParams } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
 import { Panel, Empty } from "../../components/ui";
 import { matchingService } from "../../services/matchingService";
@@ -18,30 +19,59 @@ export function EventStatus({ event }: { event: CheckpointEvent }) {
   return (
     <>
       <span className="badge">
-        {matchLabels[event.match_status]} · {event.match_status}
+        {matchLabels[event.match_status] ??
+          `Trạng thái khác (${event.match_status})`}
       </span>{" "}
       <span className="badge">
-        {lapLabels[event.lap_status]} · {event.lap_status}
+        {lapLabels[event.lap_status] ?? `Trạng thái khác (${event.lap_status})`}
       </span>
     </>
   );
 }
-export function CheckpointJournal() {
+export function CheckpointJournal({
+  attention = false,
+}: {
+  attention?: boolean;
+}) {
   const { raceId, snapshot } = useLive();
+  const { checkpointId } = useParams();
   return (
     <Journal
-      key={raceId}
+      key={`${raceId}:${checkpointId ?? ""}:${attention}`}
       raceId={raceId}
+      checkpointId={checkpointId}
+      attention={attention}
       revision={snapshot?.eventRevision ?? 0}
     />
   );
 }
-function Journal({ raceId, revision }: { raceId: string; revision: number }) {
+function Journal({
+  raceId,
+  revision,
+  checkpointId,
+  attention,
+}: {
+  raceId: string;
+  revision: number;
+  checkpointId?: string;
+  attention: boolean;
+}) {
   const [params] = useSearchParams();
-  const [status, setStatus] = useState<MatchStatus | "">(""),
-    [checkpoint, setCheckpoint] = useState("");
+  const { snapshot } = useLive();
+  const [status, setStatus] = useState<MatchStatus | "">(
+      attention
+        ? "AMBIGUOUS"
+        : ((params.get("status") ?? "") as MatchStatus | ""),
+    ),
+    [checkpoint, setCheckpoint] = useState(checkpointId ?? "");
   const [from, setFrom] = useState(""),
     [to, setTo] = useState("");
+  const [applied, setApplied] = useState({
+    status: attention ? "AMBIGUOUS" : (params.get("status") ?? ""),
+    checkpoint: checkpointId ?? "",
+    from: "",
+    to: "",
+  });
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const [page, setPage] = useState<{
     items: CheckpointEvent[];
@@ -59,10 +89,12 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
         .list(
           raceId,
           {
-            match_status: status,
-            checkpoint_id: checkpoint.trim(),
-            from: from ? new Date(from).toISOString() : undefined,
-            to: to ? new Date(to).toISOString() : undefined,
+            match_status: applied.status as MatchStatus | "",
+            checkpoint_id: applied.checkpoint,
+            from: applied.from
+              ? new Date(applied.from).toISOString()
+              : undefined,
+            to: applied.to ? new Date(applied.to).toISOString() : undefined,
             cursor: cursors.at(-1),
             limit: 20,
           },
@@ -80,7 +112,7 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [raceId, status, checkpoint, from, to, cursors, revision, refresh]);
+  }, [raceId, applied, cursors, revision, refresh]);
   const reset = () => {
     setCursors([undefined]);
     setPage(null);
@@ -88,7 +120,7 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
   return (
     <>
       <Panel
-        title="Nhật ký checkpoint"
+        title={attention ? "Sự kiện cần xác nhận" : "Nhật ký checkpoint"}
         subtitle="Trạng thái ghép và trạng thái tính vòng là hai kết quả độc lập"
       >
         <div className="matching-form">
@@ -96,9 +128,9 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
             Trạng thái ghép
             <select
               value={status}
+              disabled={attention}
               onChange={(e) => {
                 setStatus(e.target.value as MatchStatus | "");
-                reset();
               }}
             >
               <option value="">Tất cả</option>
@@ -110,14 +142,18 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
             </select>
           </label>
           <label>
-            Checkpoint ID
-            <input
+            Checkpoint
+            <select
               value={checkpoint}
-              onChange={(e) => {
-                setCheckpoint(e.target.value);
-                reset();
-              }}
-            />
+              onChange={(e) => setCheckpoint(e.target.value)}
+            >
+              <option value="">Tất cả checkpoint</option>
+              {snapshot?.checkpoints.map((c) => (
+                <option key={c.checkpoint_id} value={c.checkpoint_id}>
+                  {c.code} · {c.name}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Từ thời điểm
@@ -126,7 +162,6 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
               value={from}
               onChange={(e) => {
                 setFrom(e.target.value);
-                reset();
               }}
             />
           </label>
@@ -137,12 +172,38 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
               value={to}
               onChange={(e) => {
                 setTo(e.target.value);
-                reset();
               }}
             />
           </label>
+          <button
+            className="button primary"
+            onClick={() => {
+              if (from && to && from >= to) {
+                setError("Thời điểm kết thúc phải sau thời điểm bắt đầu.");
+                return;
+              }
+              setApplied({ status, checkpoint, from, to });
+              reset();
+            }}
+          >
+            Áp dụng
+          </button>
+          <button
+            className="button"
+            onClick={() => {
+              const status = attention ? "AMBIGUOUS" : "";
+              setStatus(status);
+              setCheckpoint("");
+              setFrom("");
+              setTo("");
+              setApplied({ status, checkpoint: "", from: "", to: "" });
+              reset();
+            }}
+          >
+            Xóa bộ lọc
+          </button>
           <button className="button" onClick={() => setRefresh((n) => n + 1)}>
-            Tải lại sự kiện
+            Làm mới nhật ký
           </button>
         </div>
         {error ? (
@@ -157,10 +218,11 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
               <table>
                 <thead>
                   <tr>
-                    <th>THỜI ĐIỂM / THIẾT BỊ</th>
+                    <th>THỜI ĐIỂM</th>
                     <th>CHECKPOINT</th>
-                    <th>KẾT QUẢ</th>
-                    <th>LÝ DO</th>
+                    <th>NGƯỜI CHẠY</th>
+                    <th>NHẬN DIỆN</th>
+                    <th>TÍNH VÒNG</th>
                     <th />
                   </tr>
                 </thead>
@@ -171,17 +233,46 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
                         {datetime(event.occurred_at)}
                         <small>{event.device_id}</small>
                       </td>
-                      <td>{event.checkpoint_id}</td>
                       <td>
-                        <EventStatus event={event} />
+                        {snapshot?.checkpoints.find(
+                          (c) => c.checkpoint_id === event.checkpoint_id,
+                        )?.name ?? "Checkpoint chưa có tên"}
                       </td>
-                      <td>{reasonText(event.reason_code)}</td>
+                      <td>
+                        {event.matched_runner
+                          ? `${event.matched_runner.display_id ?? "—"} · ${event.matched_runner.full_name ?? event.matched_runner.student_code ?? ""}`
+                          : "Chưa xác định"}
+                      </td>
+                      <td>
+                        <span className="badge">
+                          {matchLabels[event.match_status] ??
+                            event.match_status}
+                        </span>
+                        {event.match_status === "AMBIGUOUS" && (
+                          <small>
+                            {event.candidates_final
+                              ? "Sẵn sàng xác nhận"
+                              : "Đang thu nhận ứng viên"}
+                          </small>
+                        )}
+                      </td>
+                      <td>
+                        <span className="badge">
+                          {lapLabels[event.lap_status] ?? event.lap_status}
+                        </span>
+                        {event.reason_code &&
+                          event.lap_status !== "COUNTED" && (
+                            <small>{reasonText(event.reason_code)}</small>
+                          )}
+                      </td>
                       <td>
                         <button
                           className="button"
                           onClick={() => setSelected(event.event_id)}
                         >
-                          Chi tiết sự kiện
+                          {canResolve(event)
+                            ? "Xác nhận người chạy"
+                            : "Chi tiết sự kiện"}
                         </button>
                       </td>
                     </tr>
@@ -222,14 +313,19 @@ function Journal({ raceId, revision }: { raceId: string; revision: number }) {
         )}
       </Panel>
       {selected && (
-        <EventDetail
-          key={selected}
-          id={selected}
-          raceId={raceId}
-          revision={revision}
+        <Modal
+          title="Chi tiết và xác nhận sự kiện"
           onClose={() => setSelected(null)}
-          onChanged={() => setRefresh((n) => n + 1)}
-        />
+        >
+          <EventDetail
+            key={selected}
+            id={selected}
+            raceId={raceId}
+            revision={revision}
+            onClose={() => setSelected(null)}
+            onChanged={() => setRefresh((n) => n + 1)}
+          />
+        </Modal>
       )}
     </>
   );
@@ -394,59 +490,81 @@ function EventDetail({
         <p className="empty">Đang tải chi tiết…</p>
       ) : (
         <>
-          <dl className="info-list">
-            <dt>Sự kiện / phiên bản</dt>
-            <dd>
-              {event.event_id} / {event.version}
-            </dd>
-            <dt>Checkpoint / thiết bị</dt>
-            <dd>
-              {event.checkpoint_id} / {event.device_id}
-            </dd>
-            <dt>Thời điểm / nhận</dt>
-            <dd>
-              {datetime(event.occurred_at)} / {datetime(event.received_at)}
-            </dd>
-            <dt>Đóng cửa sổ</dt>
-            <dd>{datetime(event.match_deadline_at)}</dd>
-            <dt>Kết quả</dt>
-            <dd>
-              <EventStatus event={event} />
-            </dd>
-            <dt>Lý do</dt>
-            <dd>
-              {reasonText(event.reason_code)}{" "}
-              <code>{event.reason_code ?? "—"}</code>
-            </dd>
-            <dt>Runner đã ghép</dt>
-            <dd>
-              {event.matched_runner ? (
-                <Link
-                  to={`/runners/${event.matched_runner.student_id}/runs/${event.matched_runner.run_id}`}
-                >
-                  #{event.matched_runner.display_id ?? "—"} ·{" "}
-                  {event.matched_runner.full_name ??
-                    event.matched_runner.student_code}
-                </Link>
-              ) : (
-                "—"
-              )}
-            </dd>
-            <dt>Vòng / thời gian vòng</dt>
-            <dd>
-              {event.lap_number ?? "—"} /{" "}
-              {event.lap_duration_ms === null
-                ? "—"
-                : `${event.lap_duration_ms / 1000} giây`}
-            </dd>
-            <dt>Nguồn</dt>
-            <dd>
-              {event.checkpoint_source} /{" "}
-              {event.telemetry_source ?? "Chưa có thông tin GPS"}
-            </dd>
-            <dt>Phương thức</dt>
-            <dd>{event.method ?? "—"}</dd>
-          </dl>
+          <details>
+            <summary>Chi tiết kỹ thuật và định danh</summary>
+            <dl className="info-list">
+              <dt>Sự kiện / phiên bản</dt>
+              <dd>
+                {event.event_id} / {event.version}
+              </dd>
+              <dt>Checkpoint / thiết bị</dt>
+              <dd>
+                {event.checkpoint_id} / {event.device_id}
+              </dd>
+              <dt>Thời điểm / nhận</dt>
+              <dd>
+                {datetime(event.occurred_at)} / {datetime(event.received_at)}
+              </dd>
+              <dt>Đóng cửa sổ</dt>
+              <dd>{datetime(event.match_deadline_at)}</dd>
+              <dt>Kết quả</dt>
+              <dd>
+                <EventStatus event={event} />
+              </dd>
+              <dt>Lý do</dt>
+              <dd>
+                {reasonText(event.reason_code)}{" "}
+                <code>{event.reason_code ?? "—"}</code>
+              </dd>
+              <dt>Runner đã ghép</dt>
+              <dd>
+                {event.matched_runner ? (
+                  <Link
+                    to={`/runners/${event.matched_runner.student_id}/runs/${event.matched_runner.run_id}`}
+                  >
+                    #{event.matched_runner.display_id ?? "—"} ·{" "}
+                    {event.matched_runner.full_name ??
+                      event.matched_runner.student_code}
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </dd>
+              <dt>Vòng / thời gian vòng</dt>
+              <dd>
+                {event.lap_number ?? "—"} /{" "}
+                {event.lap_duration_ms === null
+                  ? "—"
+                  : `${event.lap_duration_ms / 1000} giây`}
+              </dd>
+              <dt>Nguồn</dt>
+              <dd>
+                {event.checkpoint_source} /{" "}
+                {event.telemetry_source ?? "Chưa có thông tin GPS"}
+              </dd>
+              <dt>Phương thức</dt>
+              <dd>{event.method ?? "—"}</dd>
+            </dl>
+            <p>
+              Mã nhận diện: {event.match_status}; mã tính vòng:{" "}
+              {event.lap_status}
+            </p>
+            <button
+              className="button"
+              onClick={() => {
+                navigator.clipboard
+                  .writeText(event.event_id)
+                  .then(() => setNotice("Đã sao chép mã sự kiện"))
+                  .catch(() =>
+                    setError(
+                      "Không thể sao chép; chọn mã sự kiện trong chi tiết.",
+                    ),
+                  );
+              }}
+            >
+              Sao chép mã sự kiện
+            </button>
+          </details>
           <p className="form-message">
             Nguồn Gateway chưa có cờ phân biệt mô phỏng/phần cứng; không xác
             nhận Arduino online hay danh tính người thật. Danh sách ứng viên:{" "}
@@ -481,7 +599,6 @@ function EventDetail({
                         }
                         onChange={() => setPassage(c.passage_id)}
                       />
-                      <code>{c.passage_id}</code>
                     </td>
                     <td>
                       #{c.display_id ?? "—"} · {c.student_code ?? c.student_id}
@@ -519,7 +636,7 @@ function EventDetail({
                 }
                 onClick={() => void submit("CONFIRM")}
               >
-                Xác nhận ứng viên
+                Xác nhận người chạy
               </button>
               <button
                 className="button"

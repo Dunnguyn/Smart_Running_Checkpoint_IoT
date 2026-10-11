@@ -87,6 +87,32 @@ try {
   ).toBeVisible();
   await expect.poll(() => sockets.size).toBe(1);
   const r = done.runners.find((r) => r.bib_number === "01");
+  await expect(page.locator(".checkpoint-marker")).toHaveCount(
+    done.checkpoints.filter((c) => c.latitude != null && c.longitude != null)
+      .length,
+  );
+  await expect(page.locator(".runner-marker")).toHaveCount(
+    done.runners.filter(
+      (r) =>
+        r.last_latitude != null &&
+        r.last_longitude != null &&
+        ["ACTIVE", "COMPLETED"].includes(r.status),
+    ).length,
+  );
+  if (!done.route.points.length) {
+    await expect(page.locator(".map-caption")).toContainText(
+      "Giải chạy chưa có tuyến được lưu",
+    );
+    await expect(page.locator(".leaflet-overlay-pane path")).toHaveCount(0);
+  } else {
+    await expect(page.locator(".leaflet-overlay-pane path")).toHaveCount(2);
+  }
+  await page
+    .getByRole("button", { name: "Về toàn tuyến", exact: true })
+    .click();
+  checks.push(
+    "real checkpoint and runner markers; stored route or explicit empty route; fit bounds action",
+  );
   const url = `/runners/${r.student_id}/runs/${r.run_id}`;
   await page.locator(`a[href="${url}"]`).first().click();
   await expect(page).toHaveURL(new RegExp(r.run_id));
@@ -115,6 +141,9 @@ try {
     "bib 01, real student/run URL, run detail/history, completed duration stable, refresh and forced real WS reconnect",
   );
   await page.getByRole("link", { name: "Checkpoint", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Checkpoint của giải", exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByText("MATCHED", { exact: false }).first(),
   ).toBeVisible();
@@ -185,6 +214,27 @@ try {
   await login();
   await expect(page.locator(".connection-bar")).toContainText(
     "WebSocket: connected",
+  );
+  await page.reload();
+  await expect(page.getByLabel("Admin key", { exact: true })).toBeVisible();
+  // Playwright may omit close notifications for sockets in a destroyed document.
+  // Check the new document directly, then discard handles from the old one.
+  expect(
+    await page.evaluate(
+      () =>
+        window.__testSockets.filter(
+          (s) =>
+            s.readyState === 1 && new URL(s.url).pathname.startsWith("/ws/v1/"),
+        ).length,
+    ),
+  ).toBe(0);
+  sockets.clear();
+  await login();
+  await expect(page.locator(".connection-bar")).toContainText(
+    "WebSocket: connected",
+  );
+  checks.push(
+    "browser reload requires key again and restores a single race socket after login",
   );
   await page.route("**/api/v1/races", (r) =>
     r.fulfill({ status: 401, contentType: "application/json", body: "{}" }),

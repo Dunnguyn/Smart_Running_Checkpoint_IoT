@@ -1,14 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import {
-  Search,
-  ArrowDownUp,
-  ChevronLeft,
-  ChevronRight,
-  Users,
-} from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
-import { dataMode, raceService } from "../../services";
+import { raceService } from "../../services";
+import { reconcileRunner } from "../../services/reconcile";
 import type {
   PaginatedResponse,
   RunSession,
@@ -16,130 +10,125 @@ import type {
   RunnerFilters,
 } from "../../types/domain";
 import { Badge, Empty } from "../../components/ui";
-import { distance, duration } from "../../utils/format";
-export function RunnerTable({
-  compact = false,
-  onSelect,
-}: {
-  compact?: boolean;
-  onSelect?: (id: string) => void;
-}) {
-  const { snapshot, raceId, retry, mergeRunners } = useLive();
-  const [refresh, setRefresh] = useState(0);
-  useEffect(() => {
-    if (dataMode !== "api") return;
-    const timer = setInterval(() => setRefresh((n) => n + 1), 5000);
-    return () => clearInterval(timer);
-  }, []);
-  const hasSnapshot = !!snapshot;
-  const mockSnapshot = dataMode === "mock" ? snapshot : null;
-  const loadedQuery = useRef("");
+import { Modal } from "../../components/Modal";
+import { RunDetail } from "./RunDetail";
+import { datetime, distance, duration } from "../../utils/format";
+export function RunnerTable() {
+  const { snapshot, raceId, mergeRunners } = useLive();
   const [params, setParams] = useSearchParams();
   const query = params.get("q") ?? "",
     status = (params.get("status") ?? "") as RunStatus | "";
-  const [sort, setSort] = useState<RunnerFilters["sort"]>(),
-    [direction, setDirection] = useState<"asc" | "desc">("desc"),
-    [page, setPage] = useState(1),
-    [result, setResult] = useState<PaginatedResponse<RunSession> | null>(null),
-    [error, setError] = useState("");
-  const setFilter = (key: string, value: string) => {
-    const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setParams(next, { replace: true });
-    setPage(1);
-  };
+  const [page, setPage] = useState(1),
+    [size, setSize] = useState(10),
+    [sort, setSort] = useState<RunnerFilters["sort"]>(),
+    [direction, setDirection] = useState<"asc" | "desc">("desc");
+  const [result, setResult] = useState<PaginatedResponse<RunSession> | null>(
+      null,
+    ),
+    [error, setError] = useState(""),
+    [refresh, setRefresh] = useState(0),
+    [loading, setLoading] = useState(false);
+  const [columns, setColumns] = useState<string[]>([]),
+    [detail, setDetail] = useState<RunSession | null>(null);
+  const loaded = useRef("");
+  const hasSnapshot = !!snapshot;
   useEffect(() => {
     setPage(1);
-  }, [query, status, raceId]);
+  }, [raceId, query, status, size]);
   useEffect(() => {
-    let disposed = false;
-    const controller = new AbortController();
-    if (!raceId || !snapshot) return;
-    const queryKey = JSON.stringify([
+    const timer = setInterval(() => setRefresh((n) => n + 1), 5000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!raceId || !hasSnapshot) return;
+    const c = new AbortController();
+    const key = JSON.stringify([
       raceId,
       query,
       status,
+      page,
+      size,
       sort,
       direction,
-      page,
-      compact,
     ]);
-    if (loadedQuery.current !== queryKey) setResult(null);
+    if (loaded.current !== key) setResult(null);
+    setLoading(true);
     const timer = setTimeout(() => {
       raceService
         .listRunners(
           raceId,
-          {
-            search: query,
-            status,
-            sort,
-            direction,
-            page,
-            page_size: compact ? 6 : 10,
-          },
-          controller.signal,
+          { search: query, status, page, page_size: size, sort, direction },
+          c.signal,
         )
-        .then((r) => {
-          if (!disposed) {
-            loadedQuery.current = queryKey;
-            setResult(r);
-            if (dataMode === "api") mergeRunners(r.items);
+        .then((data) => {
+          if (!c.signal.aborted) {
+            loaded.current = key;
+            setResult(data);
+            mergeRunners(data.items);
             setError("");
           }
         })
-        .catch((e: Error) => {
-          if (!disposed) setError(e.message);
+        .catch((e) => {
+          if (!c.signal.aborted) setError(e.message);
+        })
+        .finally(() => {
+          if (!c.signal.aborted) setLoading(false);
         });
-    }, 300);
+    }, 250);
     return () => {
-      disposed = true;
-      controller.abort();
+      c.abort();
       clearTimeout(timer);
     };
-    // Live positions are merged below; server filters refresh at most once per 5 seconds.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    mockSnapshot,
-    hasSnapshot,
     raceId,
-    refresh,
+    hasSnapshot,
     query,
     status,
+    page,
+    size,
     sort,
     direction,
-    page,
-    compact,
+    refresh,
+    mergeRunners,
   ]);
-  function sorting(field: RunnerFilters["sort"]) {
-    setDirection(sort === field && direction === "desc" ? "asc" : "desc");
-    setSort(field);
+  function filter(k: string, v: string) {
+    const next = new URLSearchParams(params);
+    if (v) next.set(k, v);
+    else next.delete(k);
+    setParams(next, { replace: true });
+  }
+  function order(k: RunnerFilters["sort"]) {
+    setSort(k);
+    setDirection(sort === k && direction === "desc" ? "asc" : "desc");
     setPage(1);
   }
   return (
     <section className="panel runners-panel">
       <div className="panel-heading">
         <div>
-          <h2>
-            Theo dõi sinh viên{" "}
-            <span className="count-chip">{snapshot?.runners.length ?? 0}</span>
-          </h2>
-          <p>Thông tin và tiến độ tham gia giải chạy</p>
+          <h2>Danh sách sinh viên</h2>
+          <p>
+            {result
+              ? `${result.total} kết quả trong giải`
+              : "Đang tải danh sách"}
+            {loading && result ? " · Đang cập nhật…" : ""}
+          </p>
         </div>
-        <div className="table-filters">
-          <div className="table-search">
-            <Search size={16} />
-            <input
-              aria-label="Tìm theo họ tên hoặc mã sinh viên"
-              placeholder="Tìm tên hoặc mã sinh viên…"
-              value={query}
-              onChange={(e) => setFilter("q", e.target.value)}
-            />
-          </div>
+      </div>
+      <div className="filter-bar">
+        <label>
+          Tìm tên, mã sinh viên, bib
+          <input
+            value={query}
+            onChange={(e) => filter("q", e.target.value)}
+            placeholder="Ví dụ: 01 hoặc tên sinh viên"
+          />
+        </label>
+        <label>
+          Trạng thái chạy
           <select
-            aria-label="Lọc trạng thái"
             value={status}
-            onChange={(e) => setFilter("status", e.target.value)}
+            onChange={(e) => filter("status", e.target.value)}
           >
             <option value="">Tất cả trạng thái</option>
             <option value="ACTIVE">Đang chạy</option>
@@ -147,23 +136,56 @@ export function RunnerTable({
             <option value="PENDING">Chưa bắt đầu</option>
             <option value="ABANDONED">Đã dừng</option>
           </select>
-        </div>
-      </div>
-      {error ? (
-        <>
-          <Empty title="Dữ liệu không khả dụng" description={error} />
-          <button
-            className="button"
-            onClick={() => {
-              setRefresh((n) => n + 1);
-              retry();
-            }}
+        </label>
+        <label>
+          Số dòng
+          <select
+            value={size}
+            onChange={(e) => setSize(Number(e.target.value))}
           >
+            {[10, 20, 50].map((n) => (
+              <option key={n}>{n}</option>
+            ))}
+          </select>
+        </label>
+        <details className="column-picker">
+          <summary>Cột bổ sung</summary>
+          {[
+            ["steps", "Bước chân"],
+            ["lap", "Vòng gần nhất"],
+            ["faculty", "Khoa/Viện"],
+            ["gps", "GPS cập nhật cuối"],
+          ].map(([k, label]) => (
+            <label key={k}>
+              <input
+                type="checkbox"
+                checked={columns.includes(k)}
+                onChange={(e) =>
+                  setColumns((c) =>
+                    e.target.checked ? [...c, k] : c.filter((x) => x !== k),
+                  )
+                }
+              />
+              {label}
+            </label>
+          ))}
+        </details>
+      </div>
+      {query && (
+        <p className="map-note">
+          Tìm tên, mã và bib trên toàn bộ các trang dữ liệu của bộ lọc hiện tại.
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="editor-alert">
+          {error}{" "}
+          <button className="button" onClick={() => setRefresh((n) => n + 1)}>
             Thử lại
           </button>
-        </>
-      ) : !result ? (
-        <div className="empty" role="status">
+        </p>
+      )}
+      {!result ? (
+        <div className="skeleton" role="status">
           Đang tải sinh viên…
         </div>
       ) : (
@@ -172,154 +194,95 @@ export function RunnerTable({
             <table>
               <thead>
                 <tr>
-                  <th>BIB</th>
-                  <th>SINH VIÊN</th>
-                  <th>KHOA / VIỆN</th>
+                  <th>Bib</th>
+                  <th>Sinh viên</th>
                   <th
                     aria-sort={
                       sort === "lap_count"
-                        ? direction === "desc"
-                          ? "descending"
-                          : "ascending"
+                        ? direction === "asc"
+                          ? "ascending"
+                          : "descending"
                         : "none"
                     }
                   >
-                    <button onClick={() => sorting("lap_count")}>
-                      SỐ VÒNG <ArrowDownUp size={12} />
+                    <button onClick={() => order("lap_count")}>
+                      Số vòng ↕
                     </button>
                   </th>
+                  <th>Thời gian</th>
                   <th
                     aria-sort={
                       sort === "distance_total_m"
-                        ? direction === "desc"
-                          ? "descending"
-                          : "ascending"
+                        ? direction === "asc"
+                          ? "ascending"
+                          : "descending"
                         : "none"
                     }
                   >
-                    <button onClick={() => sorting("distance_total_m")}>
-                      QUÃNG ĐƯỜNG <ArrowDownUp size={12} />
+                    <button onClick={() => order("distance_total_m")}>
+                      Quãng đường ↕
                     </button>
                   </th>
-                  <th
-                    aria-sort={
-                      sort === "duration_total_s"
-                        ? direction === "desc"
-                          ? "descending"
-                          : "ascending"
-                        : "none"
-                    }
-                  >
-                    <button
-                      disabled={dataMode === "api"}
-                      title={
-                        dataMode === "api"
-                          ? "Backend chưa hỗ trợ sắp xếp thời gian"
-                          : undefined
-                      }
-                      onClick={() => sorting("duration_total_s")}
-                    >
-                      THỜI GIAN <ArrowDownUp size={12} />
-                    </button>
-                  </th>
-                  <th>VÒNG GẦN NHẤT</th>
-                  <th>BƯỚC CHÂN</th>
-                  <th>TRẠNG THÁI</th>
-                  <th />
+                  <th>Trạng thái chạy</th>
+                  {columns.includes("steps") && <th>Bước chân</th>}
+                  {columns.includes("lap") && <th>Vòng gần nhất</th>}
+                  {columns.includes("faculty") && <th>Khoa/Viện</th>}
+                  {columns.includes("gps") && <th>GPS cập nhật cuối</th>}
+                  <th>Chi tiết</th>
                 </tr>
               </thead>
               <tbody>
                 {result.items.map((item) => {
                   const live = snapshot?.runners.find(
                     (r) =>
-                      r.run_id === item.run_id &&
-                      r.student_id === item.student_id,
+                      r.student_id === item.student_id &&
+                      r.run_id === item.run_id,
                   );
-                  const r =
-                    live &&
-                    live.last_seen_at &&
-                    (!item.last_seen_at ||
-                      live.last_seen_at >= item.last_seen_at) &&
-                    item.status !== "COMPLETED"
-                      ? { ...item, ...live }
-                      : item;
+                  const r = live ? reconcileRunner(live, item) : item;
                   return (
                     <tr
-                      key={r.run_id || r.student_id}
+                      key={r.student_id}
                       onClick={(e) => {
-                        if ((e.target as HTMLElement).closest("a,button"))
-                          return;
-                        const link =
-                          e.currentTarget.querySelector<HTMLAnchorElement>("a");
-                        link?.click();
+                        if (!(e.target as HTMLElement).closest("button"))
+                          setDetail(r);
                       }}
                     >
                       <td>
-                        <span
-                          className="table-bib"
-                          style={{ color: r.color, background: r.color + "12" }}
-                        >
-                          #{r.bib}
-                        </span>
+                        <span className="table-bib">{r.bib}</span>
                       </td>
                       <td>
-                        <Link
+                        <button
                           className="student-link"
-                          to={
-                            r.run_id
-                              ? `/runners/${r.student_id}/runs/${r.run_id}`
-                              : "#"
-                          }
-                          onClick={(e) => {
-                            if (!r.run_id) e.preventDefault();
-                          }}
+                          onClick={() => setDetail(r)}
                         >
                           <strong>{r.full_name}</strong>
                           <small>{r.student_code}</small>
-                        </Link>
+                        </button>
                       </td>
-                      <td className="faculty-cell">{r.faculty}</td>
                       <td>
-                        <strong>{r.lap_count}</strong>
-                        <span className="muted"> / {r.total_laps || "—"}</span>
-                        <div className="mini-progress">
-                          <i
-                            style={{
-                              width: `${(r.lap_count / (r.total_laps || 1)) * 100}%`,
-                              background: r.color,
-                            }}
-                          />
-                        </div>
-                      </td>
-                      <td className="number-cell">
-                        {distance(r.distance_total_m)}
+                        {r.lap_count} / {r.total_laps || "—"}
                       </td>
                       <td className="number-cell">
                         {duration(r.duration_total_s)}
                       </td>
-                      <td className="number-cell">
-                        {duration(r.last_lap_duration_s)}
-                      </td>
-                      <td>{r.total_steps?.toLocaleString("vi-VN") ?? "—"}</td>
+                      <td>{distance(r.distance_total_m)}</td>
                       <td>
                         <Badge status={r.status} />
-                        {r.connection === "STALE" && (
-                          <small className="stale">Mất cập nhật</small>
-                        )}
                       </td>
+                      {columns.includes("steps") && (
+                        <td>{r.total_steps?.toLocaleString("vi-VN") ?? "—"}</td>
+                      )}
+                      {columns.includes("lap") && (
+                        <td>{duration(r.last_lap_duration_s)}</td>
+                      )}
+                      {columns.includes("faculty") && <td>{r.faculty}</td>}
+                      {columns.includes("gps") && (
+                        <td>{datetime(r.last_seen_at)}</td>
+                      )}
                       <td>
-                        {onSelect && r.last_latitude != null ? (
-                          <button
-                            className="icon-button"
-                            title={`Theo dõi ${r.full_name} trên bản đồ`}
-                            aria-label={`Theo dõi bib ${r.bib}`}
-                            onClick={() => onSelect(r.student_id)}
-                          >
-                            <Users size={16} />
-                          </button>
-                        ) : (
-                          <ChevronRight size={16} className="muted" />
-                        )}
+                        <button className="button" onClick={() => setDetail(r)}>
+                          Chi tiết
+                        </button>
                       </td>
                     </tr>
                   );
@@ -327,40 +290,65 @@ export function RunnerTable({
               </tbody>
             </table>
           </div>
-          {result.total === 0 && <Empty />}
+          {!result.items.length && (
+            <Empty
+              title={
+                query || status
+                  ? "Không có kết quả phù hợp"
+                  : "Chưa có người tham gia"
+              }
+              description={
+                query || status
+                  ? "Thử đổi từ khóa hoặc bộ lọc."
+                  : "Danh sách sẽ xuất hiện khi người tham gia được đăng ký."
+              }
+            />
+          )}
           <div className="pagination">
             <span>
-              Hiển thị{" "}
-              <strong>
-                {result.total ? (page - 1) * result.page_size + 1 : 0}–
-                {Math.min(page * result.page_size, result.total)}
-              </strong>{" "}
-              trên {result.total} sinh viên
+              {result.total ? (page - 1) * size + 1 : 0}–
+              {Math.min(page * size, result.total)} / {result.total}
             </span>
             <div>
               <button
-                className="icon-button"
-                aria-label="Trang trước"
+                className="button"
                 disabled={page === 1}
-                onClick={() => setPage((p) => p - 1)}
+                onClick={() => setPage((n) => n - 1)}
               >
-                <ChevronLeft size={16} />
+                Trang trước
               </button>
-              <span className="page-number">{page}</span>
-              <span>
-                / {Math.max(1, Math.ceil(result.total / result.page_size))}
-              </span>
+              <span>Trang {page}</span>
               <button
-                className="icon-button"
-                aria-label="Trang sau"
-                disabled={page * result.page_size >= result.total}
-                onClick={() => setPage((p) => p + 1)}
+                className="button"
+                disabled={page * size >= result.total}
+                onClick={() => setPage((n) => n + 1)}
               >
-                <ChevronRight size={16} />
+                Trang sau
               </button>
             </div>
           </div>
         </>
+      )}
+      {detail && detail.race_id === raceId && (
+        <Modal title="Chi tiết sinh viên" onClose={() => setDetail(null)}>
+          {detail.run_id ? (
+            <RunDetail
+              key={detail.run_id}
+              studentId={detail.student_id}
+              runId={detail.run_id}
+              embedded
+            />
+          ) : (
+            <div className="empty">
+              <h2>{detail.full_name}</h2>
+              <p>
+                Bib {detail.bib} · {detail.student_code}
+              </p>
+              <Badge status={detail.status} />
+              <p>Chưa có phiên chạy.</p>
+            </div>
+          )}
+        </Modal>
       )}
     </section>
   );

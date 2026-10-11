@@ -5,6 +5,25 @@ export interface BackendRace {
   status: RaceStatus;
   start_at: string | null;
 }
+export interface BackendRoute {
+  points: {
+    sequence_no: number;
+    latitude: number;
+    longitude: number;
+    checkpoint_id: string | null;
+  }[];
+  distance_m: number;
+}
+export interface BackendCheckpoint {
+  checkpoint_id: string;
+  code: string;
+  name: string;
+  sequence_no: number;
+  kind: "CHECKPOINT" | "LAP";
+  latitude: number | null;
+  longitude: number | null;
+  radius_m: number;
+}
 export interface BackendRunner {
   display_id?: string | null;
   bib_number?: string | null;

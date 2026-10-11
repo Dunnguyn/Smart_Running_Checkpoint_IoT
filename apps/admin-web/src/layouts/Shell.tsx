@@ -1,6 +1,5 @@
-import { dataMode } from "../services";
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useState } from "react";
+import { NavLink, Outlet } from "react-router-dom";
 import {
   Activity,
   LayoutDashboard,
@@ -8,14 +7,11 @@ import {
   Users,
   Flag,
   ScanLine,
-  ChartNoAxesCombined,
-  Settings,
-  Bell,
-  Search,
-  ChevronDown,
-  ArrowUpRight,
-  X,
+  PanelLeftClose,
 } from "lucide-react";
+import { useLive } from "../app/LiveProvider";
+import { datetime } from "../utils/format";
+import { dataMode } from "../services";
 const navigation = [
   { to: "/", label: "Tổng quan", icon: LayoutDashboard },
   { to: "/live", label: "Bản đồ trực tiếp", icon: Map },
@@ -24,36 +20,44 @@ const navigation = [
   { to: "/checkpoints", label: "Checkpoint", icon: ScanLine },
 ];
 export function Shell() {
-  const [notifications, setNotifications] = useState(false),
-    [profile, setProfile] = useState(false),
-    [query, setQuery] = useState("");
-  const navigate = useNavigate();
-  useEffect(() => {
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setNotifications(false);
-        setProfile(false);
-      }
-    };
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, []);
+  const [collapsed, setCollapsed] = useState(false);
+  const {
+    races,
+    raceId,
+    selectRace,
+    connection,
+    refreshData,
+    retry,
+    snapshot,
+    logout,
+  } = useLive();
+  const connectionLabel =
+    connection === "connected"
+      ? "Đã kết nối server"
+      : connection === "connecting" || connection === "reconnecting"
+        ? "Đang kết nối lại"
+        : "Mất kết nối server";
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <NavLink to="/" className="brand" aria-label="NEU RUN trang chủ">
           <span className="brand-icon">
             <Activity size={25} />
           </span>
-          <span>
-            NEU RUN
-            <small>
-              <i /> LIVE
-            </small>
+          <span className="brand-name">
+            NEU RUN<small>LIVE</small>
           </span>
         </NavLink>
-        <div className="nav-label">KHÔNG GIAN QUẢN TRỊ</div>
-        <nav>
+        <button
+          className="button collapse-control"
+          aria-label="Thu gọn hoặc mở sidebar"
+          aria-expanded={!collapsed}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <PanelLeftClose size={18} />
+          <span>Thu gọn</span>
+        </button>
+        <nav aria-label="Điều hướng chính">
           {navigation.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
@@ -67,144 +71,63 @@ export function Shell() {
             >
               <Icon size={20} />
               <span>{label}</span>
-              {to === "/live" && <i className="live-dot" />}
             </NavLink>
           ))}
         </nav>
-        <div className="nav-label secondary">CÔNG CỤ</div>
-        <nav>
-          <NavLink
-            to="/reports"
-            className="nav-item"
-            title="Báo cáo"
-            aria-label="Báo cáo"
-          >
-            <ChartNoAxesCombined size={20} />
-            <span>Báo cáo</span>
-          </NavLink>
-          <NavLink
-            to="/settings"
-            className="nav-item"
-            title="Cài đặt"
-            aria-label="Cài đặt"
-          >
-            <Settings size={20} />
-            <span>Cài đặt</span>
-          </NavLink>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="support-card">
-            <span className="support-icon">
-              <Activity size={22} />
-            </span>
-            <strong>
-              Mỗi bước chân,
-              <br />
-              một hành trình.
-            </strong>
-            <p>
-              Cùng NEU chinh phục
-              <br />
-              những giới hạn mới.
-            </p>
-            <NavLink to="/races">
-              Khám phá giải chạy <ArrowUpRight size={14} />
-            </NavLink>
-          </div>
-          <div className="system">
-            <i /> {dataMode === "api" ? "Kết nối API" : "Chế độ mô phỏng"}{" "}
-            <span>v1.0</span>
-          </div>
-        </div>
       </aside>
       <div className="main-shell">
-        <header className="topbar">
-          <div className="breadcrumb">
-            Không gian quản trị <span>/</span>
-            <strong>NEU RUN</strong>
+        <header className="topbar unified-header">
+          <label className="race-select">
+            Giải đang xem
+            <select
+              aria-label="Chọn giải chạy"
+              value={raceId}
+              onChange={(e) => selectRace(e.target.value)}
+            >
+              {races.map((r) => (
+                <option key={r.race_id} value={r.race_id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="server-state">
+            <strong>
+              {dataMode === "api" ? connectionLabel : "Dữ liệu minh họa"}
+            </strong>
+            <small>
+              {snapshot
+                ? `Cập nhật ${datetime(snapshot.updated_at)}`
+                : "Đang tải dữ liệu"}
+            </small>
           </div>
-          <form
-            className="global-search"
-            onSubmit={(e) => {
-              e.preventDefault();
-              navigate(`/runners?q=${encodeURIComponent(query)}`);
-            }}
+          <button
+            className="button"
+            onClick={() => (snapshot ? refreshData() : retry())}
           >
-            <Search size={17} />
-            <input
-              aria-label="Tìm kiếm sinh viên toàn hệ thống"
-              placeholder="Tìm kiếm sinh viên…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <kbd>↵</kbd>
-          </form>
-          <div className="header-actions">
-            <button
-              className="icon-button notification-button"
-              aria-label="Thông báo"
-              aria-expanded={notifications}
-              title="Thông báo"
-              onClick={() => {
-                setNotifications(!notifications);
-                setProfile(false);
-              }}
-            >
-              <Bell size={20} />
-              <i />
-            </button>
-            <button
-              className="profile-button"
-              aria-label="Hồ sơ quản trị viên"
-              aria-expanded={profile}
-              onClick={() => {
-                setProfile(!profile);
-                setNotifications(false);
-              }}
-            >
-              <span className="avatar">QT</span>
-              <span>
-                <strong>Quản trị viên</strong>
-                <small>NEU Administrator</small>
-              </span>
-              <ChevronDown size={15} />
-            </button>
-          </div>
-          {(notifications || profile) && (
-            <div className="header-popover">
-              <button
-                className="icon-button popover-close"
-                aria-label="Đóng"
-                onClick={() => {
-                  setNotifications(false);
-                  setProfile(false);
-                }}
-              >
-                <X size={16} />
-              </button>
-              <strong>
-                {notifications ? "Thông báo mô phỏng" : "Hồ sơ mẫu"}
-              </strong>
+            Làm mới
+          </button>
+          <details className="account-menu">
+            <summary>Quản trị viên</summary>
+            <div>
               <p>
-                {notifications
-                  ? "Hệ thống sẵn sàng. Nhấn Bắt đầu để theo dõi 8 sinh viên di chuyển trên tuyến minh họa."
-                  : "Quản trị viên · Đại học Kinh tế Quốc dân. Đây là thông tin mẫu cho bản demo."}
+                Nguồn GPS xem riêng ở từng người chạy; kết nối server không xác
+                nhận GPS mới.
               </p>
+              <button className="button" onClick={logout}>
+                Đăng xuất
+              </button>
+              <details>
+                <summary>Chi tiết kỹ thuật</summary>
+                <p>WebSocket: {connection}</p>
+                <p>Chế độ dữ liệu: {dataMode}</p>
+              </details>
             </div>
-          )}
+          </details>
         </header>
         <main>
           <Outlet />
         </main>
-        <footer>
-          <span>© 2026 NEU RUN · Đại học Kinh tế Quốc dân</span>
-          <span>
-            <i />{" "}
-            {dataMode === "api"
-              ? "API thật · nguồn dữ liệu do backend cung cấp"
-              : "Mock frontend · Không kết nối backend"}
-          </span>
-        </footer>
       </div>
     </div>
   );

@@ -1,8 +1,8 @@
-import { ChevronRight, Radio, MapPin } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useState } from "react";
 import type { LiveSnapshot } from "../../types/domain";
-import { Panel, Empty } from "../../components/ui";
-import { distance } from "../../utils/format";
+import { Panel, Empty, Badge } from "../../components/ui";
+import { datetime } from "../../utils/format";
+import { gpsLabel, sourceLabel } from "../../utils/labels";
 export function WatchList({
   snapshot,
   selectedId,
@@ -12,63 +12,86 @@ export function WatchList({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const runners = snapshot.runners
-    .filter((r) => r.status === "ACTIVE" && r.connection === "ONLINE")
-    .slice(0, 8);
+  const [query, setQuery] = useState(""),
+    [status, setStatus] = useState(""),
+    [gps, setGps] = useState("");
+  const rows = snapshot.runners.filter(
+    (r) =>
+      (!status || r.status === status) &&
+      (!gps || r.connection === gps) &&
+      `${r.bib} ${r.full_name} ${r.student_code}`
+        .toLocaleLowerCase()
+        .includes(query.toLocaleLowerCase()),
+  );
   return (
     <Panel
-      title="Đang theo dõi"
-      subtitle={`${runners.length} sinh viên có vị trí cập nhật`}
-      action={<Radio size={19} className="teal" />}
+      title="Vị trí người chạy"
+      subtitle={`${rows.length} / ${snapshot.runners.length} người trong dữ liệu giải`}
       className="watch-panel"
     >
+      <div className="watch-filters">
+        <label>
+          Tìm người chạy
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Tên, mã sinh viên, bib"
+          />
+        </label>
+        <label>
+          Trạng thái chạy
+          <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">Tất cả</option>
+            <option value="ACTIVE">Đang chạy</option>
+            <option value="COMPLETED">Hoàn thành</option>
+            <option value="PENDING">Chưa bắt đầu</option>
+            <option value="ABANDONED">Đã dừng</option>
+          </select>
+        </label>
+        <label>
+          Vị trí GPS
+          <select value={gps} onChange={(e) => setGps(e.target.value)}>
+            <option value="">Tất cả GPS</option>
+            {["ONLINE", "STALE", "UNAVAILABLE", "FINISHED"].map((k) => (
+              <option key={k} value={k}>
+                {gpsLabel(k)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <div className="watch-list">
-        {runners.map((r) => (
+        {rows.map((r) => (
           <button
             key={r.student_id}
-            aria-pressed={selectedId === r.student_id}
             className={`watch-row ${selectedId === r.student_id ? "chosen" : ""}`}
+            aria-pressed={selectedId === r.student_id}
             onClick={() => onSelect(r.student_id)}
           >
-            <span
-              className="bib-token"
-              style={{ background: r.color + "15", color: r.color }}
-            >
+            <span className="bib-token" style={{ color: r.color }}>
               #{r.bib}
             </span>
             <span className="watch-info">
               <strong>{r.full_name}</strong>
               <small>
-                {r.student_code} <span>·</span> Vòng {r.lap_count}/
-                {r.total_laps}
+                {r.student_code} · Vòng {r.lap_count}/{r.total_laps}
               </small>
-              <span className="progress">
-                <i
-                  style={{
-                    width: `${Math.min(100, (r.lap_count / (r.total_laps || 1)) * 100)}%`,
-                    background: r.color,
-                  }}
-                />
-              </span>
-            </span>
-            <span className="watch-distance">
-              {distance(r.distance_total_m)}
+              <Badge status={r.status} />
               <small>
-                <MapPin size={10} /> Trực tuyến
+                {gpsLabel(r.connection)} · {datetime(r.last_seen_at)}
+                <br />
+                {sourceLabel(r.source)}
               </small>
             </span>
           </button>
         ))}
       </div>
-      {!runners.length && (
+      {!rows.length && (
         <Empty
-          title="Chưa có vị trí GPS mới để theo dõi"
-          description="Phiên chạy có thể vẫn đang hoạt động nhưng thiếu GPS hoặc dữ liệu đã cũ. Xem trạng thái phiên trong bảng sinh viên."
+          title="Không có người chạy phù hợp"
+          description="Thay đổi bộ lọc. Người chưa có GPS vẫn nằm trong danh sách của giải."
         />
       )}
-      <Link className="panel-link" to="/runners">
-        Xem tất cả sinh viên <ChevronRight size={16} />
-      </Link>
     </Panel>
   );
 }
