@@ -107,7 +107,8 @@ export function runnerConnection(
   if (
     !validPosition(row.last_latitude, row.last_longitude) ||
     !row.last_seen_at ||
-    !Number.isFinite(Date.parse(row.last_seen_at))
+    !Number.isFinite(Date.parse(row.last_seen_at)) ||
+    Date.parse(row.last_seen_at) > Date.now()
   )
     return "UNAVAILABLE";
   return Date.now() - Date.parse(row.last_seen_at) > 30000 ? "STALE" : "ONLINE";
@@ -145,13 +146,11 @@ export function normalizeRunner(
     last_seen_at: lastSeen,
     last_latitude: valid ? row.last_latitude! : null,
     last_longitude: valid ? row.last_longitude! : null,
-    connection:
-      row.status === "COMPLETED"
-        ? "FINISHED"
-        : !valid || !lastSeen
-          ? "UNAVAILABLE"
-          : Date.now() - Date.parse(lastSeen) > 30000
-            ? "STALE"
-            : "ONLINE",
+    connection: runnerConnection({
+      status: row.status as RunSession["status"],
+      last_seen_at: lastSeen,
+      last_latitude: valid ? row.last_latitude! : null,
+      last_longitude: valid ? row.last_longitude! : null,
+    }),
   };
 }

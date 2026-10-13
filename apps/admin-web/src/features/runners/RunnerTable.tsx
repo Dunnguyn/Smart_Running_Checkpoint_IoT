@@ -10,6 +10,8 @@ import type {
   RunnerFilters,
 } from "../../types/domain";
 import { Badge, Empty } from "../../components/ui";
+import { IconAction } from "../../components/IconAction";
+import { Eye } from "lucide-react";
 import { Modal } from "../../components/Modal";
 import { RunDetail } from "./RunDetail";
 import { datetime, distance, duration } from "../../utils/format";
@@ -117,7 +119,7 @@ export function RunnerTable() {
       </div>
       <div className="filter-bar">
         <label>
-          Tìm tên, mã sinh viên, bib
+          Tìm tên, mã sinh viên, số báo danh
           <input
             value={query}
             onChange={(e) => filter("q", e.target.value)}
@@ -194,7 +196,7 @@ export function RunnerTable() {
             <table>
               <thead>
                 <tr>
-                  <th>Bib</th>
+                  <th>Số báo danh</th>
                   <th>Sinh viên</th>
                   <th
                     aria-sort={
@@ -280,9 +282,12 @@ export function RunnerTable() {
                         <td>{datetime(r.last_seen_at)}</td>
                       )}
                       <td>
-                        <button className="button" onClick={() => setDetail(r)}>
-                          Chi tiết
-                        </button>
+                        <IconAction
+                          label={`Xem chi tiết ${r.full_name}`}
+                          onClick={() => setDetail(r)}
+                        >
+                          <Eye size={18} />
+                        </IconAction>
                       </td>
                     </tr>
                   );
@@ -330,7 +335,11 @@ export function RunnerTable() {
         </>
       )}
       {detail && detail.race_id === raceId && (
-        <Modal title="Chi tiết sinh viên" onClose={() => setDetail(null)}>
+        <Modal
+          variant="drawer"
+          title="Chi tiết sinh viên"
+          onClose={() => setDetail(null)}
+        >
           {detail.run_id ? (
             <RunDetail
               key={detail.run_id}

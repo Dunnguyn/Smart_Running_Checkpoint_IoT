@@ -1,3 +1,5 @@
+import { Search } from "lucide-react";
+import { RaceActions } from "./RaceActions";
 import { useEffect, useState } from "react";
 import { Link, useParams, useLocation } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
@@ -155,14 +157,17 @@ export function Races() {
           title="Danh sách giải"
           subtitle="Tìm và lọc trong toàn bộ danh sách giải đã tải."
         >
-          <div className="filter-bar">
+          <div className="filter-bar race-filter-bar">
             <label>
               Tìm giải
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Tên giải chạy"
-              />
+              <span className="search-input">
+                <Search size={18} aria-hidden="true" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Tìm theo tên giải…"
+                />
+              </span>
             </label>
             <label>
               Trạng thái giải
@@ -179,7 +184,7 @@ export function Races() {
               </select>
             </label>
           </div>
-          <div className="table-scroll">
+          <div className="table-scroll race-table">
             <table>
               <thead>
                 <tr>
@@ -196,7 +201,13 @@ export function Races() {
                     className={r.race_id === current ? "current-race" : ""}
                   >
                     <td>
-                      <strong>{r.name}</strong>
+                      <Link
+                        className="race-name"
+                        to={`/races/${r.race_id}`}
+                        title={r.name}
+                      >
+                        {r.name}
+                      </Link>
                       {r.race_id === current && <small>Đang xem</small>}
                       {r.participant_count != null && (
                         <small>
@@ -212,23 +223,12 @@ export function Races() {
                       {r.started_at ? datetime(r.started_at) : "Chưa có lịch"}
                     </td>
                     <td>
-                      <Link
-                        className="button primary"
-                        to={`/races/${r.race_id}`}
-                      >
-                        Mở giải
-                      </Link>
-                      {dataMode === "api" && (
-                        <details className="race-actions">
-                          <summary>Thao tác khác</summary>
-                          <button
-                            className="button danger"
-                            onClick={() => setDeleting(r)}
-                          >
-                            Xóa giải
-                          </button>
-                        </details>
-                      )}
+                      <RaceActions
+                        race={r}
+                        onDelete={
+                          dataMode === "api" ? () => setDeleting(r) : undefined
+                        }
+                      />
                     </td>
                   </tr>
                 ))}

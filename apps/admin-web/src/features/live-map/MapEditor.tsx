@@ -535,8 +535,8 @@ export function MapEditor({
                 Xem toàn tuyến
               </button>
               <p>
-                Không theo dõi runner hoặc tự đổi khung nhìn khi chỉnh sửa.
-                Runner chỉ để xem.
+                Không theo dõi người chạy hoặc tự đổi khung nhìn khi chỉnh sửa.
+                Người chạy chỉ để xem.
               </p>
               <fieldset disabled={blocked || busy}>
                 {mode === "checkpoint" ? (

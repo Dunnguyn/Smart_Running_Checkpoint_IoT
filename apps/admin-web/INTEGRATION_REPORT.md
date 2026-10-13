@@ -1,3 +1,357 @@
+# Tinh chỉnh UI và QA các trang — 13/10/2026 (mới nhất)
+
+## Phạm vi và kết luận
+
+Đã sửa các lỗi frontend xác nhận được và kiểm tra giao diện bằng Playwright/Edge headless với API fixture cô lập. **Đây không phải E2E thao tác ghi với backend thật.** Giữ nguyên các thay đổi chưa commit có sẵn; không commit/push, không đổi dependency hoặc môi trường kết nối.
+
+- HEAD local: `03f8ab2`. Frontend `http://localhost:5173` trả HTTP 200 khi kiểm tra ngoài sandbox; chỉ khởi động frontend.
+- Kết nối production của FE vẫn là REST `http://localhost:8000/api/v1`, WS `ws://localhost:8000`, chế độ `api`.
+- Backend `http://localhost:8000/health` không đáp ứng (lần kiểm tra ngoài sandbox cuối timeout 3 giây). Không khởi động/restart backend theo phạm vi được giao. **BLOCKED** việc xác minh lại hai race thật và WS nghiệp vụ.
+- Mọi API trong harness mới đều bị interception trước điều hướng; request ghi không dự kiến nhận lỗi tại harness. WS được giữ trong fixture, không phát frame nghiệp vụ giả. Fixture chỉ nằm trong `scripts/fixtures`, không được import vào ứng dụng.
+- **0 thao tác ghi nghiệp vụ thật; không chạy simulator, không sửa dữ liệu lịch sử. `git diff -- services/backend` rỗng.**
+
+## Lỗi xác nhận và thay đổi
+
+1. **Điều hướng giữa hai trang dài giữ vị trí cuộn cũ.** Từ map đã cuộn sang Tổng quan, tiêu đề có `y=-334.95`, header cao `68.05px`. Bổ sung `ScrollRestoration` theo pathname: trang mới bắt đầu đúng vị trí, truy vấn lọc/chọn runner không reset cuộn; lịch sử trình duyệt có phục hồi. Sau sửa tiêu đề ở `y=94.05`, dưới header. Không thêm margin bù cố định.
+2. **GPS lặp timestamp dài và chưa tự biểu diễn tuổi mẫu.** `GpsTimestamp` dùng một timer chung, tự dọn khi không còn người dùng, hiển thị tuổi mẫu thực; tooltip/accessible label chứa ngày giờ theo múi giờ trình duyệt. Thiếu, không hợp lệ và tương lai không được gọi là GPS mới; phiên hoàn thành có “Vị trí cuối phiên”. Giữ nguyên timestamp chính xác trong lịch sử.
+3. **Hai nhánh phân loại GPS khác nhau.** Hợp nhất phân loại khi normalize REST và khi cập nhật độ mới; mẫu tương lai không còn hiện ONLINE trước nhịp đồng bộ tiếp theo. Không thay tọa độ hay trạng thái run.
+4. **Thông báo khóa tuyến thiếu ngữ cảnh.** Chỉ ánh xạ chính xác lý do “Đã tạo ít nhất một phiên chạy cho giải này.” sang “Tuyến đã khóa vì giải đã có phiên chạy.” Lý do khác giữ nguyên; thiếu/mâu thuẫn metadata vẫn khóa. Không suy ra mở khóa từ DRAFT/COMPLETED hoặc ACTIVE=0.
+5. **Refetch chi tiết run lỗi xóa nội dung đang xem.** Giữ dữ liệu cùng run và hiển thị lỗi + Thử lại. Run khác không hiển thị dữ liệu run cũ. Bổ sung trạng thái lịch sử rỗng và nhãn “Độ mới GPS”, tránh gọi GPS mới là thiết bị trực tuyến.
+6. **Toolbar bản đồ bị kéo cao khi mở Lớp bản đồ.** Căn giữa các điều khiển trong rule dùng chung; nhóm điều khiển khung nhìn riêng; nút fit dùng icon có tên/tooltip tiếng Việt. Bỏ link “Mở rộng bản đồ” trên chính `/live`; giữ link ở Tổng quan. Giữ route/marker, độ dài, chú giải, attribution và lỗi tile.
+7. **Trang 404 dùng lời mô tả tính năng demo chưa triển khai.** Thay bằng đường dẫn không tồn tại và hướng dẫn trở về Tổng quan.
+
+Đã kiểm tra z-index marker được chọn, cụm ba người trùng tọa độ, chọn từ popup → danh sách và bấm checkpoint không đổi runner. Không dịch marker và không cho kéo runner. UI thật vẫn dùng Leaflet; ảnh fixture cố tình chặn tile để kiểm tra lỗi nền, không thay bằng SVG.
+
+## Inventory route và giao diện
+
+Không tạo route giả theo prototype. Auth bảo vệ các route, key chỉ giữ trong bộ nhớ.
+
+| Route thực tế | Nội dung / tương tác hiện có |
+| --- | --- |
+| `/` | Tổng quan, thẻ số liệu, tiến độ backend, map thu gọn, sự kiện gần nhất, thống kê mở rộng |
+| `/live` | Map + danh sách GPS; tìm kiếm, trạng thái run/GPS, theo dõi, fit, lớp bản đồ, popup |
+| `/races` | Danh sách, tìm/lọc, menu hàng, form tạo, xác nhận xóa; trạng thái mô phỏng gần nhất |
+| `/races/:raceId` | Thiết lập giải; thông tin tuyến và cấu hình matching |
+| `/runners?view=runs` (mặc định) | Phiên chạy; tìm/lọc, sắp xếp, số dòng, phân trang, cột phụ, drawer |
+| `/runners?view=participants` | Đăng ký của giải; form đăng ký sinh viên và bib |
+| `/runners?view=students` | Danh bạ toàn hệ thống, tìm và phân trang |
+| `/runners/:studentId/runs/:runId` | Chi tiết độc lập; metrics, thông tin, vòng và lịch sử GPS/LAP |
+| `/checkpoints?tab=attention` (mặc định) | Hàng đợi AMBIGUOUS, số đếm backend, modal chi tiết/CONFIRM/DISMISS |
+| `/checkpoints?tab=journal` | Nhật ký, checkpoint/status/thời gian, áp dụng/xóa lọc, cursor trước/sau |
+| `/checkpoints/:checkpointId` | Nhật ký theo checkpoint; dùng `?tab=journal` để mở đúng tab |
+| `/checkpoints?tab=stations` | Trạm, tọa độ/bán kính, định danh mở rộng, modal đăng ký thiết bị |
+| `/?edit=…` hoặc `/live?edit=route|checkpoint` | Editor tuyến/checkpoint, input/kéo/chọn điểm, undo/reset/save/cancel, cảnh báo draft |
+| `/simulation` | Form tạo, tham số, theo dõi job, stop/retry, job lỗi/mất sau restart |
+| `*` | Trang không tồn tại |
+
+Các dialog hiện có: tạo giải, xóa giải, đăng ký sinh viên, đăng ký thiết bị, xác nhận checkpoint; drawer chi tiết run. Menu tài khoản/row actions, tabs, chọn cột và các khối chi tiết vẫn được giữ. Lịch sử run hiện **không có tab/phân trang UI riêng**; adapter tải các trang lịch sử API. Không thêm tính năng báo cáo, thiết bị online hay kết quả thi đấu chính thức theo dữ liệu prototype.
+
+## Coverage matrix
+
+Evidence `QA` = `test-results/qa-20261013/`; các ảnh đều là **FIXTURE**, không phải bằng chứng backend đang hoạt động. Kết quả các suite cũ dưới đây là các lần đã chạy lại trong lượt này.
+
+| Page/flow | State tested | Real or fixture | Result | Evidence | Limitation |
+| --- | --- | --- | --- | --- | --- |
+| Auth | Key hợp lệ/401, inline error, route bảo vệ, logout xóa key, refresh yêu cầu đăng nhập | Fixture | PASS | QA `auth-invalid.png`, `interactions.json` | Không thử key thật |
+| Các trang chính | 12 route/biến thể × 1440×900, 1366×768, 768×1024, 390×844; direct URL/auth, không tràn ngang trang | Fixture | PASS | QA `results.json`, ảnh tiền tố viewport | Bảng rộng cuộn cục bộ có chủ đích |
+| Sidebar/history | Tất cả link chính, scope, active item, back/forward thiết lập↔checkpoint | Fixture | PASS | QA `interactions.json` | Không khẳng định mọi tổ hợp history của từng filter |
+| Header/Tổng quan | Điều hướng từ map đã cuộn, tiêu đề/badge; không thêm khoảng trống bù | Fixture | PASS | QA `before-navigation-results.json`, `before-overview-navigation.png`, `overview-navigation-heading.png` | Trước sửa FAIL, sau sửa PASS |
+| Header/menu | Trạng thái bình thường gọn, lỗi read/reconnect, tooltip/focus/Escape, menu không đổi chiều cao hàng | Fixture | PASS | `ui-after/report.json`, `verify-ui-polish.mjs` | Socket fixture chỉ kiểm tra vòng đời kết nối |
+| Race directory | Tên dài, search rỗng, chọn giải, create validation/422/busy/unknown-result/cancel | Fixture | PASS | `verify-race-create.mjs`, `ui-after/long-name.png` | 3 POST được intercept, không tạo giải thật |
+| Xóa giải | Xác nhận, ACTIVE vẫn cho gửi, 409, lost response/readback, cleanup cache/socket | Fixture | PASS | `current/admin-report.json`, `delete-confirm.png` | Không xóa dữ liệu thật |
+| Tổng quan | Số liệu/order hiển thị từ snapshot, populated/empty và cảnh báo lỗi đọc | Fixture | PASS | QA `1440--.png`, `ui-after/report.json` | Không kiểm toán tính nhất quán số liệu backend hiện tại |
+| Live map | GPS cuối phiên/thiếu/tương lai/tuổi tăng; cluster ×3, z-index, popup/list sync, checkpoint không chọn runner | Fixture | PASS | QA `map-selected-overlap.png`, `interactions.json` | Không phải GPS chuyển động thật |
+| Live map controls | Fit route, theo dõi rồi pan dừng theo dõi, vị trí khung nhìn ổn định qua polling, tắt/bật layer | Fixture | PASS | QA `interactions.json` | Chờ Leaflet inertia xong trước so sánh; không kết luận WS delivery |
+| Tile | Lỗi tile giữ tuyến/marker, cảnh báo gọn | Fixture | PASS | QA ảnh map | Tile thành công không kiểm tra lại lượt này; có bằng chứng ở E2E cũ |
+| Sinh viên/đăng ký | Tìm debounce/stale cancellation, đổi race, conflict giữ form, UUID và bib 01/blank | Fixture | PASS | `current/enrollment-report.json`, `participants-768.png` | 2 POST intercept |
+| Run drawer/detail | Đúng ID/metrics, duration COMPLETED 00:02:10 không tăng; empty history, background 503 giữ nội dung, Escape | Fixture | PASS | QA `drawer-background-error.png`, `session-direct.png` | Không có tab/phân trang lịch sử UI để kiểm tra |
+| Setup/editor | CUSTOM/metadata; input/drag/pick/radius, cancel/undo, required anchors, PATCH/PUT, 422/409/ambiguous 500/readback, draft chống refetch | Fixture + unit | PASS | `verify-map-editor.mjs`, `mapEditorService.test.ts` | 4 write intercept; không E2E save thật |
+| Matching config | Read-before-edit, PATCH lỗi giữ draft, thành công refetch; metadata khóa | Fixture + unit | PASS | `current/admin-report.json`, `matching.png` | Chưa mô phỏng mọi mã conflict cấu hình |
+| Checkpoint review | Không tự chọn gần nhất, pending candidates bị khóa, reason bắt buộc, CONFIRM 409/version/passage/idempotency, DISMISS null passage | Fixture | PASS | QA `interactions.json`, `resolve-conflict-recovered.png` | Không xác nhận vòng thật |
+| Checkpoint journal | Route checkpoint, select theo ID thực của fixture, cursor next/previous, empty, clear filter | Fixture | PASS | QA `interactions.json` | Không thử mọi khoảng ngày/múi giờ biên |
+| Device dialog | Payload đăng ký, thông báo không chứng minh online, modal 390px | Fixture | PASS | QA `device-dialog.png`, `device-dialog-390.png` | Không đăng ký thiết bị thật; chưa thử mọi lỗi field |
+| Simulation | Gap=0, một POST/start, job↔race, stop/readback, terminal cleanup, 404 restart và unknown-result không retry mù | Fixture | PASS | `current/admin-report.json` | Không tạo simulation thật; không chạy script E2E cũ |
+| Not found | Direct URL, thông báo/đường về tổng quan, responsive | Fixture | PASS | QA `1440--not-a-page.png` | — |
+| Zoom | Viewport CSS tương đương 125%, không overflow | Fixture | PASS | `ui-after/scale125.png` | **Xấp xỉ**, không phải browser zoom thật |
+| Hai race đã ghi ở E2E trước | Xác minh tồn tại và dữ liệu đọc mới | Real | BLOCKED | Health 8000 không phản hồi | Không tái tạo race hoặc restart BE |
+| WS nghiệp vụ / Arduino | Delivery, correlation và COUNTED thật | Real | BLOCKED | Kết quả E2E cũ và source hiện tại | Không dùng REST/fixture làm bằng chứng WS |
+| Toàn bộ tích Descartes trạng thái × page × viewport | Mọi 401/403/404/409/422/5xx, latency và accessibility screen reader trên từng control | Fixture/real | NOT TESTED | Phạm vi từng dòng ở trên | Không tuyên bố “mọi chức năng đều hoạt động” |
+
+## Lệnh đã thực thi
+
+Trong `apps/admin-web`:
+
+- `npm run lint`: PASS.
+- `npm run typecheck`: PASS.
+- `npm test`: **42/42 PASS**, 9 file. Test mẫu GPS tương lai ban đầu phát hiện nhánh normalize chưa dùng cùng logic; đã sửa và chạy lại đạt.
+- `npm run build`: PASS; cảnh báo chunk JS khoảng **614 kB**, tách khỏi lỗi chức năng, không nâng dependency/đổi kiến trúc để che cảnh báo.
+- `node scripts/verify-ui-polish.mjs`: PASS, 0 mutation.
+- `node scripts/verify-map-editor.mjs`: PASS, 4 intercepted writes.
+- `node scripts/verify-enrollment.mjs`: PASS, 2 intercepted writes.
+- `node scripts/verify-race-create.mjs`: PASS, 3 intercepted writes. Đã sửa assertion lỗi thời tìm selector toàn cục trên trang danh sách; giờ kiểm tra hàng “Đang xem”.
+- `node scripts/verify-admin-current.mjs`: PASS, 9 intercepted writes.
+- `node scripts/verify-qa-pages.mjs`: bộ inventory/ảnh; `QA_INTERACTIONS_ONLY=1 node scripts/verify-qa-pages.mjs`: chạy riêng hồi quy tương tác sau sửa. `results.json` / `interactions.json` ghi từng check và body các write fixture (không có key).
+- `git diff --check`: không lỗi whitespace. Có warning LF/CRLF của workspace, không phải lỗi test.
+
+Không có `pageerror` trong các lần browser suite đạt. HTTP 401/409/503 và tile bị abort là lỗi được chủ động tạo trong fixture để kiểm tra UI, không báo thành lỗi backend. Những lần harness chưa đạt vì selector cũ, animation popup/inertia hoặc HMR mất auth đã được phân biệt với lỗi sản phẩm; chỉ dùng kết quả chạy lại thành công trong coverage.
+
+## File frontend thay đổi trong lượt này
+
+| File (tương đối với apps/admin-web) | Mục đích |
+| --- | --- |
+| `src/layouts/Shell.tsx` | Phục hồi vị trí cuộn theo route |
+| `src/app/main.tsx` | Nội dung trang không tồn tại |
+| `src/components/GpsTimestamp.tsx`, `src/utils/gpsTime.ts` | Đồng hồ GPS chung và định dạng tuổi mẫu |
+| `src/features/live-map/WatchList.tsx`, `LiveMap.tsx` | Nhãn GPS, toolbar, bỏ mở rộng trùng lặp |
+| `src/design.css` | Rule toolbar chung, nhóm view controls và kích thước nút |
+| `src/features/runners/RunDetail.tsx` | Giữ dữ liệu khi refetch lỗi, empty history, nhãn độ mới GPS |
+| `src/services/contract.ts`, `mapEditorService.ts` | Phân loại mẫu tương lai nhất quán, giải thích đúng lý do khóa |
+| `src/utils/gpsTime.test.ts`, `src/services/apiAdapter.test.ts`, `mapEditorService.test.ts` | Hồi quy tuổi GPS, tương lai và lý do khóa |
+| `scripts/verify-qa-pages.mjs`, `scripts/fixtures/qa-dashboard.json` | Harness đa trang với snapshot mô phỏng đã ghi từ trước, không truy cập DB |
+| `scripts/verify-race-create.mjs` | Assertion phù hợp header/list hiện tại |
+| `INTEGRATION_REPORT.md` | Bàn giao lượt này; giữ nguyên báo cáo cũ phía dưới |
+
+Không nhận các thay đổi dirty có sẵn ở những file khác là công việc mới của lượt này. Không sửa URL, auth flow, REST/WS contract, cadence polling, schema, locking rule, simulator hoặc database.
+
+## Ảnh đối chiếu và ảnh trang
+
+- Header trước/sau: [trước](test-results/qa-20261013/before-overview-navigation.png) · [sau](test-results/qa-20261013/overview-navigation-heading.png). Số đo lỗi nằm trong `before-navigation-results.json`.
+- [Tổng quan](test-results/qa-20261013/1440--.png) · [Bản đồ](test-results/qa-20261013/1440--live.png) · [Giải chạy](test-results/qa-20261013/1440--races.png) · [Sinh viên/phiên](test-results/qa-20261013/1440--runners.png).
+- [Đăng ký](test-results/qa-20261013/1440--runners-view-participants.png) · [Danh bạ](test-results/qa-20261013/1440--runners-view-students.png) · [Checkpoint](test-results/qa-20261013/1440--checkpoints.png) · [Trạm](test-results/qa-20261013/1440--checkpoints-tab-stations.png) · [Mô phỏng](test-results/qa-20261013/1440--simulation.png).
+- [Drawer lỗi nền](test-results/qa-20261013/drawer-background-error.png) · [Tablet map](test-results/qa-20261013/768--live.png) · [390px](test-results/qa-20261013/390--races.png) · [Modal 390px](test-results/qa-20261013/device-dialog-390.png).
+- Reference đã đọc tại `E:\Hocccc\Project\Admin Dashboard for NEU RUN`; ảnh reference cũ ở `test-results/design-reference`. Giữ kích thước chữ dễ đọc lớn hơn prototype, Leaflet thật và sidebar icon ở điện thoại; không sao chép timer/demo/auth giả, không thêm tính năng thiếu contract.
+
+Ảnh và kết quả test nằm trong `test-results` được Git ignore; có trên workspace hiện tại, không tự đưa tất cả artifact vào commit.
+
+## Backend còn chặn và giới hạn
+
+- Source `services/backend/app/simulator.py` vẫn gửi `gateway_device_ids[-1]` cùng checkpoint đầu ở nhánh Arduino (khoảng dòng 317–329). Đây vẫn là đoạn code gây mismatch đã ghi trong E2E trước; **không chạy lại simulator** để xác nhận runtime mới.
+- `EventHub.publish` trong `app/main.py` vẫn `socket.send_json(payload)` rồi bỏ subscriber khi exception; đường payload run có datetime đã được chứng minh ở báo cáo E2E cũ. Không có bằng chứng sửa trong source được kiểm tra, không tuyên bố WS nghiệp vụ đã hoạt động.
+- Chưa thể xác minh lại race `ee363ab4-632d-4fae-abb7-3887b1f8c587` và `4a650caa-7c34-4ed1-9d00-d1974a90f8c8` do backend không phản hồi. Snapshot cũ dùng làm seed fixture **không chứng minh hai race hiện còn tồn tại**.
+- Lịch sử run hiện tải đầy đủ, chưa có phân trang/tab UI; thiết bị chưa có API danh sách/online được frontend xác minh. Không phát minh dữ liệu hay control giả để bù thiếu.
+
+---
+
+# Kiểm thử E2E thật sau redesign — 12–13/10/2026
+
+## Kết luận
+
+**GPS_ONLY: PASS luồng REST/nghiệp vụ và hoàn thành tự nhiên; FAIL phát message WebSocket. GPS_AND_ARDUINO: FAIL tại simulator/backend với HTTP 422 DEVICE_CHECKPOINT_MISMATCH; các bước correlation/COUNTED và hoàn thành bị BLOCKED.** Không diễn giải job terminal thành runner thành công.
+
+Đã thực hiện đúng **2 POST tạo simulation** qua frontend, không tạo job thay thế. Không dùng response thành công giả hoặc frame WebSocket giả. Các kiểm thử sau khi tạo chỉ đọc. Dữ liệu test giữ lại; không dừng job nào vì cả hai đã tự kết thúc (một thành công, một lỗi).
+
+## Preflight và phạm vi
+
+- Source HEAD `03f8ab2`, giữ nguyên workspace dirty từ lượt trước. Đọc phần báo cáo mới nhất, hướng dẫn và scripts; scripts fixture cũ không dùng để kết luận E2E thật.
+- FE `http://localhost:5173`; `VITE_DATA_MODE=api`, REST `http://localhost:8000/api/v1`, WS `ws://localhost:8000`. `/health` trả `status=ok`; OpenAPI `SimulationStartIn` đã đối chiếu runtime.
+- Cấu hình backend hiện có là SQLite `running_demo.db`, simulator nhắm loopback. Tái sử dụng tiến trình; không start/restart backend. Không in/copy key vào report, screenshot, URL bằng chứng hoặc trace. Không mở tracing.
+- Admin API hỗ trợ mode, seed, interval, departure gap; **không hỗ trợ tên job/race hoặc chọn số người/số vòng**. Source `main.py:945` cố định 5 người/4 vòng. Vì vậy không thêm tiền tố E2E bằng API khác; lưu ID ngay khi nhận được.
+- Baseline 4 race, sau kiểm thử 6 race; mọi ID baseline còn nguyên. Chỉ baseline danh sách race, không khẳng định kiểm toán bất biến toàn bộ từng hàng database.
+- Timeout mỗi job 360 giây: tuyến 425m, pace khoảng 13m/s, 4 vòng khoảng 130 giây, departure tối đa 32 giây và phần dư cho API/matching. Không phải giảm ngưỡng vòng để tăng tốc.
+
+## Job và tài nguyên tạo mới
+
+| Kịch bản | Simulation ID | Race ID | Tham số thực gửi | Kết quả job / race |
+|---|---|---|---|---|
+| GPS_ONLY | `3f8d99a4-5212-4194-bff9-149730a9ed78` | `ee363ab4-632d-4fae-abb7-3887b1f8c587` | seed=42, interval_seconds=0.5, runner_start_gap_seconds=0; 5 người/4 vòng mặc định BE | COMPLETED (exit 0) / COMPLETED |
+| GPS_AND_ARDUINO | `9b354cad-6426-4f37-a4c5-9c4faf38a6ec` | `4a650caa-7c34-4ed1-9d00-d1974a90f8c8` | seed=42, interval_seconds=0.5, runner_start_gap_seconds=8; 5 người/4 vòng mặc định BE | FAILED (exit 1) / LIVE |
+
+Mỗi giải: 5 student, 5 đăng ký/bib, 5 wearable ID, 5 run ID, 4 checkpoint, route 9 điểm. Job Arduino còn đăng ký 4 Gateway device; ID/mapping của chúng được ghi theo quy tắc đặt tên/đăng ký đã đọc trong simulator, không giả vờ đã GET danh sách device (không có endpoint đó trong contract đã kiểm tra). GPS/history phát sinh được lưu qua API phân trang đầy đủ.
+
+Danh mục tài nguyên: [GPS resources](test-results/real-e2e-20261012/GPS_ONLY-resources.json), [Arduino resources](test-results/real-e2e-20261012/GPS_AND_ARDUINO-resources.json). [Ledger](test-results/real-e2e-20261012/ledger.json) chứa thời điểm, payload, job response, race ID, kết quả. Không có job nào do task yêu cầu stop.
+
+## Ma trận nghiệm thu
+
+| Kiểm tra | GPS_ONLY | GPS_AND_ARDUINO |
+|---|---|---|
+| Một lần bấm tạo → một POST/job, race xuất hiện/mở không reload trang | PASS | PASS |
+| Người tham gia, bib 01, route/checkpoint từ backend | PASS | PASS |
+| GPS di chuyển từ nhiều mẫu; tổng bước/quãng đường không giảm | PASS: 13 vị trí khác nhau/người | PASS cho 4 người đã nhận mẫu; người thứ 5 chưa có GPS khi job lỗi |
+| Cập nhật không bấm refresh bằng REST nền | PASS | PASS trong thời gian job chạy |
+| Message nghiệp vụ WS thật | FAIL: 0 | FAIL: 0 |
+| Reconnect chỉ một business socket, REST resync; pan không bị kéo lại | PASS | PASS |
+| Chọn người/list-marker; marker không draggable; editor khóa | PASS sau sửa z-index | PASS sau sửa z-index |
+| Layout 1366×768 / tablet 768×1024 | PASS: không tràn ngang toàn trang | PASS: không tràn ngang toàn trang |
+| Target vòng, COMPLETED tự nhiên, lịch sử tương ứng | PASS: 5/5 người, mỗi người 4 vòng, tổng 20 | FAIL: 0/5 hoàn thành, mỗi người 0 vòng |
+| Duration frozen sau >=10s và refresh | PASS | NOT TESTED: không có run hoàn thành |
+| MATCHED tách COUNTED, event correlation/lap accepted | Không áp dụng | BLOCKED: Gateway POST 422, không tạo event |
+| AMBIGUOUS/candidates và review UI với dữ liệu thật | Không áp dụng | NOT TESTED: không có event AMBIGUOUS |
+
+GPS đầu vòng tại checkpoint LAP NEU-C01 theo route/source. Mẫu của run `e16c0627-3b50-49c2-9ffd-6c0f723ffd72` (UTC):
+
+| Thời điểm lấy mẫu | Vĩ độ | Kinh độ | Bước | Quãng đường m | Vòng |
+|---|---:|---:|---:|---:|---:|
+| 16:37:29.831 | 20.99959893337945 | 105.84249576576174 | 348 | 231.42 | 0 |
+| 16:37:39.901 | 21.000308197513284 | 105.8420506874675 | 542 | 359.87 | 0 |
+| 16:37:49.972 | 21.000322911809743 | 105.84318804062985 | 736 | 488.63 | 1 |
+
+Tất cả 5 run GPS có 4 LAP trong lịch sử phân trang, khớp dashboard; đối soát bảng/drawer cho runner đầu mỗi giải cũng khớp API. Duration GPS theo bib 01–05: **130, 132, 131, 129, 133 giây**, giữ nguyên ở lần lấy lại sau 11 giây và refresh. Không phát hiện nhân đôi số vòng/bước/quãng đường trên các mẫu kiểm tra; không khẳng định audit từng phép tích phân GPS.
+
+## WebSocket: kết quả riêng với REST
+
+Hai kịch bản đều có socket business mở; bỏ socket Vite HMR khỏi đếm. Đóng socket browser đúng một lần mỗi kịch bản, tự reconnect và trở lại một socket. REST tiếp tục đồng bộ và vị trí thay đổi.
+
+Trong cửa sổ cô lập: chặn GET nền `/live`, `/dashboard`, `/runners` ở browser (abort, không trả dữ liệu giả), giữ WS mở; chờ request đang chạy kết thúc rồi so sánh panel trong 7 giây. Panel không đổi, **0 frame nghiệp vụ** ở cả hai kịch bản. Sau đó trả lại REST bình thường ngay. Tổng WS message quan sát toàn kịch bản cũng **0**, nên danh sách event type và ví dụ thực là rỗng, không thể xác nhận cập nhật UI do WS.
+
+Bằng chứng: [GPS isolation](test-results/real-e2e-20261012/GPS_ONLY-ws-isolation.json), [Arduino isolation](test-results/real-e2e-20261012/GPS_AND_ARDUINO-ws-isolation.json), [messages](test-results/real-e2e-20261012/messages.json). `blockedBackgroundReads` ở Arduino là bộ đếm tích lũy 22, gồm 12 của GPS; không phải 22 lần riêng Arduino.
+
+## Backend feedback có thể tái hiện (không sửa BE)
+
+### BE-01 — Simulator gửi sai thiết bị cho checkpoint LAP
+
+**FAIL, backend/simulator defect.** Mở Mô phỏng → GPS kết hợp Arduino → gap=8, seed=42, interval=0.5 → chạy. Job ở trên lỗi tại lần gửi Gateway đầu tiên, khoảng 30 giây, log:
+
+`POST /api/v1/checkpoint-events → 422 DEVICE_CHECKPOINT_MISMATCH`, trace ID `f92a76f3-d592-4342-98b7-016aa5f54750`.
+
+Source `services/backend/app/simulator.py:157–167` đăng ký từng device theo thứ tự C01..C04; `:320–329` lọc crossing LAP C01 nhưng gửi `gateway_device_ids[-1]` (device C04) cùng `finish_cp["checkpoint_id"]` (C01). Runtime xác nhận checkpoint LAP C01=`23181325-5334-4c8d-b9e8-dabac4771f4b`, C04=`0e2ee36a-73a0-4fdb-a92f-ebba09518125`. `main.py:1534` từ chối mapping không khớp là đúng contract; lỗi nằm ở simulator tạo request.
+
+Ảnh hưởng: job FAILED, race vẫn LIVE, 5 run ACTIVE/0 vòng, checkpoint-events rỗng. Đây là dữ liệu **mới do task tạo**, không gắn nhãn legacy. Không stop thêm, không hoàn thành thủ công, không sửa device mapping. GPS đi qua tuyến không tự làm tăng vòng trong kịch bản kết hợp; vì API chưa có dữ liệu passage độc lập trong các response đã thu, chưa kết luận đầy đủ vòng đời passage/matching chỉ từ 0 lap.
+
+Bằng chứng: [job log](test-results/real-e2e-20261012/GPS_AND_ARDUINO-job.json), [events rỗng](test-results/real-e2e-20261012/GPS_AND_ARDUINO-events.json), [samples](test-results/real-e2e-20261012/GPS_AND_ARDUINO-samples.json).
+
+### BE-02 — Socket kết nối nhưng subscriber bị loại khi serialize datetime
+
+**FAIL delivery; backend source defect được tái hiện cô lập.** Runtime có nhiều cập nhật GPS thật nhưng nhận 0 frame; REST vẫn chạy. `main.py:1344` trả `started_at`, `last_seen_at`, wearable timestamp là datetime trong `run_dict`; `:1518` chuyển nguyên dict cho hub. `EventHub.publish` ở `:495–504` gọi `socket.send_json(payload)`, bắt mọi exception và loại socket khỏi tập subscribers nhưng không đóng socket.
+
+Đã trích đúng class EventHub bằng AST và thử serialize payload chứa datetime (không import app/startup, không DB, không network/frame giả): `TypeError: Object of type datetime is not JSON serializable`; sau publish, số subscriber còn **0**. Điều này giải thích vì sao browser vẫn thấy connected nhưng không nhận cập nhật. Cần BE chuẩn hóa JSON-compatible payload và xem lại báo lỗi/xóa subscriber; FE không thể sửa việc server không phát message.
+
+Bằng chứng: [source diagnostic](test-results/real-e2e-20261012/ws-source-diagnostic.json). Đây là kiểm tra source cô lập hỗ trợ chẩn đoán; không trình bày nó như một frame WS thật.
+
+## Frontend fix và hồi quy
+
+**FE-01:** khi nhiều marker đứng gần nhau, marker được chọn có viền highlight nhưng bị marker khác che số báo danh. Quan sát ở GPS real, chọn 01 nhưng 05 nằm phía trên. Sửa `src/features/live-map/LiveMap.tsx`: `zIndexOffset={chosen ? 1000 : 0}`. Không đổi tọa độ, icon group count hay dữ liệu GPS.
+
+`verify-real-followup.mjs` dùng hai race thật để kiểm tra marker selected có z-index ưu tiên, không có class draggable, chọn marker giữ hàng selected, bảng/drawer hiển thị bib và vòng từ API. PASS. Thu đầy đủ GPS/LAP qua mọi trang API events để đối chiếu số vòng.
+
+File mới: `scripts/verify-real-simulations.mjs`, `scripts/verify-real-followup.mjs`; cập nhật report này. Script simulation chặn mutation ngoài auth/tạo simulation, giới hạn 2 lần gửi, từ chối chạy lại khi ledger đã có job. **Không chạy lại script tạo job để kiểm tra lại UI; dùng script follow-up chỉ đọc.**
+
+Sau fix: `npm run lint`, `npm run typecheck`, `npm test` **37/37**, `npm run build` PASS. Vẫn có cảnh báo bundle JS >500 kB (~609 kB). Không sửa backend để làm bài kiểm thử xanh.
+
+## Tile và ảnh thực tế
+
+Trong lượt E2E này tile tải được, không có tile request failure/HTTP error được ghi nhận. Follow-up thu HTTP **200**, ví dụ `https://a.tile.openstreetmap.org/18/208142/115426.png`; không console error. Cấu hình vẫn `{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`; không đổi provider/key. Lỗi tile của lượt trước không tái hiện, không có bằng chứng lỗi backend.
+
+- [GPS đang chạy, dữ liệu/tile thật](test-results/real-e2e-20261012/GPS_ONLY-live-1366.png)
+- [GPS tablet](test-results/real-e2e-20261012/GPS_ONLY-live-768.png)
+- [GPS tổng quan hoàn thành](test-results/real-e2e-20261012/GPS_ONLY-overview-final.png)
+- [Marker sau fix](test-results/real-e2e-20261012/GPS_ONLY-selection-fixed.png)
+- [Drawer/lịch sử GPS](test-results/real-e2e-20261012/GPS_ONLY-detail-final.png)
+- [Arduino đang chạy](test-results/real-e2e-20261012/GPS_AND_ARDUINO-live-1366.png)
+- [Arduino sau lỗi](test-results/real-e2e-20261012/GPS_AND_ARDUINO-overview-final.png)
+- [Kết quả máy đọc](test-results/real-e2e-20261012/results.json), [histories/UI/tile evidence](test-results/real-e2e-20261012/followup.json), [browser POST audit](test-results/real-e2e-20261012/browser.json).
+
+**Gateway là mô phỏng, không phải kiểm thử Arduino vật lý. Manual resolve, xóa, stop job và các mutation khác không thực thi trong lượt này vẫn NOT TESTED. Backend source/.env/schema không thay đổi; không cố ý thay đổi dữ liệu nghiệp vụ có sẵn. Tất cả dữ liệu test mới được giữ lại; không commit/push.**
+
+---
+
+# Áp dụng thiết kế tham chiếu NEU RUN — 12/10/2026
+
+## Phạm vi và nguồn thiết kế
+
+Đã chuyển thiết kế từ `E:/Hocccc/Project/Admin Dashboard for NEU RUN` vào ứng dụng hiện có, không thay thế ứng dụng bằng prototype. Đọc cấu trúc, package, CSS, App.tsx và hướng dẫn của reference. Prototype có dữ liệu cứng, SVG minh họa, xác thực/state mô phỏng; các phần này chỉ dùng trong công cụ chụp reference dưới `test-results`, không import vào source vận hành.
+
+Repo ở `03f8ab2`, workspace đã có thay đổi chưa commit khi bắt đầu lượt này. Giữ nguyên thay đổi có sẵn, bao gồm tài liệu `docs/BAO_CAO_BACKEND_VA_CHUC_NANG_HE_THONG.md`. Không pull/merge/commit/push. Không sửa package, lockfile, môi trường frontend hoặc backend.
+
+Runtime kiểm tra: frontend `http://localhost:5173`, REST `http://localhost:8000/api/v1`, WS cổng 8000. Tái sử dụng tiến trình đang chạy, không khởi động/dừng backend. Commit trên là HEAD source, không khẳng định là revision tiến trình backend chỉ từ số cổng.
+
+## Các màn hình đã áp dụng
+
+- **Thiết kế chung:** Inter với font dự phòng, nền #f5f7fb, xanh #2563eb, viền #e2e8f0; card radius 12px, nút 40px, số tabular, trạng thái dạng pill, tiêu đề 24–28px. Một lớp `design.css` dùng chung cho bảng, form, tabs, menu, editor và trạng thái thiếu dữ liệu. Không dùng zoom/scale toàn trang.
+- **Sidebar/header:** sidebar 236px, nhóm quản lý chung và nhóm chức năng của giải, icon hiện có; thu gọn 72px/tablet. Header 68px với race selector gọn, refresh có tooltip, tài khoản. Không hiển thị connected/timestamp thường trực. Mục Thiết lập giải mở trang chi tiết giải đang chọn; mục Mô phỏng mở `/simulation`, dùng lại SimulationPanel đã nối API.
+- **Tổng quan:** bốn thẻ icon màu bên trái và số liệu thật bên phải, tỉ lệ map/việc cần chú ý 2:1, bảng tiến độ và sự kiện 1.55:1. Nhãn “Tiến độ nổi bật” nói rõ không phải kết quả thi đấu chính thức, giữ thứ tự backend.
+- **Giải chạy:** bảng, tìm kiếm, selected row, status, Eye/menu ba chấm giữ chức năng. Form tạo giải là dialog giữa màn hình, các input theo grid hai cột, reflow một cột ở màn hẹp; payload/validation hiện có được giữ.
+- **Bản đồ trực tiếp:** panel người chạy bên trái ở laptop, xuống dưới ở tablet. Giữ Leaflet, tọa độ, polyline, attribution, lỗi tile. Thanh công cụ và chú giải mới; checkpoint tròn hiển thị mã đã escape; marker đang chọn có vòng nét đứt. Thao tác fit cho phép zoom đến 19 để tuyến nhỏ có kích thước hữu ích; vẫn chỉ fit khi được yêu cầu/mở map. Thông tin người được chọn dùng số vòng, thời gian, quãng đường, GPS/source từ state và link chi tiết thật. Không kéo/sửa GPS người chạy.
+- **Sinh viên/đăng ký:** tabs gạch chân, bảng/nhãn dễ đọc, nút Eye có tên truy cập theo sinh viên. Drawer chi tiết nằm bên phải, metrics hai cột, phần thông tin một cột đủ rộng. Escape, focus restoration và bộ lọc được giữ; bib “01” không bị đổi.
+- **Thiết lập/editor/matching:** áp dụng controls, khoảng cách, fieldset, thanh thao tác chung; không thay schema, validation, draft, undo, khóa hay xử lý lỗi lưu.
+- **Trạm kiểm soát/mô phỏng:** tabs, bảng sự kiện và trạng thái, form đăng ký/confirm và màn theo dõi mô phỏng dùng cùng hệ thiết kế. Luồng đối chiếu và tính vòng vẫn tách biệt. `/simulation` là lối truy cập thêm đến component nghiệp vụ hiện có, không tạo giả trạng thái/job.
+
+## File thay đổi trong lượt áp dụng reference
+
+- Mới: `src/design.css`, `scripts/capture-design-reference.mjs`, `scripts/verify-design-readonly.mjs`.
+- Source: `src/app/main.tsx`, `src/layouts/Shell.tsx`, `src/components/Modal.tsx`, `src/features/dashboard/Dashboard.tsx`, `src/features/live-map/LiveMap.tsx`, `src/features/runners/People.tsx`, `src/features/runners/RunnerTable.tsx`, `src/features/races/CreateRace.tsx`, `src/features/checkpoints/Checkpoints.tsx`.
+- Kiểm thử/tài liệu: cập nhật locator/viewport trong `scripts/verify-ui-polish.mjs`, locator trong `scripts/verify-ux-readonly.mjs`, report này.
+- Các thay đổi khác trong Git status, gồm LiveProvider, liveService, styles.css và editor, đã có trước lượt này; không ghi đè hoặc hoàn tác chúng.
+
+## Tích hợp và kiểm thử
+
+Giữ nguyên admin-key trong bộ nhớ, URL/env, client, request cancellation, cache theo race, REST/WS reconciliation, đồng bộ nền 1 giây, simulation tracking, cleanup/restart, matching expected_version/idempotency/conflict, khóa editor, đăng ký, xóa và frozen duration. Không thêm dependency.
+
+Đã chạy:
+
+- `npm run lint`, `npm run typecheck`, `npm test`: đạt; **37 test / 8 file**.
+- `npm run build`: đạt, còn cảnh báo bundle JS >500 kB (khoảng 609 kB); không đổi cấu trúc bundle trong nhiệm vụ thiết kế.
+- `verify-ui-polish.mjs`: đạt empty/error/recovery/reconnect, tên dài, menu bàn phím/Escape/focus, không thay chiều cao hàng khi mở menu, 1440×900/1366×768/768×1024; không request ghi.
+- `verify-map-editor.mjs`: đạt draft/drag/input/hủy, payload PATCH/PUT và neo, 422/409, reread sau mất response, thay đổi nền không xóa draft. **4 request ghi bị intercept**, không ghi thật.
+- `verify-admin-current.mjs`: đạt matching, mô phỏng/restart/stop, xóa/conflict/cleanup. **9 request ghi bị intercept**, không chạy simulator thật.
+- `verify-enrollment.mjs`: đạt tìm kiếm/cancel, bib, conflict, đổi race và reflow. **2 request ghi bị intercept**, không đăng ký thật.
+- `verify-design-readonly.mjs`: đăng nhập backend thật, đọc dashboard/live/runners/chi tiết phiên/events/checkpoint-matching, xem các màn hình và ảnh ở ba viewport nêu trên. Chọn runner cập nhật panel; thời gian hàng COMPLETED giữ nguyên qua refresh nền; dialog/drawer Escape trả focus. Form dùng đủ chiều ngang, toàn trang không tràn ngang. Pan bản đồ giữ nguyên qua đồng bộ nền; đóng kết nối để kiểm tra reconnect trở lại đúng một socket, logout đóng socket. Request nghiệp vụ ghi bị chặn, **0 lần ghi**.
+
+Bài cũ `verify-ux-readonly.mjs` dừng với `No existing completed race for readonly validation`: precondition yêu cầu vừa có runner hoàn thành vừa có sự kiện checkpoint. Runtime có một giải với 5 runner hoàn thành nhưng không có sự kiện checkpoint, nên đã dùng bài chỉ đọc mới để kiểm tra duration/drawer riêng. Đây là thiếu dữ liệu kiểm thử, không phải kết luận lỗi backend.
+
+## Ảnh đối chiếu
+
+Ảnh lưu local trong thư mục `test-results` đang được Git ignore; không đưa mock/reference bundle vào bản build vận hành.
+
+- Trước: [Tổng quan 1366](test-results/design-before/dashboard-1366.png), [Giải chạy 1366](test-results/design-before/races-1366.png). Các ảnh trước là fixture của lượt UI trước đó, không dùng để so sánh số liệu nghiệp vụ.
+- Mẫu: [Tổng quan](test-results/design-reference/overview-1440.png), [Bản đồ SVG mẫu](test-results/design-reference/map-1440.png).
+- Sau, dữ liệu thật: [Tổng quan 1440](test-results/design-live/overview-1440.png), [Map 1366](test-results/design-live/map-1366.png), [Map tablet](test-results/design-live/map-768.png), [Giải chạy tablet](test-results/design-live/races-768.png), [Form tạo giải](test-results/design-live/create-dialog.png), [Drawer](test-results/design-live/runner-drawer.png), [Sinh viên](test-results/design-live/students.png), [Trạm](test-results/design-live/checkpoints.png), [Thiết lập](test-results/design-live/setup.png), [Mô phỏng](test-results/design-live/simulation.png).
+- Editor cô lập: [Tuyến](test-results/ux/editor-route-1440-isolated.png), [Checkpoint](test-results/ux/editor-checkpoint-isolated.png).
+- Kết quả có cấu trúc: [real reads](test-results/design-live/report.json), [UI fixture](test-results/ui-after/report.json), [editor fixture](test-results/ux/editor-isolated-report.json).
+
+## Khác biệt còn lại / giới hạn
+
+- Bản đồ thực dùng tuyến/GPS backend, không oval SVG mẫu; panel chi tiết nằm dưới map để không che route. Tile provider không tải được trong trình duyệt kiểm tra; thông báo lỗi nền hiện đúng, marker/tuyến vẫn hoạt động. Không quy lỗi này cho backend.
+- Bảng, font/nhãn có kích thước lớn hơn một số chữ 9–11px của prototype để đảm bảo đọc được. Form giữ mọi field mà API hiện hỗ trợ, nên dài hơn mẫu. Drawer 570px để chứa lịch sử/định danh thật.
+- Không sao chép các số liệu minh họa, biểu đồ/tiến độ giả, nhãn hồ sơ “đầy đủ”, thiết bị “online”, xác thực giả hoặc nút prototype chưa có luồng API được xác minh. Chưa bổ sung luồng tạo/sửa hồ sơ sinh viên hoặc thiết bị chỉ vì chúng có trong prototype; các tính năng hiện có vẫn hoạt động.
+- Chỉ có **1 race thực** nên không kiểm thử đổi race thật trong lượt này; đổi race/cache/cancel đã kiểm tra bằng fixture. Không có checkpoint event thật để kiểm thử thao tác confirm thực. WebSocket kết nối nhưng **0 message nghiệp vụ** trong thời gian kiểm tra.
+- Không E2E thao tác lưu/tạo/xóa thật; mọi kiểm thử mutation là intercept. Không tạo/stop/delete race/job, seed hay chạy simulator.
+- Không phát hiện lỗi backend mới được xác nhận từ các API chỉ đọc đã kiểm tra.
+
+**Không sửa file backend, .env backend, schema hoặc database; không sửa dữ liệu lịch sử; không commit/push.**
+
+---
+
+## Lịch sử báo cáo trước lượt áp dụng reference
+
+# Hoàn thiện UI/UX NEU RUN — 12/10/2026
+
+## Phạm vi và runtime
+
+Source bắt đầu sạch ở nhánh fe, commit `03f8ab2`. Chỉ sửa frontend/tài liệu FE, không commit/push. Khi kiểm tra, Vite 5173 và backend 8000/8001 đều tắt. Đã khởi động lại Vite tại `http://localhost:5173`; giữ nguyên REST/WS cấu hình 8000, không khởi động/dừng hoặc đổi backend. Vì vậy **chưa kiểm tra API thật trong lượt này**. Giao diện trước/sau và kiểm thử trình duyệt dưới đây dùng fixture API cô lập; không đưa fixture vào ứng dụng vận hành.
+
+## Giao diện và hành vi
+
+- Header: bỏ trạng thái connected/timestamp thường trực; icon Refresh có accessible label và tooltip cả hover/focus, trạng thái đang tải/chặn bấm lặp. Trang toàn bộ giải ẩn selector theo race và ghi rõ phạm vi toàn cục. Menu quản trị vẫn giữ đăng xuất và thông tin kỹ thuật.
+- Cảnh báo kết nối/tải: thông báo màu nhẹ theo tác động, nói rõ dữ liệu cũ, có Thử lại. Không toast liên tục. Chỉ xóa lỗi đọc khi REST đồng bộ thành công: trước đây tick render snapshot cũ có thể xóa lỗi quá sớm. Refresh chờ request đang chạy, không làm trắng trang; giữ đồng bộ nền 1 giây và cleanup/reconcile.
+- Dashboard: layout grid với gap 24px giữa các khối, không ép card cùng chiều cao; số liệu nổi bật, bỏ bốn câu “Xem danh sách”. Thẻ Người tham gia đi đúng tab đăng ký; các thẻ trạng thái giữ query filter. Top 5 giữ nguyên thứ tự backend, bỏ câu triển khai; empty state ngắn. Mục cần chú ý chỉ hiển thị số dương; thiếu dữ liệu/lỗi không coi là không có vấn đề, chưa có tuyến vẫn cảnh báo. Thời gian sự kiện tương đối từ occurred_at, tooltip thời gian chính xác.
+- Giải chạy: tên giải là liên kết giữ chọn race/điều hướng; icon Eye và menu ba chấm cùng hàng. Menu absolute không đổi chiều cao hàng, focus vào hành động, Escape đóng/trả focus, click ngoài đóng; xóa giữ dialog xác nhận hiện có. Tooltip icon có chữ/aria-label. Thanh tìm kiếm giới hạn chiều ngang, icon Search, tên dài wrap. Giảm nhiều nút primary lặp lại.
+- Ngôn ngữ: navigation “Trạm kiểm soát”, “Số báo danh” trên các bảng/form/tìm kiếm đã chỉnh, “Theo dõi người chạy”; map bỏ câu “Vị trí GPS được giữ nguyên”, “Khung nhìn tự do”. Giữ field/enum/API, khóa editor, vị trí GPS, attribution và nhãn mô phỏng.
+- Spacing/style: token section/card/control, padding 18–24px tùy viewport; tooltip/focus rõ, nút icon 40px desktop/44px tablet, cảnh báo tiết chế; thẻ mô phỏng bố trí gọn hơn. Không thêm dependency. Editor vẫn có input bàn phím/draft/undo/lưu/hủy.
+
+## File
+
+Mới `src/components/IconAction.tsx`, `src/features/races/RaceActions.tsx`, `scripts/verify-ui-polish.mjs`.
+Sửa `layouts/Shell.tsx`, `features/dashboard/Dashboard.tsx`, `features/races/Races.tsx`, `features/runners/{People,RunnerTable}.tsx`, `features/live-map/{LiveMap,MapEditor,WatchList}.tsx`, `styles.css`, `app/LiveProvider.tsx`, `services/{interface,liveService}.ts`; cập nhật locator nhãn/menu trong scripts kiểm thử, và report này.
+
+## Kiểm tra
+
+- Lint/typecheck đạt; 37/37 unit test (8 file); build đạt, cảnh báo bundle JS >500kB vẫn còn (khoảng 605kB minified). Đây là cảnh báo tối ưu, không phải lỗi chức năng.
+- Browser fixture UI: header yên lặng lúc connected; refresh/error vẫn giữ dữ liệu, tự bỏ cảnh báo khi phục hồi; reconnect; menu keyboard Escape/focus không đổi chiều cao row; link chọn giải/điều hướng; tìm kiếm rỗng; tên rất dài; 1366×768, 1920×1080, 768×1024 không tràn ngang toàn trang. Test không ghi nghiệp vụ (0 request mutation).
+- Đã kiểm tra reflow **tương đương 125%** bằng viewport CSS 1093×614 / deviceScaleFactor 1.25, có ảnh; chưa xác minh thao tác zoom 125% của trình duyệt desktop bằng UI thật. Không dùng CSS zoom/scale trong sản phẩm.
+- Hồi quy fixture quản trị: 9 request ghi bị intercept, 0 ghi thật (simulation, matching, DELETE); enrollment 2 POST intercepted, 0 ghi thật; editor 4 intercepted, 0 ghi thật. Editor test cần scroll marker vào viewport trước khi kéo do bố cục mới; kéo/input/click/lưu/hủy/khóa vẫn đạt. Kiểm tra menu cũ được đổi từ button thành menuitem theo semantics mới, không bỏ kiểm tra DELETE.
+- Không có lỗi backend được kết luận: runtime hiện không chạy nên không có bằng chứng mới về API/GPS thật. Không mô phỏng chuyển động hoặc tạo dữ liệu để lấp thiếu hụt.
+
+## Ảnh và giới hạn
+
+Tất cả ảnh của lượt này là **fixture**, nền tile bị chặn trong test để kiểm tra thông báo tile, không phải ảnh chạy giải thật:
+- Trước: `test-results/ui-before/dashboard.png`, `races-1366.png` (và kích thước khác).
+- Sau: `test-results/ui-after/dashboard-1366.png`, `dashboard-1920.png`, `dashboard-768.png`, `races-1366.png`, `races-1920.png`, `races-768.png`, `read-error.png`, `long-name.png`, `scale125.png`.
+- Báo cáo test: `test-results/ui-after/report.json`. Ảnh nằm trong thư mục ignored.
+
+Không sửa backend/.env backend/database, không tạo/chạy/dừng simulation, không đăng ký/resolve/lưu/xóa dữ liệu thật. `git diff -- services/backend` rỗng. Cần backend được mở lại để nghiệm thu đọc thật; không tự thay runtime đang cấu hình.
+
+---
+
 # Chu kỳ đồng bộ nền 1 giây — 11/10/2026
 
 Theo yêu cầu, giảm chu kỳ REST nền khi trang đang mở từ 5 giây xuống 1 giây. Tab ẩn vẫn 15 giây; request đang tải không bị chồng thêm. WebSocket tiếp tục cập nhật ngay, không đổi khung nhìn hoặc dữ liệu backend. Test fake timer kiểm tra chưa gọi ở 999 ms và gọi ở 1000 ms, cùng cleanup sau unmount.

@@ -33,6 +33,7 @@ export interface RaceService {
       onSnapshot: (snapshot: LiveSnapshot) => void;
       onEvent?: (event: LiveEvent) => void;
       onError?: (error: Error) => void;
+      onSynced?: () => void;
       onStatus?: (
         status: "connecting" | "connected" | "reconnecting" | "disconnected",
       ) => void;

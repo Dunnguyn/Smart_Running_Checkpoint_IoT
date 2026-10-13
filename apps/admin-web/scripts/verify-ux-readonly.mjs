@@ -95,14 +95,15 @@ try {
   );
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole("link", { name: "Sinh viên", exact: true }).click();
-  const completedRunner = done.runners.find(r=>r.status==="COMPLETED");
-  if(!completedRunner) throw new Error("No completed runner in loaded dashboard");
+  const completedRunner = done.runners.find((r) => r.status === "COMPLETED");
+  if (!completedRunner)
+    throw new Error("No completed runner in loaded dashboard");
   const searchCode = completedRunner.student_code;
-  await page.getByLabel("Tìm tên, mã sinh viên, bib").fill(searchCode);
+  await page.getByLabel("Tìm tên, mã sinh viên, số báo danh").fill(searchCode);
   await expect(page.locator("tbody tr")).toHaveCount(1);
   const row = page.locator("tbody tr").first();
   await expect(row).toContainText(searchCode);
-  await row.getByRole("button", { name: "Chi tiết", exact: true }).click();
+  await row.getByRole("button", { name: /^Xem chi tiết / }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByRole("dialog")).toContainText("Hoàn thành");
   await page.screenshot({
@@ -111,9 +112,11 @@ try {
   });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByLabel("Tìm tên, mã sinh viên, bib")).toHaveValue(searchCode);
   await expect(
-    row.getByRole("button", { name: "Chi tiết", exact: true }),
+    page.getByLabel("Tìm tên, mã sinh viên, số báo danh"),
+  ).toHaveValue(searchCode);
+  await expect(
+    row.getByRole("button", { name: /^Xem chi tiết / }),
   ).toBeFocused();
   checks.push(
     "bib-inclusive whole-result search, drawer/escape/focus return; search and page preserved",
@@ -127,7 +130,7 @@ try {
   await page.getByLabel("Tìm người chạy").fill("01");
   await page.locator(".watch-row").first().click();
   await expect(page.locator(".runner-marker.selected")).toHaveCount(1);
-  await page.getByRole("button", { name: "Theo dõi runner đã chọn" }).click();
+  await page.getByRole("button", { name: "Theo dõi người chạy" }).click();
   await expect(
     page.getByRole("button", { name: "Dừng theo dõi" }),
   ).toBeVisible();
@@ -142,7 +145,7 @@ try {
   );
   await page.mouse.up();
   await expect(
-    page.getByRole("button", { name: "Theo dõi runner đã chọn" }),
+    page.getByRole("button", { name: "Theo dõi người chạy" }),
   ).toBeVisible();
   await page.screenshot({
     path: "test-results/ux/live-map.png",
@@ -152,7 +155,7 @@ try {
   checks.push(
     "completed race edit lock; list/marker selection; manual pan stops explicit following; grouped coincident markers",
   );
-  await page.getByRole("link", { name: "Checkpoint", exact: true }).click();
+  await page.getByRole("link", { name: "Trạm kiểm soát", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Sự kiện cần xác nhận", exact: true }),
   ).toBeVisible();

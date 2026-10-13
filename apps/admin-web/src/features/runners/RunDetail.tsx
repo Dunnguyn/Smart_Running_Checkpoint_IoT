@@ -1,4 +1,4 @@
-import { sourceLabel } from "../../utils/labels";
+import { gpsLabel, sourceLabel } from "../../utils/labels";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Footprints, Timer, Flag, MapPin } from "lucide-react";
@@ -39,7 +39,6 @@ export function RunDetail({
       })
       .catch((e) => {
         if (!disposed) {
-          setDetail(null);
           setError((e as { message: string }).message);
         }
       });
@@ -48,7 +47,12 @@ export function RunDetail({
       controller.abort();
     };
   }, [studentId, runId, mockSnapshot, refresh, mergeRunners]);
-  if (error)
+  if (
+    error &&
+    (!detail ||
+      detail.run.run_id !== runId ||
+      detail.run.student_id !== studentId)
+  )
     return (
       <>
         <Empty title="Không tải được phiên chạy" description={error} />
@@ -82,6 +86,14 @@ export function RunDetail({
         <Link className="back-link" to="/runners">
           <ArrowLeft size={16} /> Danh sách sinh viên
         </Link>
+      )}
+      {error && (
+        <div className="inline-error" role="alert">
+          Không cập nhật được phiên chạy. Đang giữ dữ liệu đã tải: {error}
+          <button className="button" onClick={() => setRefresh((n) => n + 1)}>
+            Thử lại
+          </button>
+        </div>
       )}
       <div className="page-title">
         <div>
@@ -153,16 +165,8 @@ export function RunDetail({
             </dd>
             <dt>Cập nhật vị trí</dt>
             <dd>{datetime(r.last_seen_at)}</dd>
-            <dt>Kết nối</dt>
-            <dd>
-              {r.connection === "FINISHED"
-                ? "Vị trí cuối phiên đã hoàn thành"
-                : r.connection === "ONLINE"
-                  ? "Trực tuyến"
-                  : r.connection === "STALE"
-                    ? "Mất cập nhật"
-                    : "Chưa có vị trí"}
-            </dd>
+            <dt>Độ mới GPS</dt>
+            <dd>{gpsLabel(r.connection)}</dd>
             <dt>Nguồn dữ liệu</dt>
             <dd>{sourceLabel(r.source)}</dd>
           </dl>
@@ -214,6 +218,11 @@ export function RunDetail({
                 </tr>
               </thead>
               <tbody>
+                {!detail.history.length && (
+                  <tr>
+                    <td colSpan={4}>Chưa có lịch sử GPS hoặc vòng chạy.</td>
+                  </tr>
+                )}
                 {detail.history.map((e) => (
                   <tr key={e.id}>
                     <td>{e.type}</td>

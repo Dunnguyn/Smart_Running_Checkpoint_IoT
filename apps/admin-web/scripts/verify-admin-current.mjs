@@ -187,7 +187,7 @@ try {
   await expect(page.getByText("Đang mô phỏng", { exact: true })).toBeVisible();
   expect(startCount).toBe(1);
   await expect.poll(() => polls).toBeGreaterThan(1);
-  await page.locator('a[href="/races/a"]').click();
+  await page.locator('a[href="/races/a"]').first().click();
   await expect(
     page.getByRole("link", { name: "← Tất cả giải chạy" }),
   ).toBeVisible();
@@ -238,7 +238,7 @@ try {
   await expect(
     page.getByRole("button", { name: "Mở bản đồ giải" }),
   ).toBeVisible();
-  await page.locator('a[href="/races/a"]').click();
+  await page.locator('a[href="/races/a"]').first().click();
   await page.getByText("Cấu hình GPS / Arduino", { exact: true }).click();
   const input = page.getByLabel("Bán kính trong (m)", { exact: true });
   await expect(input).toHaveValue("10");
@@ -257,8 +257,8 @@ try {
   });
   await page.getByRole("link", { name: "← Tất cả giải chạy" }).click();
   const row = page.getByRole("row").filter({ hasText: "Giải tùy chỉnh" });
-  await row.getByText("Thao tác khác").click();
-  await row.getByRole("button", { name: "Xóa giải", exact: true }).click();
+  await row.getByRole("button", { name: /Thao tác khác:/ }).click();
+  await row.getByRole("menuitem", { name: "Xóa giải", exact: true }).click();
   const del = page.getByRole("dialog", { name: "Xóa giải chạy" });
   await expect(
     del.getByRole("button", { name: "Xóa giải", exact: true }),
@@ -277,7 +277,7 @@ try {
   await expect(
     page.getByRole("row").filter({ hasText: "Giải tùy chỉnh" }),
   ).toHaveCount(0);
-  await expect(page.getByLabel("Chọn giải chạy")).not.toHaveValue("a");
+  await expect(page.getByLabel("Chọn giải chạy")).toHaveCount(0);
   await expect.poll(() => sockets.size).toBe(0);
   expect(page.url()).toContain("/races");
   await page.getByRole("button", { name: "Mở bản đồ giải" }).click();
@@ -287,8 +287,8 @@ try {
   expect(page.url()).toContain("/races");
   active = 1;
   const rowB = page.getByRole("row").filter({ hasText: "Giải thứ hai" });
-  await rowB.getByText("Thao tác khác").click();
-  await rowB.getByRole("button", { name: "Xóa giải", exact: true }).click();
+  await rowB.getByRole("button", { name: /Thao tác khác:/ }).click();
+  await rowB.getByRole("menuitem", { name: "Xóa giải", exact: true }).click();
   await expect(del.getByText(/Giải có 1 phiên/)).toBeVisible();
   await del.getByLabel("Nhập XÓA để xác nhận").fill("XÓA");
   await expect(

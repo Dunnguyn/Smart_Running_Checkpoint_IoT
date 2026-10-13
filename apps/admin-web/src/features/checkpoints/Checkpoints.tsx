@@ -30,7 +30,7 @@ export function Checkpoints() {
     <>
       <div className="page-title">
         <div>
-          <h1>Checkpoint</h1>
+          <h1>Trạm kiểm soát</h1>
           <p>
             Xác nhận người chạy, kiểm tra kết quả tính vòng và quản lý trạm.
           </p>

@@ -1,3 +1,4 @@
+import { useSearchParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useLive } from "../../app/LiveProvider";
 import { Modal } from "../../components/Modal";
@@ -10,10 +11,16 @@ import { RequestError } from "../../services/client";
 import { RunnerTable } from "./RunnerTable";
 export function People() {
   const { raceId } = useLive();
-  const [tab, setTab] = useState("runs");
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("view") ?? "runs";
+  const setTab = (value: string) => {
+    const next = new URLSearchParams(params);
+    next.set("view", value);
+    setParams(next);
+  };
   return (
     <>
-      <nav className="filter-bar" aria-label="Danh sách sinh viên">
+      <nav className="tabs" aria-label="Danh sách sinh viên">
         {[
           ["runs", "Phiên chạy"],
           ["participants", "Đăng ký của giải"],
@@ -21,7 +28,7 @@ export function People() {
         ].map(([id, label]) => (
           <button
             key={id}
-            className={`button ${tab === id ? "primary" : ""}`}
+            className={tab === id ? "active" : ""}
             aria-pressed={tab === id}
             onClick={() => setTab(id)}
           >
@@ -222,7 +229,7 @@ function Roster({ raceId }: { raceId: string }) {
         <table>
           <thead>
             <tr>
-              <th>Bib</th>
+              <th>Số báo danh</th>
               <th>Sinh viên</th>
               <th>Đăng ký</th>
               <th>Phiên chạy</th>
@@ -262,7 +269,10 @@ function Roster({ raceId }: { raceId: string }) {
       {open && (
         <Enroll
           raceId={raceId}
-          onClose={() => {setOpen(false);setRevision(n=>n+1);}}
+          onClose={() => {
+            setOpen(false);
+            setRevision((n) => n + 1);
+          }}
           onSaved={() => {
             setOpen(false);
             setRevision((n) => n + 1);
@@ -325,7 +335,7 @@ function Enroll({
               if (c.signal.aborted) return;
               const f = e as RequestError;
               if (f.code === "BIB_NUMBER_EXISTS")
-                setBibError("Bib này đã được dùng trong giải.");
+                setBibError("Số báo danh này đã được dùng trong giải.");
               else if (f.status === 0 || f.status >= 500) {
                 setUncertain(true);
                 setError(
@@ -350,7 +360,7 @@ function Enroll({
             Chọn sinh viên khác
           </button>
           <label>
-            Bib (không bắt buộc)
+            Số báo danh (không bắt buộc)
             <input
               value={bib}
               disabled={busy || uncertain}

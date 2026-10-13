@@ -3,10 +3,12 @@ export function Modal({
   title,
   children,
   onClose,
+  variant = "modal",
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  variant?: "modal" | "drawer";
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -21,7 +23,7 @@ export function Modal({
   return (
     <dialog
       ref={dialog}
-      className="detail-drawer"
+      className={`detail-drawer dialog-${variant}`}
       aria-label={title}
       onCancel={(e) => {
         e.preventDefault();

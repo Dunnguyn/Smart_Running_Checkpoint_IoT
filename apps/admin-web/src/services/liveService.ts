@@ -10,8 +10,9 @@ import {
   runnerConnection,
   type WireEvent,
 } from "./contract";
-const refreshListeners = new Map<string, () => void>();
-export const refreshRaceLive = (id: string) => refreshListeners.get(id)?.();
+const refreshListeners = new Map<string, () => Promise<void>>();
+export const refreshRaceLive = (id: string) =>
+  refreshListeners.get(id)?.() ?? Promise.resolve();
 export function applyLive(
   snapshot: LiveSnapshot,
   event: WireEvent,
@@ -149,6 +150,8 @@ export function subscribeLive(
   let loading = false,
     dirty = false;
   let buffer: WireEvent[] = [];
+  let pendingSync: Promise<void> = Promise.resolve();
+  let completeSync = () => {};
   const eventVersions = new Map<string, number>();
   let lastSync = 0;
   const controller = new AbortController();
@@ -172,8 +175,12 @@ export function subscribeLive(
     if (!alive()) return;
     if (loading) {
       dirty = true;
+      await pendingSync;
       return;
     }
+    pendingSync = new Promise<void>((resolve) => {
+      completeSync = resolve;
+    });
     clearTimeout(refreshTimer);
     refreshTimer = undefined;
     loading = true;
@@ -190,11 +197,13 @@ export function subscribeLive(
           eventRevision: (state?.eventRevision ?? 0) + 1,
         }),
       );
+      handlers.onSynced?.();
       emit();
     } catch (error) {
       fail(error);
     } finally {
       loading = false;
+      completeSync();
       buffer = [];
       if (dirty && alive()) {
         dirty = false;
@@ -299,7 +308,7 @@ export function subscribeLive(
   const refresh = () => {
     // Manual refresh also restarts an exhausted connection without clearing
     // the visible snapshot (or an independent map-editor draft).
-    void sync().then(() => {
+    return sync().then(() => {
       if (alive() && state && (!socket || socket.readyState >= 2)) {
         clearTimeout(reconnectTimer);
         reconnectTimer = undefined;
@@ -326,7 +335,8 @@ export function subscribeLive(
     }
     // A connected socket does not guarantee a run-created event or delivery
     // from another backend worker. Discover new runners even on a quiet socket.
-    const interval = typeof document !== "undefined" && document.hidden ? 15000 : 1000;
+    const interval =
+      typeof document !== "undefined" && document.hidden ? 15000 : 1000;
     if (alive() && !loading && Date.now() - lastSync >= interval)
       void sync().then(() => {
         if (alive() && state && !socket) connect();

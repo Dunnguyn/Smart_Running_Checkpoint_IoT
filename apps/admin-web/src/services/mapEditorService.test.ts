@@ -183,3 +183,16 @@ it("blocks missing and contradictory edit flags", () => {
   ).toBe("Có run");
   expect(routeAccess({ editable: true, locked: false }).blocked).toBe(false);
 });
+it("explains a known run lock without replacing other backend reasons", () => {
+  const flags = { editable: false, locked: true };
+  expect(
+    routeAccess({
+      ...flags,
+      locked_reason: "Đã tạo ít nhất một phiên chạy cho giải này.",
+    }).reason,
+  ).toBe("Tuyến đã khóa vì giải đã có phiên chạy.");
+  expect(routeAccess({ ...flags, locked_reason: "Khóa bảo trì" }).reason).toBe(
+    "Khóa bảo trì",
+  );
+  expect(routeAccess(flags).reason).not.toContain("đã có phiên chạy");
+});

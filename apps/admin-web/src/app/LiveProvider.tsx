@@ -39,7 +39,7 @@ interface LiveContextValue {
   retry: () => void;
   reloadRaces: (signal?: AbortSignal) => Promise<Race[]>;
   forgetRace: (id: string) => void;
-  refreshData: () => void;
+  refreshData: () => Promise<void>;
   connection: string;
   start: () => void;
   pause: () => void;
@@ -174,7 +174,6 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         setSnapshot((previous) =>
           dataMode === "mock" ? s : reconcileSnapshot(previous, s),
         );
-        setError("");
       }
     };
     const fail = (e: Error) => {
@@ -189,6 +188,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const unsubscribe = raceService.subscribeRaceLive(raceId, {
       onSnapshot: accept,
       onError: fail,
+      onSynced: () => {
+        if (!disposed) setError("");
+      },
       onStatus: setConnection,
     });
     liveCleanup.current = unsubscribe;

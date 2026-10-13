@@ -175,7 +175,10 @@ export function routeAccess(m?: RouteMetadata, runs = false) {
   return {
     blocked: m.locked,
     reason: m.locked
-      ? m.locked_reason || lockedMessage
+      ? m.locked_reason === "Đã tạo ít nhất một phiên chạy cho giải này."
+        ? "Tuyến đã khóa vì giải đã có phiên chạy."
+        : m.locked_reason ||
+          (runs ? lockedMessage : "Tuyến đang bị khóa theo cấu hình backend.")
       : "Có thể chỉnh sửa trước khi tạo phiên chạy.",
   };
 }

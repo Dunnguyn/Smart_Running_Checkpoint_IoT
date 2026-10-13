@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   MapContainer,
   TileLayer,
@@ -15,8 +15,11 @@ import { hasRuns, routeAccess } from "../../services/mapEditorService";
 import { dataMode } from "../../services";
 import type { LiveSnapshot, RunSession } from "../../types/domain";
 import { Panel } from "../../components/ui";
-import { datetime, statusLabels } from "../../utils/format";
-import { gpsLabel } from "../../utils/labels";
+import { datetime, statusLabels, duration, distance } from "../../utils/format";
+import { gpsLabel, sourceLabel } from "../../utils/labels";
+import { GpsTimestamp } from "../../components/GpsTimestamp";
+import { IconAction } from "../../components/IconAction";
+import { Scan, LocateFixed } from "lucide-react";
 import { MapEditor } from "./MapEditor";
 function MapActions({
   positions,
@@ -43,7 +46,7 @@ function MapActions({
     if (positions.length && fitted.current !== fit) {
       map.fitBounds(latLngBounds(positions), {
         padding: [45, 45],
-        maxZoom: 17,
+        maxZoom: 19,
       });
       fitted.current = fit;
     }
@@ -67,6 +70,7 @@ export function LiveMap({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
   const [fit, setFit] = useState(0),
     [all, setAll] = useState(false),
@@ -125,46 +129,54 @@ export function LiveMap({
   return (
     <Panel
       title="Bản đồ giải chạy"
-      subtitle="Vị trí GPS được giữ nguyên; chọn một người để theo dõi."
+      subtitle="Chọn một người chạy để xem vị trí và kết quả."
       className="map-panel"
       action={
-        <Link className="text-link" to="/live">
-          Mở rộng bản đồ →
-        </Link>
+        location.pathname !== "/live" && (
+          <Link className="text-link" to="/live">
+            Mở rộng bản đồ →
+          </Link>
+        )
       }
     >
       <div className="map-toolbar">
-        <button
-          className="button"
-          onClick={() => {
-            setFollow(false);
-            setAll(false);
-            setFit((n) => n + 1);
-          }}
+        <div
+          className="map-view-actions"
+          role="group"
+          aria-label="Điều khiển khung nhìn"
         >
-          Xem toàn tuyến
-        </button>
-        <button
-          className="button"
-          onClick={() => {
-            setFollow(false);
-            setAll(true);
-            setFit((n) => n + 1);
-          }}
-        >
-          Xem tất cả vị trí
-        </button>
-        <button
-          className="button"
-          disabled={
-            !selected ||
-            !validPosition(selected.last_latitude, selected.last_longitude)
-          }
-          aria-pressed={follow}
-          onClick={() => setFollow(!follow)}
-        >
-          {follow ? "Dừng theo dõi" : "Theo dõi runner đã chọn"}
-        </button>
+          <IconAction
+            label="Xem toàn tuyến"
+            onClick={() => {
+              setFollow(false);
+              setAll(false);
+              setFit((n) => n + 1);
+            }}
+          >
+            <Scan size={18} />
+          </IconAction>
+          <IconAction
+            label="Xem tất cả vị trí"
+            onClick={() => {
+              setFollow(false);
+              setAll(true);
+              setFit((n) => n + 1);
+            }}
+          >
+            <LocateFixed size={18} />
+          </IconAction>
+          <button
+            className="button"
+            disabled={
+              !selected ||
+              !validPosition(selected.last_latitude, selected.last_longitude)
+            }
+            aria-pressed={follow}
+            onClick={() => setFollow(!follow)}
+          >
+            {follow ? "Dừng theo dõi" : "Theo dõi người chạy"}
+          </button>
+        </div>
         {dataMode === "api" && (
           <button
             className="button"
@@ -244,7 +256,7 @@ export function LiveMap({
                   draggable={false}
                   icon={divIcon({
                     className: "checkpoint-marker",
-                    html: "<span>⚑</span>",
+                    html: `<span>${c.code.replace(/[<>&"']/g, "")}</span>`,
                     iconSize: [30, 30],
                     iconAnchor: [15, 15],
                   })}
@@ -277,6 +289,7 @@ export function LiveMap({
               return (
                 <Marker
                   key={key}
+                  zIndexOffset={chosen ? 1000 : 0}
                   title={
                     group.length > 1
                       ? `${group.length} người tại vị trí này`
@@ -344,14 +357,70 @@ export function LiveMap({
           </p>
         )}
       </div>
+      <div className="map-legend" aria-label="Chú giải bản đồ">
+        <span>
+          <i className="legend-route" />
+          Tuyến đã lưu
+        </span>
+        <span>
+          <i className="legend-checkpoint" />
+          Trạm
+        </span>
+        <span>
+          <i className="legend-runner" />
+          Người chạy · số báo danh
+        </span>
+        <span>×: số người cùng vị trí</span>
+      </div>
       <p className="map-note">
         {snapshot.route.length
           ? `Tuyến đã lưu · ${snapshot.routeDistance_m ?? "—"} m`
           : snapshot.routeMessage?.includes("không hợp lệ")
             ? snapshot.routeMessage
             : "Giải này chưa có tuyến được lưu. Bản đồ đang hiển thị vị trí GPS hiện có."}{" "}
-        {follow ? "Đang theo dõi; kéo bản đồ để dừng." : "Khung nhìn tự do."}
+        {follow ? "Đang theo dõi; kéo bản đồ để dừng." : ""}
       </p>
+      {selected && (
+        <section className="selected-runner" aria-label="Người chạy đang chọn">
+          <div>
+            <strong>
+              #{selected.bib} · {selected.full_name}
+            </strong>
+            <small>
+              {statusLabels[selected.status]} · {sourceLabel(selected.source)}
+            </small>
+          </div>
+          <div>
+            <small>Số vòng</small>
+            <strong>
+              {selected.lap_count}/{selected.total_laps}
+            </strong>
+          </div>
+          <div>
+            <small>Thời gian ghi nhận</small>
+            <strong>{duration(selected.duration_total_s)}</strong>
+          </div>
+          <div>
+            <small>Quãng đường</small>
+            <strong>{distance(selected.distance_total_m)}</strong>
+          </div>
+          <div>
+            <small>Vị trí GPS</small>
+            <small>
+              <GpsTimestamp
+                value={selected.last_seen_at}
+                completed={selected.status === "COMPLETED"}
+              />
+            </small>
+          </div>
+          <Link
+            className="text-link"
+            to={`/runners/${selected.student_id}/runs/${selected.run_id}`}
+          >
+            Xem chi tiết →
+          </Link>
+        </section>
+      )}
     </Panel>
   );
 }
