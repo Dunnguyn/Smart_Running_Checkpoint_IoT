@@ -95,6 +95,8 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 
 ## Liên kết Simulator / Arduino Gateway
 
+Với sketch HC-SR04 đang in `LAP: n` qua Serial, dùng Gateway USB tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md): cài `pyserial`, đăng ký `device_id` vào checkpoint và chạy `python -m app.arduino_gateway --port COM5 --device-id NEU-ARDUINO-C04`. Arduino không có GPS; backend vẫn cần wearable GPS cùng runner để đối chiếu danh tính.
+
 Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
 
 Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Serial rồi gọi `POST /api/v1/checkpoint-events` với `X-Gateway-Key`, `device_event_id` ổn định và `student_id=null`. Admin đăng ký mapping thiết bị qua `POST /api/v1/checkpoints/{checkpoint_id}/devices`. Chỉ trong chế độ kết hợp, backend ghép event và passage; trường hợp mơ hồ cần `POST /api/v1/checkpoint-events/{event_id}/resolve`. Các API tra cứu là `GET /api/v1/checkpoint-events/{event_id}` và `GET /api/v1/races/{race_id}/checkpoint-events`.
