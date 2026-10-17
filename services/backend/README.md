@@ -4,7 +4,7 @@
 
 ## Những gì đã có
 
-- Quản lý giải chạy, sinh viên, đăng ký và checkpoint.
+- Quản lý giải chạy, sinh viên, đăng ký và checkpoint. Tạo hồ sơ sinh viên yêu cầu mã sinh viên, họ tên và khoa/viện; các trường được trả lại trong API danh sách và roster.
 - Gán một wearable ID cho runner; một thiết bị đeo gửi GPS và snapshot bước chân trong cùng telemetry request.
 - Hỗ trợ hai chế độ theo race: `GPS_ONLY` giữ hành vi geofence cũ; `GPS_AND_ARDUINO` ghép GPS passage với sự kiện Arduino theo thời gian.
 - Chế độ kết hợp lưu `UNKNOWN/OUTSIDE/INSIDE` bền vững, chỉ tạo passage khi đi từ ngoài bán kính 15 m vào trong 10 m; mất mẫu quá 5 giây sẽ khởi tạo lại trạng thái.
