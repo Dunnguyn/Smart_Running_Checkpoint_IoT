@@ -67,39 +67,42 @@ def main() -> int:
     if not gateway_key:
         parser.error("GATEWAY_API_KEY is missing; set it in services/backend/.env")
 
-    print(f"Opening {args.port} at {args.baud} baud; backend={args.base_url}")
+    print(f"Waiting for {args.port} at {args.baud} baud; backend={args.base_url}")
     print("Close Arduino IDE Serial Monitor first; only one program can own a COM port.")
-    try:
-        with serial.Serial(args.port, args.baud, timeout=1) as board:
-            # Opening USB Serial may reset the Arduino; ignore boot/status output.
-            while True:
-                line = board.readline().decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
-                print(f"SERIAL: {line}")
-                match = LAP_LINE.fullmatch(line)
-                if not match:
-                    continue
+    while True:
+        try:
+            with serial.Serial(args.port, args.baud, timeout=1) as board:
+                print(f"Connected to {args.port}; waiting for kit passage lines...")
+                # Opening USB Serial may reset the Arduino; boot output is ignored below.
+                while True:
+                    line = board.readline().decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    print(f"SERIAL: {line}")
+                    match = LAP_LINE.fullmatch(line)
+                    if not match:
+                        continue
 
-                lap_no = int(match.group(1))
-                payload = {
-                    "device_event_id": str(uuid.uuid4()),
-                    "device_id": args.device_id,
-                    "event_type": "PASSAGE_DETECTED",
-                    "occurred_at": datetime.now(timezone.utc).isoformat(),
-                    "student_id": None,
-                    "raw_payload": line,
-                }
-                if args.checkpoint_id:
-                    payload["checkpoint_id"] = args.checkpoint_id
-                print(f"Detected local kit lap {lap_no}; forwarding anonymous passage event...")
-                if not send_checkpoint_event(args.base_url, gateway_key, payload):
-                    print("Event was not acknowledged. Check the API/key/device mapping before continuing.", file=sys.stderr)
-    except serial.SerialException as exc:
-        print(f"Cannot open/read serial port {args.port}: {exc}", file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        print("Gateway stopped.")
+                    lap_no = int(match.group(1))
+                    payload = {
+                        "device_event_id": str(uuid.uuid4()),
+                        "device_id": args.device_id,
+                        "event_type": "PASSAGE_DETECTED",
+                        "occurred_at": datetime.now(timezone.utc).isoformat(),
+                        "student_id": None,
+                        "raw_payload": line,
+                    }
+                    if args.checkpoint_id:
+                        payload["checkpoint_id"] = args.checkpoint_id
+                    print(f"Detected local kit lap {lap_no}; forwarding anonymous passage event...")
+                    if not send_checkpoint_event(args.base_url, gateway_key, payload):
+                        print("Event was not acknowledged. Check the API/key/device mapping before continuing.", file=sys.stderr)
+        except serial.SerialException as exc:
+            print(f"Serial {args.port} unavailable ({exc}); retrying in 2 seconds...", file=sys.stderr)
+            time.sleep(2)
+        except KeyboardInterrupt:
+            print("Gateway stopped.")
+            return 0
     return 0
 
 

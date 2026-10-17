@@ -25,15 +25,26 @@ Sketch không có GPS, Wi-Fi hoặc HTTP; nó không gửi danh tính sinh viên
    python -m pip install -r requirements.txt
    ```
 
-## Chạy Gateway
+## Tự kết nối khi backend khởi động (khuyến nghị)
 
-Trong terminal thứ hai, tại `services/backend`:
+Trong `services/backend/.env`, đặt các giá trị sau (không đưa `.env` lên Git):
 
-```powershell
-python -m app.arduino_gateway --port COM5 --device-id NEU-ARDUINO-C04 --checkpoint-id <CHECKPOINT_UUID>
+```dotenv
+ARDUINO_SERIAL_PORT=COM3
+ARDUINO_SERIAL_BAUD=9600
+ARDUINO_DEVICE_ID=NEU-ARDUINO-C04-COM03
+ARDUINO_CHECKPOINT_ID=<CHECKPOINT_UUID_C04>
 ```
 
-Thay `COM5` và checkpoint UUID bằng giá trị trên máy của bạn. Có thể bỏ `--checkpoint-id` vì backend tự suy ra checkpoint từ mapping thiết bị. Local mặc định gọi `http://127.0.0.1:8000`; nếu backend ở máy khác, truyền `--base-url http://<IP_MAY_CHAY_BACKEND>:8000` và chạy Uvicorn bind `0.0.0.0` trong mạng tin cậy.
+Đăng ký `device_id` với checkpoint một lần bằng API admin. Sau đó chỉ cần chạy backend như bình thường; backend tự mở gateway, chờ nếu chưa cắm kit và thử kết nối lại mỗi 2 giây nếu rút/cắm lại. Không mở Arduino IDE Serial Monitor/Serial Plotter cùng lúc vì mỗi cổng COM chỉ cho một chương trình sử dụng. Khi backend dừng, gateway con cũng dừng theo.
+
+Nếu muốn chạy gateway riêng để debug, tại `services/backend` dùng:
+
+```powershell
+python -m app.arduino_gateway --port COM3 --baud 9600 --device-id NEU-ARDUINO-C04-COM03 --checkpoint-id <CHECKPOINT_UUID_C04>
+```
+
+Gateway tự chờ và kết nối lại cổng serial. Local mặc định gọi `http://127.0.0.1:8000`; nếu backend ở máy khác, truyền `--base-url http://<IP_MAY_CHAY_BACKEND>:8000` và chạy Uvicorn bind `0.0.0.0` trong mạng tin cậy.
 
 Khi Arduino in `LAP: 1`, Gateway gửi event gần như ngay lập tức với `X-Gateway-Key`, `device_id`, `device_event_id` UUID, `occurred_at` UTC và `student_id: null`. Kiểm tra response 202 và xem event trong Admin API. Nếu có 401, kiểm tra key; 404, kiểm tra device mapping; 422 `DEVICE_CHECKPOINT_MISMATCH`, kiểm tra checkpoint ID.
 
@@ -43,7 +54,7 @@ Khi Arduino in `LAP: 1`, Gateway gửi event gần như ngay lập tức với `
 - Một cảm biến không phân biệt được hai sinh viên đi sát nhau; backend giữ `AMBIGUOUS` khi có nhiều ứng viên và cần Admin xử lý.
 - Sketch chỉ đo một vị trí. Muốn thu sự kiện ở bốn checkpoint vật lý cần một thiết bị/gateway mapping cho từng checkpoint; một thiết bị chỉ có thể đại diện vị trí nó đang lắp. Không gửi cả bốn checkpoint như thể đã phát hiện nếu chỉ có một HC-SR04.
 - Nút STOP trong sketch hiện chỉ dừng đồng hồ local, không gọi API kết thúc run. Kết thúc backend phải qua luồng API của hệ thống.
-- Gateway demo retry tối đa ba lần với cùng payload/event ID khi lỗi mạng tạm thời. Nếu mất kết nối quá lâu, timestamp/sự kiện có thể bị backend đánh dấu late; kiểm tra mạng và giờ máy.
+- Gateway retry tối đa ba lần với cùng payload/event ID khi lỗi mạng tạm thời; nó tự mở lại COM nếu board bị rút/cắm. Nếu mất kết nối quá lâu, timestamp/sự kiện có thể bị backend đánh dấu late; kiểm tra mạng và giờ máy.
 
 ## Chân theo sketch
 
