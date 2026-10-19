@@ -44,11 +44,6 @@ class Settings(BaseSettings):
     max_gps_speed_mps: float = 12.0
     max_simulator_speed_mps: float = 18.0
     simulator_base_url: str = "http://127.0.0.1:8000"
-    # Optional local USB-serial bridge. Leave the port blank to disable auto-connect.
-    arduino_serial_port: str = ""
-    arduino_serial_baud: int = 9600
-    arduino_device_id: str = ""
-    arduino_checkpoint_id: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
@@ -1929,42 +1924,6 @@ async def matching_worker_loop() -> None:
 
 
 _matching_worker: asyncio.Task | None = None
-_arduino_gateway_process: subprocess.Popen | None = None
-
-
-@app.on_event("startup")
-async def start_arduino_gateway() -> None:
-    """Optionally start the reconnecting USB-serial bridge with the API server."""
-    global _arduino_gateway_process
-    if not settings.arduino_serial_port.strip():
-        logger.info("Arduino serial auto-connect is disabled (ARDUINO_SERIAL_PORT is blank).")
-        return
-    if not settings.arduino_device_id or not settings.arduino_checkpoint_id:
-        logger.error("Arduino serial auto-connect needs ARDUINO_DEVICE_ID and ARDUINO_CHECKPOINT_ID.")
-        return
-    backend_root = Path(__file__).resolve().parent.parent
-    command = [
-        sys.executable, "-m", "app.arduino_gateway",
-        "--port", settings.arduino_serial_port,
-        "--baud", str(settings.arduino_serial_baud),
-        "--device-id", settings.arduino_device_id,
-        "--checkpoint-id", settings.arduino_checkpoint_id,
-        "--base-url", settings.simulator_base_url,
-    ]
-    _arduino_gateway_process = subprocess.Popen(command, cwd=str(backend_root))
-    logger.info("Arduino gateway started for %s; it reconnects when the board is plugged in.", settings.arduino_serial_port)
-
-
-@app.on_event("shutdown")
-async def stop_arduino_gateway() -> None:
-    """Stop the child serial bridge cleanly when the backend exits."""
-    if _arduino_gateway_process and _arduino_gateway_process.poll() is None:
-        _arduino_gateway_process.terminate()
-        try:
-            _arduino_gateway_process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            _arduino_gateway_process.kill()
-            _arduino_gateway_process.wait(timeout=3)
 
 
 @app.on_event("startup")

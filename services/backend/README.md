@@ -95,7 +95,7 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 
 ## Liên kết Simulator / Arduino Gateway
 
-Với sketch HC-SR04 đang in `LAP: n` qua Serial, backend có thể tự mở Gateway USB khi khởi động: đặt `ARDUINO_SERIAL_PORT=COM3`, `ARDUINO_SERIAL_BAUD=9600`, `ARDUINO_DEVICE_ID` và `ARDUINO_CHECKPOINT_ID` trong `.env`. Gateway tự chờ/kết nối lại khi rút cắm kit; không chạy thêm cửa sổ terminal. Hướng dẫn và ánh xạ sự kiện ở [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md). Arduino không có GPS hay cảm biến bước chân; cần simulator hoặc wearable GPS để có vị trí, bước và ghép danh tính.
+Với sketch HC-SR04 đang in `LAP: n` qua Serial, dùng Gateway USB tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md): cài `pyserial`, đăng ký `device_id` vào checkpoint và chạy `python -m app.arduino_gateway --port COM5 --device-id NEU-ARDUINO-C04`. Arduino không có GPS; backend vẫn cần wearable GPS cùng runner để đối chiếu danh tính.
 
 Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
 
