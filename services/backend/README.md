@@ -13,7 +13,7 @@
 - Kiểm tra tọa độ/thời điểm/bước tăng dần, chống gửi lặp và cộng khoảng cách Haversine.
 - API Admin khởi động mặc định 5 sinh viên mô phỏng, gán bib `01`–`05`, tạo wearable/run rồi phát GPS/bước chân chuyển động quanh tòa Thế Kỷ. `GPS_ONLY` cho runner xuất phát đồng thời; `GPS_AND_ARDUINO` mặc định giãn runner 8 giây để tách các event ẩn danh.
 - Simulator chạy liên tục theo polyline khép kín khoảng 425 m/vòng, đi qua bốn tọa độ checkpoint bạn cung cấp; có thêm các điểm bẻ tuyến mô phỏng để đạt 400–450 m. Các điểm bẻ hiện chưa được xác minh là đường chạy thực địa và có thể thay bằng điểm lấy từ bản đồ.
-- API khởi chạy simulator ở chế độ `GPS_ONLY` hoặc `GPS_AND_ARDUINO`; dữ liệu giả được ghi rõ nguồn, không chứng minh danh tính người thật trước cảm biến.
+- API khởi chạy simulator ở chế độ `GPS_ONLY`, Arduino giả lập, hoặc GPS/bước chân mô phỏng kết hợp checkpoint Arduino thật qua cổng COM; chế độ kit không tạo sự kiện Arduino giả.
 - Nhận lap event chỉ từ nguồn có runner ID, kiểm tra giải, thời gian tối thiểu và sự kiện trùng.
 - Kết thúc phiên, tra cứu overview/runners/live/history và phát cập nhật WebSocket sau khi lưu thành công.
 - Phân quyền demo bằng ba API key riêng: Admin, Simulator, Gateway. Khóa cấu hình bằng biến môi trường.
@@ -95,7 +95,7 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 
 ## Liên kết Simulator / Arduino Gateway
 
-Với sketch HC-SR04 đang in `LAP: n` qua Serial, dùng Gateway USB tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md): cài `pyserial`, đăng ký `device_id` vào checkpoint và chạy `python -m app.arduino_gateway --port COM5 --device-id NEU-ARDUINO-C04`. Arduino không có GPS; backend vẫn cần wearable GPS cùng runner để đối chiếu danh tính.
+Với sketch HC-SR04 đang in `LAP: n` qua Serial, chạy demo hỗn hợp ngay từ Admin API: gửi `checkpoint_mode=GPS_AND_ARDUINO`, `kit_serial_port=COM03`, `kit_checkpoint_code=NEU-C01` tới `POST /api/v1/simulations`. Backend tạo 5 sinh viên và GPS/bước chân chuyển động, mở COM03 và chuyển riêng các dòng Serial thật thành checkpoint event; không tạo event Arduino giả. Xem hướng dẫn tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md). Đóng Arduino Serial Monitor trước; cổng COM chỉ một tiến trình được mở.
 
 Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
 

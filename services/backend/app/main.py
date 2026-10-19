@@ -432,6 +432,9 @@ class SimulationStartIn(BaseModel):
     interval_seconds: float = Field(default=0.5, ge=0.5, le=5)
     # Set 0 to deliberately reproduce close-pack AMBIGUOUS events.
     runner_start_gap_seconds: float | None = Field(default=None, ge=0, le=12)
+    # When supplied, GPS/steps remain simulated but LAP events come only from this USB kit.
+    kit_serial_port: str | None = Field(default=None, min_length=4, max_length=8, pattern=r"^COM\d{1,3}$")
+    kit_checkpoint_code: str = Field(default="NEU-C01", pattern=r"^NEU-C0[1-4]$")
 
 
 class GpsIn(BaseModel):
@@ -978,6 +981,8 @@ def list_races(db: Session = Depends(db_session)):
 def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
     if data.checkpoint_mode not in {"GPS_ONLY", "GPS_AND_ARDUINO"}:
         envelope_error("INVALID_CHECKPOINT_MODE", "checkpoint_mode phải là GPS_ONLY hoặc GPS_AND_ARDUINO.", 422)
+    if data.kit_serial_port and data.checkpoint_mode != "GPS_AND_ARDUINO":
+        envelope_error("KIT_REQUIRES_COMBINED_MODE", "Kết nối bộ kit yêu cầu checkpoint_mode=GPS_AND_ARDUINO.", 422)
     with _simulation_jobs_lock:
         for existing_id, existing in _simulation_jobs.items():
             process = existing.get("process")
@@ -993,6 +998,9 @@ def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
                    "--interval", str(data.interval_seconds)]
         if data.runner_start_gap_seconds is not None:
             command.extend(["--start-gap", str(data.runner_start_gap_seconds)])
+        if data.kit_serial_port:
+            command.extend(["--kit-port", data.kit_serial_port,
+                            "--kit-checkpoint-code", data.kit_checkpoint_code])
         child_env = os.environ.copy()
         child_env["PYTHONUNBUFFERED"] = "1"
         try:
@@ -1007,8 +1015,10 @@ def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
                 )
         except OSError as exc:
             envelope_error("SIMULATOR_START_FAILED", f"Không khởi chạy được simulator: {exc}", 500)
+        displayed_mode = (f"GPS_AND_ARDUINO_KIT:{data.kit_serial_port}:{data.kit_checkpoint_code}"
+                         if data.kit_serial_port else data.checkpoint_mode)
         _simulation_jobs[job_id] = {"process": process, "log_path": log_path,
-                                    "started_at": now_utc(), "mode": data.checkpoint_mode,
+                                    "started_at": now_utc(), "mode": displayed_mode,
                                     "stop_requested": False, "finished_at": None}
         return {**_simulation_job_snapshot(job_id), "already_running": False}
 
