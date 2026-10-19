@@ -1,6 +1,6 @@
 # NEU Smart Running — Backend
 
-**Phạm vi: chỉ backend web.** Dự án cung cấp REST API và WebSocket cho Admin Web, dùng **FastAPI**, **SQLAlchemy** và **SQLite** làm cơ sở dữ liệu mặc định. Có thể cấu hình SQL Server sau nếu triển khai cần thiết. Không xây frontend hoặc ứng dụng di động. Thư mục Python `app/` chỉ là tên package chứa mã backend và trình mô phỏng.
+**Phạm vi: backend web và API cho app sinh viên.** Dự án cung cấp REST API và WebSocket cho Admin Web, wearable/Arduino gateway, cùng API Bearer riêng cho app sinh viên trên điện thoại. Dùng **FastAPI**, **SQLAlchemy** và **SQLite** làm cơ sở dữ liệu mặc định. Không xây frontend Admin hoặc giao diện/app mobile trong repository. Thư mục Python `app/` là package backend và trình mô phỏng.
 
 ## Những gì đã có
 
@@ -100,6 +100,10 @@ Với sketch HC-SR04 đang in `LAP: n` qua Serial, dùng Gateway USB tại [`doc
 Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
 
 Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Serial rồi gọi `POST /api/v1/checkpoint-events` với `X-Gateway-Key`, `device_event_id` ổn định và `student_id=null`. Admin đăng ký mapping thiết bị qua `POST /api/v1/checkpoints/{checkpoint_id}/devices`. Chỉ trong chế độ kết hợp, backend ghép event và passage; trường hợp mơ hồ cần `POST /api/v1/checkpoint-events/{event_id}/resolve`. Các API tra cứu là `GET /api/v1/checkpoint-events/{event_id}` và `GET /api/v1/races/{race_id}/checkpoint-events`.
+## API app sinh viên
+
+Luồng app sinh viên tách khỏi Admin key và dùng access/refresh token riêng. Admin tạo tài khoản cho hồ sơ sinh viên đã có; sinh viên xem các giải đã được đăng ký, check-in GPS, bắt đầu chạy, gửi batch GPS và xem lịch sử/thống kê cá nhân. MVP theo đặc tả app v1.1 chưa hỗ trợ tự đăng ký giải hoặc pause/resume. Hướng dẫn endpoint, ví dụ request, cấu hình Android/iOS và giới hạn đã biết: [docs/STUDENT_MOBILE_API.md](../../docs/STUDENT_MOBILE_API.md).
+
 ## Tài liệu nhóm
 
 - [Mã sơ đồ PlantUML](docs/PLANTUML_DIAGRAMS.puml)
