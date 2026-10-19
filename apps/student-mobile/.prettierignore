@@ -1,0 +1,6 @@
+docs/reference/
+docs/dependency-audit.json
+android/
+ios/
+dist/
+test-results/

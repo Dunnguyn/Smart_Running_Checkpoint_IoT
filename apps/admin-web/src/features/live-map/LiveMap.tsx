@@ -1,3 +1,4 @@
+import { MapResize } from "./MapResize";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
@@ -223,7 +224,6 @@ export function LiveMap({
           <small>Trạng thái khóa sẽ được backend kiểm tra khi lưu.</small>
         </div>
       )}
-      {locked && <p className="map-note">{access.reason}</p>}
       <div className="map-wrap">
         <MapContainer
           key={
@@ -350,6 +350,7 @@ export function LiveMap({
             stop={() => setFollow(false)}
             fit={fit}
           />
+        <MapResize />
         </MapContainer>
         {tileError && (
           <p className="map-warning" role="status">
@@ -357,6 +358,7 @@ export function LiveMap({
           </p>
         )}
       </div>
+      {locked && <p className="map-note">{access.reason}</p>}
       <div className="map-legend" aria-label="Chú giải bản đồ">
         <span>
           <i className="legend-route" />

@@ -1,3 +1,4 @@
+import { MapResize } from "./MapResize";
 import { useEffect, useRef, useState } from "react";
 import {
   MapContainer,
@@ -523,7 +524,8 @@ export function MapEditor({
                       })}
                     />
                   ))}
-              </MapContainer>
+              <MapResize />
+        </MapContainer>
               {tileError && (
                 <p className="map-warning" role="status">
                   Không tải được nền bản đồ. Draft và tọa độ vẫn hoạt động.

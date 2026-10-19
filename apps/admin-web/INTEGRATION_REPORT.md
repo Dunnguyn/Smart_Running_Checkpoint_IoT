@@ -1,4 +1,179 @@
-# Tinh chỉnh UI và QA các trang — 13/10/2026 (mới nhất)
+# Cải thiện Giải chạy và bỏ Cột bổ sung — 15/10/2026
+
+- `/races`: phân bố lại độ rộng cột; tên giải rõ hơn, metadata xuống dòng và không dùng dấu gạch cho số vòng thiếu; nhãn Đang xem + viền xanh; địa điểm chỉ hiển thị khi có dữ liệu; số kết quả theo danh sách đã tải; nút Xóa bộ lọc thực sự reset tìm kiếm/trạng thái. Bảng cuộn cục bộ trên màn hình nhỏ. Không đổi API, lựa chọn giải hay hành vi tạo/xóa.
+- `/runners` (Sinh viên): bỏ control Cột bổ sung, state và các nhánh cột tùy chọn. Giữ bảy cột mặc định, search/status/sort/page-size/pagination và drawer chi tiết. Dữ liệu chi tiết vẫn dùng luồng cũ.
+- File sửa: `src/features/races/Races.tsx`, `src/features/runners/RunnerTable.tsx`, `src/design.css`, `scripts/verify-race-toolbar.mjs` và báo cáo.
+- Kiểm tra: lint, typecheck, build đạt; build còn cảnh báo bundle >500kB. Browser script đạt search/empty/reset, modal tạo giải mở/đóng Escape, link mô phỏng, đúng 7 cột và không còn Cột bổ sung, drawer mở/đóng, ảnh races desktop/tablet/mobile. Tất cả API test bằng interception/fixture; không gửi ghi thật. Không chạy lại toàn bộ unit suite cho thay đổi trình bày này.
+- Ảnh: `test-results/design-audit-20261015/implementation/races-1440.png`, `races-768.png`, `races-390.png`, `students-no-column-picker.png`.
+- Không sửa backend, env hay dữ liệu; không commit/push. Các thay đổi có sẵn được giữ nguyên.
+
+---
+
+# Rà soát toàn bộ với Figma — 15/10/2026 (mới nhất)
+
+**Kết luận: chưa khớp hoàn toàn.** Đã đối chiếu tám màn hình chính của export và kiểm tra các trạng thái được liệt kê dưới đây. Không coi build/test đạt là bằng chứng pixel-match. Lượt này là audit toàn ứng dụng, kèm chỉnh toolbar Giải chạy; không tuyên bố đã hoàn thành tất cả phần tinh chỉnh còn lại.
+
+Nguồn: `E:\Hocccc\Project\Admin Dashboard for NEU RUN`, chạy localhost:5180. SHA256 App.tsx/index.css vẫn trùng mục báo cáo trước; không có export mới khác. Frontend localhost:5173. Git status đã được kiểm tra; giữ các chỉnh sửa có sẵn, bao gồm README.md.
+
+## Đối chiếu từng màn hình
+
+| Màn hình | Phần đã theo mẫu | Còn khác / cần xử lý |
+| --- | --- | --- |
+| Shell | Sidebar 252px, header 72px, nhóm điều hướng, logo, màu và icon | Không dùng nhãn hệ thống/GPS online giả của prototype; header phản ánh ngữ cảnh từng trang. Khoảng cách nhóm menu chưa giống tuyệt đối |
+| Tổng quan | Hero, banner, bốn KPI, map + attention, bảng tiến độ + sự kiện, thống kê mở rộng | Toolbar/legend/cảnh báo map làm khối cao hơn mẫu; icon KPI và cách trình bày bảng tiến độ còn khác. Khối attention co theo dữ liệu thay vì luôn cao bằng map |
+| Phân tích | Hai tab, KPI, chart/donut, bảng; profile/metrics/lap chart | Xem audit riêng ở mục sau. Thiếu điểm ổn định/tổng hợp fastest: trạng thái thiếu dữ liệu có chủ ý |
+| Bản đồ trực tiếp | Panel trái, map phải, toolbar nổi, chọn runner | Giữ Leaflet, tọa độ thật và cảnh báo tile; hàng runner cao hơn mẫu để hiện nguồn/độ mới GPS; filter GPS riêng. Không coi khác hình dạng route là lỗi visual |
+| Giải chạy | Bảng, search/status, tạo giải/action menu | Đã bỏ header thẻ dư; chuyển lối vào mô phỏng lên action cạnh nút Tạo giải, nối /simulation thật; thêm icon. Giữ thiếu lịch, badge và dữ liệu thực; chưa đồng nhất mọi action/menu với prototype |
+| Sinh viên | Bảng, search/filter/pagination, drawer, modal tạo | Mặc định hiện Phiên chạy; Figma là danh bạ. Danh bạ hiện qua tab Sinh viên toàn hệ thống. Đây là khác biệt điều hướng cần quyết định/refine; bảng phiên có nhiều trường và cao hơn mẫu. Không bịa trạng thái hồ sơ đầy đủ/cần bổ sung |
+| Thiết lập giải | Tabs Người tham gia/Tuyến & trạm/Cấu hình ghi nhận | Thêm tab Thông tin giải và link quay lại để giữ chức năng; participant fixture rỗng nên chưa đối chiếu trạng thái có hàng tương đương. Editor và config còn nhiều field nghiệp vụ hơn prototype |
+| Trạm kiểm soát | Tabs, queue trái/detail phải, ứng viên radio và reason/actions | Queue và detail cao hơn mẫu; thông báo nguồn, eligibility và technical làm khác mật độ. Cần tinh chỉnh hierarchy, khoảng cách và footer action; không bỏ validation/version/conflict |
+| Mô phỏng | Form/tracking hai cột, mode cards, advanced fields | Form cao hơn mẫu; tóm tắt thông số hiện bằng câu thay vì strip ba ô, thiếu icon empty mẫu; mode/spacing phải theo state thật, không ép theo prototype |
+| Dialog/drawer | Modal tạo sinh viên, conflict, focus Escape; editor khóa, detail liên kết | Chưa kiểm chứng từng modal/menu ở mọi viewport; không khẳng định toàn bộ interaction-state đã giống Figma |
+
+## Kiểm tra thực tế và ảnh
+
+- `node scripts/capture-audit-reference.mjs`: render/chụp 8 màn hình reference tại 1440×900, thêm create race, drawer, auth và overview 1366/768/390.
+- `node scripts/audit-design.mjs`: 8 route chính × 4 viewport (1440×900, 1366×768, 768×1024, 390×844), 32 kết quả không tràn ngang toàn trang, không pageerror/request không biết/request ghi. Đã sửa script route Sinh viên thành `/runners` trước kết quả cuối; chờ dữ liệu và chọn checkpoint để xem chi tiết.
+- `node scripts/verify-latest-design.mjs`: đạt validation/409/payload/success tạo sinh viên bằng interception; resolve 409 xóa lựa chọn; setup tabs/lock; resize map giữ chọn; frozen duration; simulation options; auth. 3 request ghi bị interception, **0 ghi thật**.
+- `node scripts/verify-race-toolbar.mjs`: đạt search/empty/reset, modal tạo giải mở/đóng Escape, link Tạo mô phỏng, ảnh desktop/tablet/mobile; 0 ghi thật.
+- `npm run lint`, `npm run typecheck`, `npm test` (10 files, 45 tests), `npm run build`: đạt. Build còn cảnh báo JS bundle trên 500 kB.
+- [Gallery đối chiếu 8 màn hình](test-results/design-audit-20261015/index.html), các `compare-*.png` cùng thư mục; [ảnh mobile tổng hợp](test-results/design-audit-20261015/contact-390.png); [kết quả 32 viewport](test-results/design-audit-20261015/implementation/results.json).
+- Các ảnh state mới từ verify-latest-design được lưu tại `test-results/design-20261014/states` theo đường dẫn script hiện có (lần chạy audit này ngày 15/10). Ảnh reference và frontend dùng dữ liệu/trạng thái khác nhau; không suy ra mức pixel-match từ chúng. Một số ảnh full-page có header fixed lặp vị trí do cuộn/chụp; không coi đó là lỗi layout.
+
+## Phạm vi sửa và giới hạn
+
+Sửa `src/features/races/Races.tsx`, `src/design.css` cho toolbar danh sách giải. Thêm scripts audit/capture/verify toolbar và mục báo cáo này. Không đổi auth, REST/WS, cache, polling, editor, contract hoặc dữ liệu. Tạo mô phỏng vẫn truy cập qua trang riêng và sidebar; điều hướng không tự tạo job.
+
+Kiểm tra trên fixture cô lập, tile bị chặn có chủ ý trong script. Không dùng lỗi tile hoặc fixture làm bằng chứng lỗi backend. Lượt audit này chưa xác minh lại API thật, reconnect/race-switch E2E, các trạng thái simulation đang chạy hay tất cả dialog/empty/error variants. Không sửa backend, .env, schema hoặc dữ liệu lịch sử; không khởi động backend, không commit/push.
+
+---
+
+# Hiệu chỉnh riêng trang Phân tích — 15/10/2026 (mới nhất)
+
+## Thiết kế và triển khai
+
+Tham chiếu trực tiếp bản export tại `E:\Hocccc\Project\Admin Dashboard for NEU RUN` (App.tsx, index.css), render tại http://localhost:5180. Frontend: http://localhost:5173/analytics. Không đổi cấu hình kết nối backend.
+
+| Màn hình tham chiếu | Triển khai | Trạng thái |
+| --- | --- | --- |
+| Analytics / Toàn giải | Analytics.tsx + analytics.css | Header, tabs, bốn KPI/icon, grid biểu đồ quãng đường/donut với legend bên cạnh, vạch mục tiêu từ tuyến, bảng bảy cột và tiến độ |
+| Analytics / Theo sinh viên | StudentAnalytics.tsx | Bộ chọn phiên/pills, hồ sơ + bốn KPI, biểu đồ từng vòng từ API lịch sử, vòng nhanh nhất theo dữ liệu tải, panel ổn định và link chi tiết phiên |
+| Responsive | CSS scoped analytics-ref | Hai tab kiểm tra tại 1440×900, 1366×768, 768×1024, 390×844; bảng cuộn cục bộ, không tràn ngang trang |
+
+Các file của lượt sửa: `src/features/dashboard/Analytics.tsx`, `StudentAnalytics.tsx`, `analytics.css`, `analyticsMetrics.ts`, `analyticsMetrics.test.ts`, `scripts/verify-analytics-design.mjs`, báo cáo này. Các thay đổi từ nhiệm vụ trước và README có sẵn được giữ nguyên.
+
+## Đối chiếu hình ảnh
+
+- [Figma và triển khai — Toàn giải](test-results/analytics-20261015/comparison-race.png)
+- [Figma và triển khai — Theo sinh viên](test-results/analytics-20261015/comparison-student.png)
+- Trước lượt sửa: `test-results/design-20261014/implementation/1440--analytics.png`.
+- Ảnh sau sửa cho cả hai tab ở bốn viewport: `test-results/analytics-20261015/{race,student}-{1440,1366,768,390}.png`.
+
+Đã render/chụp cùng viewport 1440×900 và xem đối chiếu. Khác biệt có chủ ý: nội dung fixture khác bản mẫu nên số hàng/chiều cao biểu đồ thay đổi; dùng select chọn phiên để hỗ trợ nhiều người; giữ link lịch sử; nhãn pace là ước tính, bảng là tiến độ theo backend chứ không phải kết quả thi đấu. Không sao chép điểm ổn định 92, cadence, xu hướng cải thiện, nút xuất báo cáo giả hoặc vòng nhanh nhất toàn giải chưa có nguồn tổng hợp. Panel ổn định dùng vòng trung tính và dữ liệu chênh lệch các vòng đã tải. Thời lượng giữ định dạng HH:MM:SS và giá trị đã chốt. Nhãn phụ nâng nhẹ cỡ chữ so với mẫu. Header/sidebar dùng bản tích hợp hiện có, không sửa lại trong lượt này.
+
+## Bảo toàn tích hợp và kiểm thử
+
+- Chỉ đọc run detail/lap history qua service có sẵn; request có AbortController, timeout polling tuần tự được dọn khi đổi phiên/unmount. Detail được giữ khi refetch lỗi; không phát request ghi. Dữ liệu thiếu khác giá trị 0.
+- Giữ auth, race context, REST/WS provider, UUID/bib và điều hướng chi tiết. Duration COMPLETED dùng giá trị backend chốt. Màu xanh biểu đồ vòng dựa trên vòng có thời lượng nhỏ nhất, không dựa vị trí cột mẫu.
+- `npm run lint`: đạt.
+- `npm run typecheck`: đạt.
+- `npm test`: đạt 10 files / 45 tests, bao gồm ba test pace/scale/progress mới.
+- `npm run build`: đạt; còn cảnh báo bundle JS trên 500 kB như trước.
+- `node scripts/verify-analytics-design.mjs`: đạt cả hai tab ở bốn viewport; kiểm tra dữ liệu vòng, duration đã chốt, refresh, không tràn ngang, không lỗi JS/request ngoài fixture; không có request ghi. Kết quả: `test-results/analytics-20261015/results.json`.
+- Browser dùng interception/fixture cô lập, không phải E2E backend thật. Lượt này chưa xác minh lại dữ liệu thật, reconnect/race-switch đầy đủ hoặc thao tác ghi; không khẳng định đã kiểm thử các phần đó. Không kết luận lỗi backend từ fixture.
+- Giới hạn dữ liệu: chưa có nguồn xác minh điểm ổn định/tổng hợp vòng nhanh nhất toàn giải; không tự phát minh endpoint hay kết quả. Những blocker backend của các mục báo cáo trước chưa được kết luận đã giải quyết.
+- Không sửa backend, env, schema, dữ liệu nghiệp vụ; không khởi động lại backend, không tạo simulation, không commit/push. File README có sẵn không được chỉnh trong lượt này.
+
+---
+
+# Áp dụng bản thiết kế NEU RUN mới — 14/10/2026 (mới nhất)
+
+## Nguồn tham chiếu và phạm vi
+
+- Bản xuất sử dụng: `E:\Hocccc\Project\Admin Dashboard for NEU RUN`, các file cập nhật ngày 14/10/2026. Đã đọc App.tsx, index.css, package.json, các icon SVG và các màn hình/modal trong bản xuất. Không sử dụng ảnh từ đợt trước làm chuẩn.
+- SHA256 `src/App.tsx`: `C590650D1E6956866E528AC53659B4141C7235BF7F310D4DD0720064AAA83D19`; `src/index.css`: `75B97219C1B305A182EBCA8D42F33771F40048F1407B938D0FEAC34D299E881F`.
+- Reference: cài bằng `pnpm install --frozen-lockfile`; chạy Vite riêng tại `http://localhost:5180`. Frontend thật chạy `http://localhost:5173`. Hai URL trả HTTP 200 ở lần kiểm tra cuối.
+- HEAD local lúc bắt đầu: `56ca508`. Thay đổi README.md đã có trước nhiệm vụ, không sửa/ghi đè. Không pull, merge, commit hoặc push.
+- Giữ nguyên package/lockfile/env frontend và REST `http://localhost:8000/api/v1`, WS `ws://localhost:8000`. Không sửa/khởi động backend.
+
+## Mapping và trạng thái triển khai
+
+| Reference | Frontend thực tế | Đã triển khai / giới hạn |
+| --- | --- | --- |
+| Shell / sidebar / topbar | Shell.tsx, design.css | Logo NR và SVG từ export; sidebar 252px, thu gọn 72px, header 72px, nhóm điều hướng và thẻ đếm sự kiện; padding/tokens/typography theo export; refresh icon, tài khoản, skip link |
+| Access screen | LiveProvider.tsx | Bố cục đăng nhập mới; giữ xác thực Admin key thật và key chỉ trong bộ nhớ |
+| Overview | Dashboard.tsx | Hero, status/thời điểm snapshot, dải ngữ cảnh, 4 KPI, map + việc cần xử lý, tiến độ + sự kiện; giá trị từ state/API |
+| Analytics — whole race / student | Analytics.tsx, `/analytics` | Tabs, KPI, thanh quãng đường, donut trạng thái, bảng tiến độ theo thứ tự BE; chi tiết từng phiên dùng RunDetail thật. Pace là ước tính có nhãn từ thời lượng/quãng đường các phiên đã tải, không giả làm chỉ số chính thức |
+| Race directory / create / delete | Races.tsx, CreateRace, DeleteRace, RaceActions | Bảng, tìm/lọc, icon/menu, modal dùng styles chung; theo dõi/tạo mô phỏng vẫn truy cập được qua vùng mở rộng và trang Mô phỏng |
+| Live map / selected runner | LiveMap.tsx, WatchList, MapResize.tsx | Leaflet thật; panel trái 325px; toolbar nổi desktop; panel chọn, legend, marker/bib và trạng thái; ResizeObserver invalidateSize không fit lại khi đổi kích thước |
+| Students / student create / run drawer | People.tsx, CreateStudent.tsx, RunnerTable, RunDetail | Tiêu đề/controls và styles chung, tabs giữ các luồng cũ; form tạo hồ sơ nối POST /students đúng student_code/full_name/faculty; lỗi giữ draft, kết quả không chắc chắn chặn gửi lặp |
+| Setup / participants | Races.tsx, Roster | Tabs Người tham gia / Tuyến & trạm / Cấu hình ghi nhận; thêm tab phụ Thông tin giải để không mất chức năng cũ. Dùng roster, đăng ký và bib hiện có |
+| Setup route / matching | LiveMap, MapEditor, MatchingSettings | Editor/validation/khóa/draft và API cũ giữ nguyên, styling dùng chung. Cấu hình matching ở tab riêng |
+| Checkpoint review / journal / stations | CheckpointJournal.tsx, Checkpoints | Hàng đợi bên trái, chi tiết bên phải; thẻ ứng viên radio có khoảng cách/độ lệch/khả dụng; không chọn tự động. Nhật ký vẫn có modal, filters và phân trang; thiết bị vẫn có modal đăng ký |
+| Simulation / stop | SimulationPanel.tsx | Form và tracking hai cột; lựa chọn mode dạng thẻ radio; seed/chu kỳ GPS trong Tùy chọn nâng cao; giữ giãn xuất phát, job tracking, xác nhận dừng, chống tạo lặp và trạng thái không chắc chắn |
+
+## Tích hợp được bảo toàn
+
+- Không thay API client/base URL, auth, reconcile REST/WS, cache, nhịp đồng bộ nền, cleanup socket/request/timer hoặc phép tính vòng.
+- Matching vẫn sử dụng passage_id, expected_version, idempotency key; xung đột 409 tải lại và xóa lựa chọn cũ; match_status/lap_status riêng biệt.
+- Route/checkpoint vẫn lấy tọa độ/anchor từ backend, không sao chép SVG hoặc oval; không kéo runner. Editor tách draft, giữ kiểm tra khóa, hủy không ghi, refetch/readback sau lỗi không chắc chắn.
+- Run COMPLETED giữ duration đã chốt; GPS cũ/thiếu/tương lai/mô phỏng và vị trí cuối phiên không bị đồng nhất thành online.
+- Các thao tác ghi chỉ xuất phát từ hành động chủ động. Không tạo ghi khi mở trang, đổi tab, refresh hoặc resize.
+
+## Kiểm tra đã thực hiện
+
+| Lệnh / kiểm tra | Kết quả |
+| --- | --- |
+| `npm run lint` | PASS |
+| `npm run typecheck` và `npm run build` | PASS; Vite cảnh báo bundle JS khoảng 631 kB (>500 kB), chưa tách chunk trong phạm vi thiết kế |
+| `npm test` | 9 file / 42 test PASS |
+| `node scripts/capture-latest-design.mjs` | Chụp 8 màn hình reference 1440×900, create race/drawer/auth; overview thêm 1366×768, 768×1024, 390×844 |
+| `node scripts/verify-qa-pages.mjs` với QA_OUTPUT mới | PASS 13 đường dẫn × 4 viewport = 52 lượt bố cục; 0 overflow ngang/JS error/unexpected API. Chạy cả tương tác map, drawer, journal, auth, back/forward. Chụp lại desktop với QA_POPULATED cho bảng có dữ liệu |
+| `node scripts/verify-latest-design.mjs` | PASS form sinh viên validation/409/payload/success, review inline 409, tabs setup/khóa, resize map giữ lựa chọn, thời gian COMPLETED ở Analytics, mode simulation/nâng cao/auth; 3 write mock, 0 thật |
+| `node scripts/verify-admin-current.mjs` | PASS; tạo/poll/dừng/restart simulation, matching, delete/conflict/lost response/cleanup; 9 write mock, 0 thật |
+| `node scripts/verify-map-editor.mjs` | PASS draft/pick/drag/input/cancel/navigation/anchors/422/409/readback; 4 write mock, 0 thật |
+| `node scripts/verify-ui-polish.mjs` | PASS keyboard/menu/tên dài/scroll/loading/error/reconnect; không mutation |
+| `node scripts/verify-enrollment.mjs` | PASS debounce, bib conflict, UUID, “01”, không lẫn race; 2 write mock, 0 thật |
+| `node scripts/verify-race-create.mjs` | PASS validation/422/payload/busy/refetch/lost response/Escape; 3 write mock, 0 thật |
+
+Các harness cũ đã được cập nhật locator khi tên/placement thay đổi và bổ sung response GET participants cho tab setup mới; giữ nguyên assertion nghiệp vụ. Lỗi fixture/locator gặp trong lượt đầu đã sửa và chạy lại đạt, không ghi thành lỗi backend.
+
+## Ảnh và đối chiếu trực quan
+
+Thư mục: `apps/admin-web/test-results/design-20261014/` (artifact local bị gitignore):
+
+- `reference/`: ảnh bản xuất, cùng `metrics.json` ghi kích thước/style thực tế.
+- `implementation/`: ảnh từng route ở 1440, 1366, 768 và 390; trạng thái empty/loading được kiểm tra riêng trước lượt fixture populated.
+- `states/`: checkpoint-review, setup-route-locked, setup-matching, map-collapsed-selected, analytics-student, simulation-options, create-student-conflict, auth; `results.json`.
+- `comparison/index.html`: gallery so sánh trái reference / phải implementation; PNG từng màn hình bên cạnh.
+- Ảnh editor, đăng ký, menu và lỗi bổ sung từ harness hiện có nằm ở `test-results/current/` và thư mục mà script editor công bố.
+
+Đã xem ảnh và sửa các lệch lớn ở sidebar/header, kiểu chữ heading, gap hero/KPI, toolbar live map, độ dày hàng runner, form lý do và bố cục simulation. Không công bố phần trăm pixel-match. Không có ảnh baseline trước sửa của lượt này; ảnh “trước” trong gallery là reference, không phải source cũ.
+
+## Khác biệt có chủ đích và giới hạn còn lại
+
+- Leaflet/tuyến/GPS thật thay SVG; tile bị chặn trong harness để kiểm tra lỗi nền nên ảnh không có tile, không phải bằng chứng lỗi backend. Không dịch GPS, thay provider hoặc giả chuyển động.
+- Dữ liệu fixture/số người/tên/trạng thái khác sample reference; một số fixture cố ý mâu thuẫn summary/runner để kiểm tra hiển thị nguyên dữ liệu. Không tự sửa số tổng để làm khớp ảnh.
+- Helper text quan trọng được giữ tối thiểu khoảng 11–12px, bảng hiện có 14px thay chữ 8–10px ở một số vùng reference; hàng có nhãn nghiệp vụ dài sẽ cao hơn prototype.
+- Điện thoại giữ sidebar icon có đủ điểm đến thay vì ẩn bớt chức năng như prototype. Map trở về toolbar theo luồng trên màn hình hẹp, không ép overlay vào vùng quá nhỏ.
+- Giữ filters GPS/status riêng và nguồn GPS, chi tiết khóa/tile error nên panel map cao hơn mẫu. Không hiển thị “Hệ thống ổn định / GPS + Arduino” hoặc “Dữ liệu trực tiếp” chỉ từ WS connected.
+- Giữ tab Phiên chạy/Đăng ký/Danh bạ và tab Thông tin giải phụ, điều khiển refresh và kỹ thuật để không bỏ chức năng hiện có. Run drawer và Analytics từng sinh viên dùng dữ liệu/lịch sử phiên hiện có; chưa sao chép các biểu đồ cadence/xu hướng/split mẫu.
+- Chưa có dữ liệu/hợp đồng đã xác minh cho cadence, xu hướng thành tích, trạng thái hồ sơ “đầy đủ/cần bổ sung”, thiết bị online, xuất báo cáo, bảng xếp hạng chính thức; không tạo các nút hoặc giá trị giả. Vòng nhanh nhất toàn giải không có dữ liệu tổng hợp đã xác minh nên hiển thị “— / Chưa có dữ liệu tổng hợp toàn giải”.
+- Không kiểm thử ghi E2E trên dữ liệu thật. Không thể tuyên bố visual pixel-perfect; các khác biệt mật độ nội dung và chi tiết nghiệp vụ nêu trên còn tồn tại.
+
+## Backend và an toàn dữ liệu
+
+- Kiểm tra chỉ đọc `http://localhost:8000/health` timeout 3 giây; FE/reference HTTP 200. Không khởi động/restart backend theo yêu cầu. Vì vậy chưa xác minh lại dữ liệu thật, CORS/auth thật hoặc message WS nghiệp vụ trong lượt này.
+- Các blocker simulator/WS đã ghi ở báo cáo cũ là thông tin lịch sử, không kết luận đã được sửa và cũng không coi fixture là bằng chứng lỗi BE mới.
+- `git diff -- services/backend` rỗng. Không sửa backend code/.env/schema/dependency, không seed/simulator/migration, không sửa dữ liệu lịch sử, không thao tác ghi nghiệp vụ thật.
+
+## File frontend chính
+
+`src/design.css`, `src/components/ReferenceIcon.tsx`, `src/layouts/Shell.tsx`, `src/app/main.tsx`, `src/app/LiveProvider.tsx`, `src/features/dashboard/{Dashboard,Analytics}.tsx`, `src/features/live-map/{LiveMap,MapEditor,MapResize}.tsx`, `src/features/checkpoints/CheckpointJournal.tsx`, `src/features/races/{Races,SimulationPanel}.tsx`, `src/features/runners/{People,CreateStudent}.tsx`; scripts capture-latest-design, verify-latest-design, verify-qa-pages, verify-admin-current, verify-ui-polish, verify-enrollment và báo cáo này.
+
+---
+
+# Tinh chỉnh UI và QA các trang — 13/10/2026 (lịch sử)
 
 ## Phạm vi và kết luận
 

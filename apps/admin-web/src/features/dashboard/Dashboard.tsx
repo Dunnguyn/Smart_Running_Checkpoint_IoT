@@ -1,11 +1,4 @@
-import {
-  ArrowUpRight,
-  CheckCircle2,
-  Users,
-  Activity,
-  Trophy,
-  ScanLine,
-} from "lucide-react";
+import { CheckCircle2, Users, Activity, Trophy, Route } from "lucide-react";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
@@ -15,6 +8,7 @@ import { WatchList } from "../live-map/WatchList";
 import { EventStatus } from "../checkpoints/CheckpointJournal";
 import { datetime, duration, distance } from "../../utils/format";
 import { modeLabel } from "../../utils/labels";
+import { ReferenceIcon } from "../../components/ReferenceIcon";
 import { dataMode } from "../../services";
 function relativeEventTime(value: string) {
   const seconds = (Date.parse(value) - Date.now()) / 1000;
@@ -84,58 +78,109 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
       to: "/runners?status=ACTIVE",
     },
     {
-      label: "Hoàn thành",
-      icon: Trophy,
-      tone: "purple",
-      value: s?.completed_runners ?? snapshot.overview?.completed,
-      to: "/runners?status=COMPLETED",
+      label: "Tổng vòng ghi nhận",
+      icon: Route,
+      tone: "blue",
+      value: s?.laps_recorded,
+      to: "/analytics",
     },
     {
-      label: "Sự kiện cần xác nhận",
-      icon: ScanLine,
-      tone: "amber",
-      value: attention,
-      to: "/checkpoints?tab=attention",
+      label: "Đã hoàn thành",
+      icon: Trophy,
+      tone: "green",
+      value: s?.completed_runners,
+      to: "/runners?status=COMPLETED",
     },
   ];
   return (
     <div className="dashboard-sections">
-      <div className="page-title">
-        <div>
-          <h1>
-            {mapOnly ? "Bản đồ trực tiếp" : (race?.name ?? "Tổng quan giải")}
-          </h1>
-          <p>
-            {mapOnly
-              ? "Chọn người chạy để xem vị trí; GPS cũ không đồng nghĩa phiên đã dừng."
-              : d?.race.checkpoint_mode === "GPS_AND_ARDUINO"
-                ? "Vòng chạy được ghi nhận khi GPS khớp với sự kiện tại trạm Arduino."
-                : "Vòng chạy được ghi nhận từ GPS tại điểm tính vòng."}
-          </p>
+      {mapOnly ? (
+        <div className="page-title">
+          <div>
+            <h1>Bản đồ trực tiếp</h1>
+            <p>Theo dõi vị trí và tiến độ của người chạy trên tuyến.</p>
+          </div>
+          {race && <Badge status={race.status} />}
         </div>
-        {race && <Badge status={race.status} />}
-        <SimulationControls />
-      </div>
-      {!mapOnly && (
-        <div className="kpi-grid">
-          {cards.map((c) => (
-            <Link className="kpi-card" key={c.label} to={c.to}>
-              <span className={`kpi-symbol tone-${c.tone}`}>
-                <c.icon size={22} aria-hidden="true" />
-              </span>
-              <div className="kpi-copy">
-                <span>{c.label}</span>
-                <strong className="kpi-value">{c.value ?? "—"}</strong>
+      ) : (
+        <>
+          <section className="panel overview-hero">
+            <div className="hero-main">
+              <div className="hero-title-row">
+                {race && <Badge status={race.status} />}
+                <span
+                  className="hero-updated"
+                  title={datetime(snapshot.updated_at)}
+                >
+                  <ReferenceIcon name="refresh" size={13} />
+                  {datetime(snapshot.updated_at)}
+                </span>
               </div>
-              <ArrowUpRight
-                className="kpi-arrow"
-                size={19}
-                aria-hidden="true"
-              />
+              <h1>{race?.name ?? "Tổng quan giải"}</h1>
+              <p>Trung tâm điều hành giải chạy</p>
+              <div className="hero-meta">
+                <span>
+                  <ReferenceIcon name="route" />
+                  {race?.total_laps ?? "—"} vòng ·{" "}
+                  {snapshot.routeDistance_m ?? "—"} m/vòng
+                </span>
+                <span>
+                  <ReferenceIcon name="device" />
+                  {d ? modeLabel(d.race.checkpoint_mode) : "Chưa có chế độ"}
+                </span>
+              </div>
+            </div>
+            <div className="hero-actions">
+              <Link className="button" to="/analytics">
+                <ReferenceIcon name="chart" />
+                Xem phân tích
+              </Link>
+              <Link className="button primary" to="/live">
+                <ReferenceIcon name="map" />
+                Mở bản đồ trực tiếp
+              </Link>
+            </div>
+          </section>
+          <div className="overview-health">
+            <div>
+              <span className="health-icon">
+                <ReferenceIcon name="info" />
+              </span>
+              <span>
+                <strong>
+                  {error ? "Cần kiểm tra kết nối" : "Dữ liệu từ máy chủ"}
+                </strong>
+                <small>
+                  {d?.race.checkpoint_mode === "GPS_AND_ARDUINO"
+                    ? "Vòng chạy được ghi nhận khi GPS khớp sự kiện tại trạm Arduino."
+                    : "Vòng chạy được ghi nhận từ GPS tại điểm tính vòng."}
+                </small>
+              </span>
+            </div>
+            <Link to="/checkpoints?tab=attention">
+              {attention ?? "—"} sự kiện cần xác nhận{" "}
+              <ReferenceIcon name="chevron" size={15} />
             </Link>
-          ))}
-        </div>
+          </div>
+          <div className="kpi-grid overview-stats">
+            {cards.map((c) => (
+              <Link className="kpi-card" key={c.label} to={c.to}>
+                <div className="stat-card-top">
+                  <span>{c.label}</span>
+                  <span className={`kpi-symbol tone-${c.tone}`}>
+                    <c.icon size={20} aria-hidden="true" />
+                  </span>
+                </div>
+                <div className="stat-value-row">
+                  <strong className="kpi-value">{c.value ?? "—"}</strong>
+                </div>
+                <small>Theo dữ liệu giải đang chọn</small>
+              </Link>
+            ))}
+          </div>
+        </>
       )}
+      <SimulationControls />
       <div
         className={`live-grid ${mapOnly ? "expanded-map" : "overview-map"} ${params.has("edit") ? "editing-grid" : ""}`}
       >
@@ -153,7 +198,11 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
               onSelect={onSelect}
             />
           ) : (
-            <Panel title="Việc cần chú ý">
+            <Panel
+              title="Cần xử lý"
+              subtitle="Các mục cần ban tổ chức chú ý"
+              className="attention-card"
+            >
               <div className="attention-list">
                 {(attention ?? 0) > 0 && (
                   <Link to="/checkpoints?tab=attention">
@@ -220,6 +269,7 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
                       <th>Số báo danh</th>
                       <th>Sinh viên</th>
                       <th>Vòng</th>
+                      <th>Quãng đường</th>
                       <th>Thời gian</th>
                     </tr>
                   </thead>
@@ -239,7 +289,10 @@ export function Dashboard({ mapOnly = false }: { mapOnly?: boolean }) {
                             r.full_name
                           )}
                         </td>
-                        <td>{r.lap_count}</td>
+                        <td>
+                          {r.lap_count}/{r.total_laps ?? "—"}
+                        </td>
+                        <td>{distance(r.distance_total_m)}</td>
                         <td>{duration(r.duration_total_s ?? null)}</td>
                       </tr>
                     ))}

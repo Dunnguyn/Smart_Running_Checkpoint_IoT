@@ -5,29 +5,26 @@ import {
   ScrollRestoration,
   useLocation,
 } from "react-router-dom";
-import {
-  Activity,
-  RefreshCw,
-  LayoutDashboard,
-  Map,
-  Users,
-  Flag,
-  ScanLine,
-  PanelLeftClose,
-  Settings2,
-  FlaskConical,
-} from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useLive } from "../app/LiveProvider";
 import { IconAction } from "../components/IconAction";
+import { ReferenceIcon } from "../components/ReferenceIcon";
+import { Fragment } from "react";
 import { dataMode } from "../services";
 const navigation = [
-  { to: "/races", label: "Giải chạy", icon: Flag },
-  { to: "/runners", label: "Sinh viên", icon: Users },
-  { to: "/simulation", label: "Mô phỏng", icon: FlaskConical },
-  { to: "/", label: "Tổng quan", icon: LayoutDashboard },
-  { to: "/live", label: "Bản đồ trực tiếp", icon: Map },
-  { to: "/checkpoints", label: "Trạm kiểm soát", icon: ScanLine },
-];
+  { to: "/races", label: "Giải chạy", icon: "flag", group: "QUẢN LÝ CHUNG" },
+  { to: "/runners", label: "Sinh viên", icon: "users" },
+  { to: "/simulation", label: "Mô phỏng", icon: "flask" },
+  { to: "/", label: "Tổng quan", icon: "grid", group: "VẬN HÀNH GIẢI" },
+  { to: "/live", label: "Bản đồ trực tiếp", icon: "map" },
+  { to: "/checkpoints", label: "Trạm kiểm soát", icon: "checkpoint" },
+  {
+    to: "/analytics",
+    label: "Phân tích",
+    icon: "chart",
+    group: "BÁO CÁO & CẤU HÌNH",
+  },
+] as const;
 export function Shell() {
   const location = useLocation();
   const globalPage =
@@ -50,14 +47,17 @@ export function Shell() {
   } = useLive();
   return (
     <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
+      <a className="skip-link" href="#main-content">
+        Chuyển đến nội dung chính
+      </a>
       <aside className="sidebar">
         <div className="sidebar-brand-row">
           <NavLink to="/" className="brand" aria-label="NEU RUN trang chủ">
             <span className="brand-icon">
-              <Activity size={25} />
+              <span>NR</span>
             </span>
             <span className="brand-name">
-              NEU RUN<small>QUẢN TRỊ GIẢI CHẠY</small>
+              NEU RUN<small>TRUNG TÂM ĐIỀU HÀNH</small>
             </span>
           </NavLink>
           <button
@@ -66,27 +66,41 @@ export function Shell() {
             aria-expanded={!collapsed}
             onClick={() => setCollapsed(!collapsed)}
           >
-            <PanelLeftClose size={18} />
+            <ReferenceIcon name="menu" />
             <span>Thu gọn</span>
           </button>
         </div>
-        <div className="nav-caption">QUẢN LÝ CHUNG</div>
         <nav aria-label="Điều hướng chính">
-          {navigation.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/" || to === "/races"}
-              title={label}
-              aria-label={label}
-              className={({ isActive }) =>
-                `nav-item ${to === "/" ? "race-nav-start" : ""} ${isActive ? "active" : ""}`
-              }
-            >
-              <Icon size={20} />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          {navigation.map((item) => {
+            const { to, label, icon } = item;
+            return (
+              <Fragment key={to}>
+                {"group" in item && (
+                  <div className="nav-caption">{item.group}</div>
+                )}
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === "/" || to === "/races"}
+                  title={label}
+                  aria-label={label}
+                  className={({ isActive }) =>
+                    `nav-item ${isActive ? "active" : ""}`
+                  }
+                >
+                  <ReferenceIcon name={icon} />
+                  <span>{label}</span>
+                  {to === "/checkpoints" &&
+                    snapshot?.dashboard &&
+                    snapshot.dashboard.summary.ambiguous_matches > 0 && (
+                      <span className="nav-count">
+                        {snapshot.dashboard.summary.ambiguous_matches}
+                      </span>
+                    )}
+                </NavLink>
+              </Fragment>
+            );
+          })}
           {raceId && (
             <NavLink
               to={`/races/${raceId}`}
@@ -96,11 +110,24 @@ export function Shell() {
               title="Thiết lập giải"
               aria-label="Thiết lập giải"
             >
-              <Settings2 size={20} />
+              <ReferenceIcon name="settings" />
               <span>Thiết lập giải</span>
             </NavLink>
           )}
         </nav>
+        {!collapsed && (
+          <div className="sidebar-footer">
+            <ReferenceIcon name="info" />
+            <span>
+              <strong>
+                {connection === "connected"
+                  ? "Kết nối máy chủ"
+                  : "Theo dõi kết nối"}
+              </strong>
+              <small>Nguồn GPS theo từng người chạy</small>
+            </span>
+          </div>
+        )}
       </aside>
       <div className="main-shell">
         <header className="topbar unified-header">
@@ -159,9 +186,9 @@ export function Shell() {
           <details className="account-menu">
             <summary>
               <span className="account-avatar" aria-hidden="true">
-                QT
+                <ReferenceIcon name="lock" size={15} />
               </span>
-              Quản trị viên
+              Quản trị
             </summary>
             <div>
               <p>
@@ -179,7 +206,7 @@ export function Shell() {
             </div>
           </details>
         </header>
-        <main>
+        <main id="main-content" tabIndex={-1}>
           {(error ||
             refreshError ||
             (!globalPage &&

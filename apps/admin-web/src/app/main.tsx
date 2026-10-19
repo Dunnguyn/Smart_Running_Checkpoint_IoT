@@ -7,9 +7,10 @@ import {
   Route,
   Link,
 } from "react-router-dom";
+import { Analytics } from "../features/dashboard/Analytics";
 import { Shell } from "../layouts/Shell";
 import { LiveProvider } from "./LiveProvider";
-import { Dashboard, SimulationControls } from "../features/dashboard/Dashboard";
+import { Dashboard } from "../features/dashboard/Dashboard";
 import { People } from "../features/runners/People";
 import { RunDetail } from "../features/runners/RunDetail";
 import { SimulationPanel } from "../features/races/SimulationPanel";
@@ -20,19 +21,7 @@ import "leaflet/dist/leaflet.css";
 import "../styles.css";
 import "../design.css";
 function RunnersPage() {
-  return (
-    <>
-      <div className="page-title">
-        <div>
-          <div className="eyebrow">QUẢN LÝ SINH VIÊN</div>
-          <h1>Sinh viên tham gia</h1>
-          <p>Theo dõi tiến độ và chi tiết phiên chạy của giải đang chọn</p>
-        </div>
-        <SimulationControls />
-      </div>
-      <People />
-    </>
-  );
+  return <People />;
 }
 function Placeholder({ title }: { title: string }) {
   return (
@@ -65,6 +54,7 @@ const router = createBrowserRouter(
       }
     >
       <Route index element={<Dashboard />} />
+      <Route path="analytics" element={<Analytics />} />
       <Route path="live" element={<Dashboard mapOnly />} />
       <Route path="runners" element={<RunnersPage />} />
       <Route path="runners/:studentId/runs/:runId" element={<RunDetail />} />
@@ -82,7 +72,7 @@ const router = createBrowserRouter(
                 </p>
               </div>
             </div>
-            <SimulationPanel />
+            <SimulationPanel fullPage />
           </>
         }
       />

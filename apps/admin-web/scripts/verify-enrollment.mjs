@@ -267,7 +267,7 @@ try {
   await page.getByRole("button", { name: "Làm mới đăng ký" }).click();
   await page.getByLabel("Chọn giải chạy").selectOption("b");
   await expect(
-    page.getByRole("heading", { name: "Đăng ký của giải: Giải thứ hai" }),
+    page.locator(".roster-heading").getByText(/Giải thứ hai/),
   ).toBeVisible();
   await page.waitForTimeout(900);
   await expect(page.getByRole("cell", { name: "01", exact: true })).toHaveCount(

@@ -1,0 +1,9 @@
+node_modules/
+.cxx/
+.expo/
+dist/
+android/
+ios/
+test-results/
+.env*
+!.env.example

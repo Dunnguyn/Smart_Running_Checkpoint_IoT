@@ -14,7 +14,7 @@ import { IconAction } from "../../components/IconAction";
 import { Eye } from "lucide-react";
 import { Modal } from "../../components/Modal";
 import { RunDetail } from "./RunDetail";
-import { datetime, distance, duration } from "../../utils/format";
+import { distance, duration } from "../../utils/format";
 export function RunnerTable() {
   const { snapshot, raceId, mergeRunners } = useLive();
   const [params, setParams] = useSearchParams();
@@ -30,8 +30,7 @@ export function RunnerTable() {
     [error, setError] = useState(""),
     [refresh, setRefresh] = useState(0),
     [loading, setLoading] = useState(false);
-  const [columns, setColumns] = useState<string[]>([]),
-    [detail, setDetail] = useState<RunSession | null>(null);
+  const [detail, setDetail] = useState<RunSession | null>(null);
   const loaded = useRef("");
   const hasSnapshot = !!snapshot;
   useEffect(() => {
@@ -150,28 +149,7 @@ export function RunnerTable() {
             ))}
           </select>
         </label>
-        <details className="column-picker">
-          <summary>Cột bổ sung</summary>
-          {[
-            ["steps", "Bước chân"],
-            ["lap", "Vòng gần nhất"],
-            ["faculty", "Khoa/Viện"],
-            ["gps", "GPS cập nhật cuối"],
-          ].map(([k, label]) => (
-            <label key={k}>
-              <input
-                type="checkbox"
-                checked={columns.includes(k)}
-                onChange={(e) =>
-                  setColumns((c) =>
-                    e.target.checked ? [...c, k] : c.filter((x) => x !== k),
-                  )
-                }
-              />
-              {label}
-            </label>
-          ))}
-        </details>
+
       </div>
       {query && (
         <p className="map-note">
@@ -226,10 +204,6 @@ export function RunnerTable() {
                     </button>
                   </th>
                   <th>Trạng thái chạy</th>
-                  {columns.includes("steps") && <th>Bước chân</th>}
-                  {columns.includes("lap") && <th>Vòng gần nhất</th>}
-                  {columns.includes("faculty") && <th>Khoa/Viện</th>}
-                  {columns.includes("gps") && <th>GPS cập nhật cuối</th>}
                   <th>Chi tiết</th>
                 </tr>
               </thead>
@@ -271,16 +245,6 @@ export function RunnerTable() {
                       <td>
                         <Badge status={r.status} />
                       </td>
-                      {columns.includes("steps") && (
-                        <td>{r.total_steps?.toLocaleString("vi-VN") ?? "—"}</td>
-                      )}
-                      {columns.includes("lap") && (
-                        <td>{duration(r.last_lap_duration_s)}</td>
-                      )}
-                      {columns.includes("faculty") && <td>{r.faculty}</td>}
-                      {columns.includes("gps") && (
-                        <td>{datetime(r.last_seen_at)}</td>
-                      )}
                       <td>
                         <IconAction
                           label={`Xem chi tiết ${r.full_name}`}

@@ -156,6 +156,7 @@ await page.route("**/api/v1/**", async (r) => {
     });
   if (path.endsWith("/route"))
     return json({ race_id: id, ...meta, points: [], distance_m: 0 });
+  if (method === "GET" && path.endsWith("/participants")) return json({race_id:"a",items:[]});
   throw new Error("Unexpected fixture " + method + " " + path);
 });
 try {

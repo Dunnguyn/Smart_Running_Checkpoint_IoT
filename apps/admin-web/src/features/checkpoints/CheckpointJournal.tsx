@@ -117,6 +117,101 @@ function Journal({
     setCursors([undefined]);
     setPage(null);
   };
+  if (attention)
+    return (
+      <div className="review-layout">
+        <Panel
+          title="Hàng đợi xem xét"
+          subtitle="Không có người nào được chọn tự động."
+        >
+          {error && (
+            <p role="alert">
+              {error}
+              <button
+                className="button"
+                onClick={() => setRefresh((n) => n + 1)}
+              >
+                Thử lại
+              </button>
+            </p>
+          )}
+          {!page && !error && <p role="status">Đang tải sự kiện…</p>}
+          <div className="review-queue">
+            {page?.items.map((e) => (
+              <button
+                key={e.event_id}
+                className={`review-event ${selected === e.event_id ? "active" : ""}`}
+                onClick={() => setSelected(e.event_id)}
+                aria-pressed={selected === e.event_id}
+              >
+                <strong>
+                  {snapshot?.checkpoints.find(
+                    (c) => c.checkpoint_id === e.checkpoint_id,
+                  )?.name ?? "Checkpoint"}
+                </strong>
+                <small>{datetime(e.occurred_at)}</small>
+                <EventStatus event={e} />
+                <span>
+                  {e.candidates_final
+                    ? "Sẵn sàng xác nhận"
+                    : "Đang thu nhận ứng viên"}
+                </span>
+              </button>
+            ))}
+          </div>
+          {page?.items.length === 0 && (
+            <Empty
+              title="Không có sự kiện cần xác nhận"
+              description="Sự kiện chờ xác nhận sẽ xuất hiện tại đây."
+            />
+          )}
+          <div className="pagination">
+            <button
+              className="button"
+              disabled={cursors.length === 1}
+              onClick={() => {
+                setSelected(null);
+                setCursors((s) => s.slice(0, -1));
+                setPage(null);
+              }}
+            >
+              Trang trước
+            </button>
+            <span>Trang {cursors.length}</span>
+            <button
+              className="button"
+              disabled={!page?.next_cursor}
+              onClick={() => {
+                setSelected(null);
+                setCursors((s) => [...s, page!.next_cursor!]);
+                setPage(null);
+              }}
+            >
+              Trang sau
+            </button>
+          </div>
+        </Panel>
+        <div className="journal-detail">
+          {selected ? (
+            <EventDetail
+              key={selected}
+              id={selected}
+              raceId={raceId}
+              revision={revision}
+              onClose={() => setSelected(null)}
+              onChanged={() => setRefresh((n) => n + 1)}
+            />
+          ) : (
+            <Panel title="Chọn sự kiện để đối chiếu">
+              <Empty
+                title="Chưa chọn sự kiện"
+                description="Chọn một mục trong hàng đợi để xem ứng viên và xác nhận."
+              />
+            </Panel>
+          )}
+        </div>
+      </div>
+    );
   return (
     <>
       <Panel
@@ -343,7 +438,7 @@ function EventDetail({
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const { refreshData } = useLive();
+  const { refreshData, snapshot } = useLive();
   const [event, setEvent] = useState<CheckpointEvent | null>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
@@ -570,49 +665,47 @@ function EventDetail({
             nhận Arduino online hay danh tính người thật. Danh sách ứng viên:{" "}
             {event.candidates_final ? "đã chốt" : "đang thu thập"}.
           </p>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>CHỌN PASSAGE</th>
-                  <th>BIB / SINH VIÊN</th>
-                  <th>KHOẢNG CÁCH</th>
-                  <th>ĐỘ LỆCH</th>
-                  <th>KHẢ DỤNG</th>
-                </tr>
-              </thead>
-              <tbody>
-                {event.candidates?.map((c) => (
-                  <tr key={c.passage_id}>
-                    <td>
-                      <input
-                        type="radio"
-                        name="passage"
-                        aria-label={`Chọn passage ${c.passage_id}`}
-                        checked={passage === c.passage_id}
-                        disabled={
-                          !canResolve(event) ||
-                          !c.available ||
-                          busy ||
-                          !!pending ||
-                          !verified
-                        }
-                        onChange={() => setPassage(c.passage_id)}
-                      />
-                    </td>
-                    <td>
-                      #{c.display_id ?? "—"} · {c.student_code ?? c.student_id}
-                    </td>
-                    <td>{c.entry_distance_m} m</td>
-                    <td>{c.time_delta_ms} ms</td>
-                    <td>
-                      {c.available ? "Có, theo snapshot backend" : "Không"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <fieldset className="candidate-list">
+            <legend>Chọn người chạy phù hợp</legend>
+            {event.candidates?.map((c) => (
+              <label className="candidate-card" key={c.passage_id}>
+                <input
+                  type="radio"
+                  name="passage"
+                  aria-label={`Chọn passage ${c.passage_id}`}
+                  checked={passage === c.passage_id}
+                  disabled={
+                    !canResolve(event) ||
+                    !c.available ||
+                    busy ||
+                    !!pending ||
+                    !verified
+                  }
+                  onChange={() => setPassage(c.passage_id)}
+                />
+                <span className="bib-token">{c.display_id ?? "—"}</span>
+                <span className="candidate-person">
+                  <strong>
+                    {snapshot?.runners.find(
+                      (r) => r.student_id === c.student_id,
+                    )?.full_name ??
+                      c.student_code ??
+                      "Chưa có tên"}
+                  </strong>
+                  <small>
+                    {c.student_code ?? "Chưa có mã sinh viên"} ·{" "}
+                    {c.available
+                      ? "Có thể chọn theo dữ liệu hiện tại"
+                      : "Không còn khả dụng"}
+                  </small>
+                </span>
+                <span className="candidate-measure">
+                  <strong>{c.entry_distance_m} m</strong>
+                  <small>Chênh {c.time_delta_ms} ms</small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
           <p className="form-message">
             Khả dụng có thể thay đổi do sự kiện cạnh tranh; backend kiểm tra lại
             khi xác nhận.

@@ -8,7 +8,7 @@ const seed = JSON.parse(
     "utf8",
   ),
 );
-const dir = "test-results/qa-20261013";
+const dir = process.env.QA_OUTPUT ?? "test-results/qa-20261013";
 await mkdir(dir, { recursive: true });
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -57,16 +57,14 @@ const event = {
   candidates_final: true,
   version: 1,
   config_version: 1,
-  candidates: seed.runners
-    .slice(0, 2)
-    .map((r, i) => ({
-      ...r,
-      passage_id: `passage-${i}`,
-      entry_at: new Date().toISOString(),
-      entry_distance_m: i + 1,
-      time_delta_ms: i * 200,
-      available: true,
-    })),
+  candidates: seed.runners.slice(0, 2).map((r, i) => ({
+    ...r,
+    passage_id: `passage-${i}`,
+    entry_at: new Date().toISOString(),
+    entry_distance_m: i + 1,
+    time_delta_ms: i * 200,
+    available: true,
+  })),
 };
 page.on("pageerror", (e) => errors.push(e.message));
 await page.routeWebSocket("**/ws/v1/**", () => {});
@@ -152,9 +150,9 @@ await page.route("**/api/v1/**", async (route) => {
   }
   if (path.endsWith("/checkpoint-events/qa-event")) return json(event);
   if (path.endsWith("/participants"))
-    return json({ race_id: raceId, items: [] });
+    return json({ race_id: raceId, items: process.env.QA_POPULATED ? seed.runners.map((r,i)=>({...r,participant_id:`fixture-${i}`,bib_number:r.bib_number ?? r.display_id,registration_status:"REGISTERED"})) : [] });
   if (path === "/api/v1/students")
-    return json({ items: [], offset: 0, limit: 20 });
+    return json({ items: process.env.QA_POPULATED ? seed.runners : [], offset: 0, limit: 20 });
   if (path.includes("/runs/")) {
     if (detailError) return json({ detail: "Lỗi đọc fixture" }, 503);
     if (path.endsWith("/events"))
@@ -190,9 +188,11 @@ try {
         [768, 1024],
         [390, 844],
       ]) {
+    if (process.env.QA_WIDTH && width !== Number(process.env.QA_WIDTH)) continue;
     await page.setViewportSize({ width, height });
     for (const path of [
       "/",
+      "/analytics",
       "/live",
       "/races",
       `/races/${raceId}`,
@@ -206,7 +206,7 @@ try {
       "/not-a-page",
     ]) {
       await open(path);
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(1200);
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth > innerWidth + 1,
       );
@@ -219,277 +219,294 @@ try {
       await capture(`${width}-${path.replace(/[^a-z0-9]+/gi, "-")}`);
     }
   }
-  await page.setViewportSize({ width: 1366, height: 768 });
-  seed.runners[1].last_seen_at = new Date(Date.now() - 20000).toISOString();
-  await open("/live");
-  await expect(
-    page.getByText("Tuyến đã khóa vì giải đã có phiên chạy.", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Chỉnh sửa bản đồ", exact: true }),
-  ).toBeDisabled();
-  const row = page.locator(".watch-row").first();
-  await row.click();
-  await expect(row).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".selected-runner")).toContainText("#01");
-  await expect(page.locator(".watch-row").nth(2)).toContainText(
-    "Chưa có vị trí mới",
-  );
-  await expect(page.locator(".watch-row").nth(3)).toContainText(
-    "Thời gian GPS vượt thời gian hiện tại",
-  );
-  const before = await page.locator(".watch-row").nth(1).innerText();
-  await page.waitForTimeout(1200);
-  expect(await page.locator(".watch-row").nth(1).innerText()).not.toBe(before);
-  const chosenMarker = page.locator(".runner-marker.selected");
-  await expect(chosenMarker).toContainText("×3");
-  expect(
-    await chosenMarker.evaluate((e) => Number(e.style.zIndex)),
-  ).toBeGreaterThan(1000);
-  await chosenMarker.click();
-  await page
-    .locator(".leaflet-popup")
-    .getByRole("button", { name: /#02/ })
-    .click();
-  await expect(page.locator(".watch-row").nth(1)).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await page.locator(".leaflet-popup-close-button").last().click();
-  await page.locator(".checkpoint-marker").last().click();
-  await expect(page.locator(".watch-row").nth(1)).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await page.locator(".leaflet-popup-close-button").last().click();
-  await page
-    .getByRole("button", { name: "Theo dõi người chạy", exact: true })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "Dừng theo dõi", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  const bounds = await page.locator(".leaflet-container").boundingBox();
-  await page.mouse.move(bounds.x + 80, bounds.y + 100);
-  await page.mouse.down();
-  await page.mouse.move(bounds.x + 160, bounds.y + 140, { steps: 8 });
-  await page.mouse.up();
-  await expect(
-    page.getByRole("button", { name: "Theo dõi người chạy", exact: true }),
-  ).toHaveAttribute("aria-pressed", "false");
-  await page.waitForTimeout(800); // Let Leaflet drag inertia finish before checking REST polling.
-  const transform = await page
-    .locator(".leaflet-map-pane")
-    .getAttribute("style");
-  await page.waitForTimeout(1500);
-  expect(await page.locator(".leaflet-map-pane").getAttribute("style")).toBe(
-    transform,
-  );
-  await page
-    .getByRole("button", { name: "Xem toàn tuyến", exact: true })
-    .click();
-  await page.getByText("Lớp bản đồ", { exact: true }).click();
-  await page.getByLabel("Người chạy", { exact: true }).uncheck();
-  await expect(page.locator(".runner-marker")).toHaveCount(0);
-  await page.getByLabel("Người chạy", { exact: true }).check();
-  await expect(page.locator(".runner-marker")).toHaveCount(2);
-  await capture("map-selected-overlap");
-  await page.evaluate(() => window.scrollTo(0, 300));
-  await page.getByRole("link", { name: "Tổng quan", exact: true }).click();
-  await page.waitForTimeout(300);
-  const overviewHeading = await page.locator("h1").boundingBox();
-  const overviewHeader = await page.locator("header").boundingBox();
-  checks.push({
-    path: "/",
-    state: "long-page navigation from scrolled map",
-    result:
-      overviewHeading.y >= overviewHeader.y + overviewHeader.height
-        ? "PASS"
-        : "FAIL",
-    overviewHeading,
-    overviewHeader,
-  });
-  await capture("overview-navigation-heading");
-  await page
-    .getByRole("link", { name: "Bản đồ trực tiếp", exact: true })
-    .click();
-  // Reproduce navigation while scrolled; heading must not remain behind sticky header.
-  await page.evaluate(() => window.scrollTo(0, 300));
-  await page.getByRole("link", { name: "Sinh viên", exact: true }).click();
-  const heading = await page.locator("h1").boundingBox(),
-    header = await page.locator("header").boundingBox();
-  checks.push({
-    path: "/runners",
-    state: "navigation from scrolled map",
-    result: heading.y >= header.y + header.height ? "PASS" : "FAIL",
-    heading,
-    header,
-  });
-  await capture("navigation-heading");
-  await page
-    .getByRole("button", { name: `Xem chi tiết ${seed.runners[0].full_name}` })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText("00:02:10");
-  detailError = true;
-  await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
-    "Đang giữ dữ liệu",
-    { timeout: 10000 },
-  );
-  await expect(page.getByRole("dialog")).toContainText("00:02:10");
-  await capture("drawer-background-error");
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  detailError = false;
-  await open(
-    `/runners/${seed.runners[0].student_id}/runs/${seed.runners[0].run_id}`,
-  );
-  await expect(page.locator("main")).toContainText("00:02:10");
-  await capture("session-direct");
-  await open("/checkpoints?event=qa-event");
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("radio").first()).not.toBeChecked();
-  await expect(
-    dialog.getByRole("button", { name: "Xác nhận người chạy", exact: true }),
-  ).toBeDisabled();
-  await dialog.getByRole("radio").first().check();
-  await dialog.getByLabel("Lý do xử lý").fill("Kiểm tra fixture cô lập");
-  await dialog
-    .getByRole("button", { name: "Xác nhận người chạy", exact: true })
-    .click();
-  await expect(dialog).toContainText("Sự kiện đã thay đổi");
-  await expect(dialog.getByRole("radio").first()).not.toBeChecked();
-  await dialog.getByRole("radio").nth(1).check();
-  await dialog
-    .getByRole("button", { name: "Xác nhận người chạy", exact: true })
-    .click();
-  await expect(dialog).toContainText("Backend đã ghi nhận thao tác.");
-  expect(writes[0].body.expected_version).toBe(1);
-  expect(writes[1].body.expected_version).toBe(2);
-  expect(writes[1].body.passage_id).toBe("passage-1");
-  expect(writes[1].body.idempotency_key).not.toBe(
-    writes[0].body.idempotency_key,
-  );
-  await capture("resolve-conflict-recovered");
-  await page.keyboard.press("Escape");
-  await page
-    .getByRole("button", { name: "Trạm và thiết bị", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Đăng ký thiết bị", exact: true })
-    .first()
-    .click();
-  await page.getByLabel("Device ID", { exact: true }).fill("qa-device");
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Đăng ký thiết bị", exact: true })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "không phải bằng chứng thiết bị online",
-  );
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth + 1,
-    ),
-  ).toBe(true);
-  await capture("device-dialog-390");
-  await page.setViewportSize({ width: 1366, height: 768 });
-  await capture("device-dialog");
-  await page.keyboard.press("Escape");
-  event.match_status = "AMBIGUOUS";
-  event.candidates_final = false;
-  await open("/checkpoints?event=qa-event");
-  await expect(
-    page.getByRole("dialog").getByRole("radio").first(),
-  ).toBeDisabled();
-  await expect(
-    page
+  if (process.env.QA_CAPTURE_ONLY) {
+    expect(errors).toEqual([]);
+    expect(unexpected).toEqual([]);
+    expect(checks.filter((c) => c.result !== "PASS")).toEqual([]);
+    process.exitCode = 0;
+  } else {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    seed.runners[1].last_seen_at = new Date(Date.now() - 20000).toISOString();
+    await open("/live");
+    await expect(
+      page.getByText("Tuyến đã khóa vì giải đã có phiên chạy.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Chỉnh sửa bản đồ", exact: true }),
+    ).toBeDisabled();
+    const row = page.locator(".watch-row").first();
+    await row.click();
+    await expect(row).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".selected-runner")).toContainText("#01");
+    await expect(page.locator(".watch-row").nth(2)).toContainText(
+      "Chưa có vị trí mới",
+    );
+    await expect(page.locator(".watch-row").nth(3)).toContainText(
+      "Thời gian GPS vượt thời gian hiện tại",
+    );
+    const before = await page.locator(".watch-row").nth(1).innerText();
+    await page.waitForTimeout(1200);
+    expect(await page.locator(".watch-row").nth(1).innerText()).not.toBe(
+      before,
+    );
+    const chosenMarker = page.locator(".runner-marker.selected");
+    await expect(chosenMarker).toContainText("×3");
+    expect(
+      await chosenMarker.evaluate((e) => Number(e.style.zIndex)),
+    ).toBeGreaterThan(1000);
+    await chosenMarker.click();
+    await page
+      .locator(".leaflet-popup")
+      .getByRole("button", { name: /#02/ })
+      .click();
+    await expect(page.locator(".watch-row").nth(1)).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.locator(".leaflet-popup-close-button").last().click();
+    await page.locator(".checkpoint-marker").last().click();
+    await expect(page.locator(".watch-row").nth(1)).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.locator(".leaflet-popup-close-button").last().click();
+    await page
+      .getByRole("button", { name: "Theo dõi người chạy", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Dừng theo dõi", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const bounds = await page.locator(".leaflet-container").boundingBox();
+    await page.mouse.move(bounds.x + 80, bounds.y + 100);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + 160, bounds.y + 140, { steps: 8 });
+    await page.mouse.up();
+    await expect(
+      page.getByRole("button", { name: "Theo dõi người chạy", exact: true }),
+    ).toHaveAttribute("aria-pressed", "false");
+    await page.waitForTimeout(800); // Let Leaflet drag inertia finish before checking REST polling.
+    const transform = await page
+      .locator(".leaflet-map-pane")
+      .getAttribute("style");
+    await page.waitForTimeout(1500);
+    expect(await page.locator(".leaflet-map-pane").getAttribute("style")).toBe(
+      transform,
+    );
+    await page
+      .getByRole("button", { name: "Xem toàn tuyến", exact: true })
+      .click();
+    await page.getByText("Lớp bản đồ", { exact: true }).click();
+    await page.getByLabel("Người chạy", { exact: true }).uncheck();
+    await expect(page.locator(".runner-marker")).toHaveCount(0);
+    await page.getByLabel("Người chạy", { exact: true }).check();
+    await expect(page.locator(".runner-marker")).toHaveCount(2);
+    await capture("map-selected-overlap");
+    await page.evaluate(() => window.scrollTo(0, 300));
+    await page.getByRole("link", { name: "Tổng quan", exact: true }).click();
+    await page.waitForTimeout(300);
+    const overviewHeading = await page.locator("h1").boundingBox();
+    const overviewHeader = await page.locator("header").boundingBox();
+    checks.push({
+      path: "/",
+      state: "long-page navigation from scrolled map",
+      result:
+        overviewHeading.y >= overviewHeader.y + overviewHeader.height
+          ? "PASS"
+          : "FAIL",
+      overviewHeading,
+      overviewHeader,
+    });
+    await capture("overview-navigation-heading");
+    await page
+      .getByRole("link", { name: "Bản đồ trực tiếp", exact: true })
+      .click();
+    // Reproduce navigation while scrolled; heading must not remain behind sticky header.
+    await page.evaluate(() => window.scrollTo(0, 300));
+    await page.getByRole("link", { name: "Sinh viên", exact: true }).click();
+    const heading = await page.locator("h1").boundingBox(),
+      header = await page.locator("header").boundingBox();
+    checks.push({
+      path: "/runners",
+      state: "navigation from scrolled map",
+      result: heading.y >= header.y + header.height ? "PASS" : "FAIL",
+      heading,
+      header,
+    });
+    await capture("navigation-heading");
+    await page
+      .getByRole("button", {
+        name: `Xem chi tiết ${seed.runners[0].full_name}`,
+      })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText("00:02:10");
+    detailError = true;
+    await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+      "Đang giữ dữ liệu",
+      { timeout: 10000 },
+    );
+    await expect(page.getByRole("dialog")).toContainText("00:02:10");
+    await capture("drawer-background-error");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    detailError = false;
+    await open(
+      `/runners/${seed.runners[0].student_id}/runs/${seed.runners[0].run_id}`,
+    );
+    await expect(page.locator("main")).toContainText("00:02:10");
+    await capture("session-direct");
+    await open("/checkpoints?event=qa-event");
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("radio").first()).not.toBeChecked();
+    await expect(
+      dialog.getByRole("button", { name: "Xác nhận người chạy", exact: true }),
+    ).toBeDisabled();
+    await dialog.getByRole("radio").first().check();
+    await dialog.getByLabel("Lý do xử lý").fill("Kiểm tra fixture cô lập");
+    await dialog
+      .getByRole("button", { name: "Xác nhận người chạy", exact: true })
+      .click();
+    await expect(dialog).toContainText("Sự kiện đã thay đổi");
+    await expect(dialog.getByRole("radio").first()).not.toBeChecked();
+    await dialog.getByRole("radio").nth(1).check();
+    await dialog
+      .getByRole("button", { name: "Xác nhận người chạy", exact: true })
+      .click();
+    await expect(dialog).toContainText("Backend đã ghi nhận thao tác.");
+    expect(writes[0].body.expected_version).toBe(1);
+    expect(writes[1].body.expected_version).toBe(2);
+    expect(writes[1].body.passage_id).toBe("passage-1");
+    expect(writes[1].body.idempotency_key).not.toBe(
+      writes[0].body.idempotency_key,
+    );
+    await capture("resolve-conflict-recovered");
+    await page.keyboard.press("Escape");
+    await page
+      .getByRole("button", { name: "Trạm và thiết bị", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Đăng ký thiết bị", exact: true })
+      .first()
+      .click();
+    await page.getByLabel("Device ID", { exact: true }).fill("qa-device");
+    await page
       .getByRole("dialog")
-      .getByRole("button", { name: "Xác nhận người chạy", exact: true }),
-  ).toHaveCount(0);
-  event.candidates_final = true;
-  await page.getByRole("button", { name: "Đọc lại trạng thái" }).click();
-  await page.getByLabel("Lý do xử lý").fill("Loại bỏ trong fixture");
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Loại bỏ sự kiện" })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "Backend đã ghi nhận thao tác.",
-  );
-  expect(writes.at(-1).body.action).toBe("DISMISS");
-  expect(writes.at(-1).body.passage_id).toBeNull();
-  await page.keyboard.press("Escape");
-  paginateEvents = true;
-  await open(`/checkpoints/${cp.checkpoint_id}?tab=journal`);
-  await expect(page.getByRole("combobox", { name: "Checkpoint", exact: true })).toHaveValue(
-    cp.checkpoint_id,
-  );
-  await page.getByRole("button", { name: "Trang sau", exact: true }).click();
-  await expect(
-    page.getByText("Chưa có sự kiện phù hợp", { exact: true }),
-  ).toBeVisible();
-  expect(eventQueries.at(-1).cursor).toBe("qa-next");
-  expect(eventQueries.at(-1).checkpoint_id).toBe(cp.checkpoint_id);
-  await page.getByRole("button", { name: "Trang trước", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Chi tiết sự kiện", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Xóa bộ lọc", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Checkpoint", exact: true })).toHaveValue("");
-  for (const [name, path] of [
-    ["Giải chạy", "/races"],
-    ["Sinh viên", "/runners"],
-    ["Mô phỏng", "/simulation"],
-    ["Tổng quan", "/"],
-    ["Bản đồ trực tiếp", "/live"],
-    ["Trạm kiểm soát", "/checkpoints"],
-    ["Thiết lập giải", `/races/${raceId}`],
-  ]) {
-    const link = page.getByRole("link", { name, exact: true });
-    await link.click();
-    await expect(link).toHaveAttribute("aria-current", "page");
-    expect(new URL(page.url()).pathname).toBe(path);
+      .getByRole("button", { name: "Đăng ký thiết bị", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "không phải bằng chứng thiết bị online",
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth + 1,
+      ),
+    ).toBe(true);
+    await capture("device-dialog-390");
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await capture("device-dialog");
+    await page.keyboard.press("Escape");
+    event.match_status = "AMBIGUOUS";
+    event.candidates_final = false;
+    await open("/checkpoints?event=qa-event");
+    await expect(
+      page.getByRole("dialog").getByRole("radio").first(),
+    ).toBeDisabled();
+    await expect(
+      page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Xác nhận người chạy", exact: true }),
+    ).toHaveCount(0);
+    event.candidates_final = true;
+    await page.getByRole("button", { name: "Đọc lại trạng thái" }).click();
+    await page.getByLabel("Lý do xử lý").fill("Loại bỏ trong fixture");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Loại bỏ sự kiện" })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "Backend đã ghi nhận thao tác.",
+    );
+    expect(writes.at(-1).body.action).toBe("DISMISS");
+    expect(writes.at(-1).body.passage_id).toBeNull();
+    await page.keyboard.press("Escape");
+    paginateEvents = true;
+    await open(`/checkpoints/${cp.checkpoint_id}?tab=journal`);
+    await expect(
+      page.getByRole("combobox", { name: "Checkpoint", exact: true }),
+    ).toHaveValue(cp.checkpoint_id);
+    await page.getByRole("button", { name: "Trang sau", exact: true }).click();
+    await expect(
+      page.getByText("Chưa có sự kiện phù hợp", { exact: true }),
+    ).toBeVisible();
+    expect(eventQueries.at(-1).cursor).toBe("qa-next");
+    expect(eventQueries.at(-1).checkpoint_id).toBe(cp.checkpoint_id);
+    await page
+      .getByRole("button", { name: "Trang trước", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Chi tiết sự kiện", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Xóa bộ lọc", exact: true }).click();
+    await expect(
+      page.getByRole("combobox", { name: "Checkpoint", exact: true }),
+    ).toHaveValue("");
+    for (const [name, path] of [
+      ["Giải chạy", "/races"],
+      ["Sinh viên", "/runners"],
+      ["Mô phỏng", "/simulation"],
+      ["Tổng quan", "/"],
+      ["Bản đồ trực tiếp", "/live"],
+      ["Trạm kiểm soát", "/checkpoints"],
+      ["Thiết lập giải", `/races/${raceId}`],
+    ]) {
+      const link = page.getByRole("link", { name, exact: true });
+      await link.click();
+      await expect(link).toHaveAttribute("aria-current", "page");
+      expect(new URL(page.url()).pathname).toBe(path);
+    }
+    await page.goBack();
+    await expect(
+      page.getByRole("link", { name: "Trạm kiểm soát", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    await page.goForward();
+    await expect(
+      page.getByRole("link", { name: "Thiết lập giải", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    checks.push({
+      state:
+        "checkpoint direct URL/filter cursor next previous/empty; sidebar routes scope active/back-forward; device dialog 390",
+      result: "PASS",
+    });
+    await page.locator(".account-menu > summary").click();
+    await page.getByRole("button", { name: "Đăng xuất", exact: true }).click();
+    await expect(page.getByLabel("Admin key", { exact: true })).toHaveValue("");
+    authReject = true;
+    await page.getByLabel("Admin key", { exact: true }).fill("fixture-invalid");
+    await page.getByRole("button", { name: "Kết nối", exact: true }).click();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.locator("aside.sidebar")).toHaveCount(0);
+    await capture("auth-invalid");
+    authReject = false;
+    await page.getByRole("button", { name: "Kết nối", exact: true }).click();
+    await expect(page.locator("aside.sidebar")).toBeVisible();
+    await page.reload();
+    await expect(page.getByLabel("Admin key", { exact: true })).toBeVisible();
+    checks.push({
+      state:
+        "marker cluster/z-index/checkpoint selection/follow-pan/layers; pending and dismiss; auth invalid/logout/refresh",
+      result: "PASS",
+    });
+    checks.push({
+      state:
+        "GPS aging/overlap selection/locked editor/session frozen/background error/resolve 409 version reason/device registration",
+      result: "PASS",
+    });
+    expect(unexpected).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(checks.filter((check) => check.result !== "PASS")).toEqual([]);
   }
-  await page.goBack();
-  await expect(
-    page.getByRole("link", { name: "Trạm kiểm soát", exact: true }),
-  ).toHaveAttribute("aria-current", "page");
-  await page.goForward();
-  await expect(
-    page.getByRole("link", { name: "Thiết lập giải", exact: true }),
-  ).toHaveAttribute("aria-current", "page");
-  checks.push({
-    state:
-      "checkpoint direct URL/filter cursor next previous/empty; sidebar routes scope active/back-forward; device dialog 390",
-    result: "PASS",
-  });
-  await page.locator(".account-menu > summary").click();
-  await page.getByRole("button", { name: "Đăng xuất", exact: true }).click();
-  await expect(page.getByLabel("Admin key", { exact: true })).toHaveValue("");
-  authReject = true;
-  await page.getByLabel("Admin key", { exact: true }).fill("fixture-invalid");
-  await page.getByRole("button", { name: "Kết nối", exact: true }).click();
-  await expect(page.getByRole("alert")).toBeVisible();
-  await expect(page.locator("aside.sidebar")).toHaveCount(0);
-  await capture("auth-invalid");
-  authReject = false;
-  await page.getByRole("button", { name: "Kết nối", exact: true }).click();
-  await expect(page.locator("aside.sidebar")).toBeVisible();
-  await page.reload();
-  await expect(page.getByLabel("Admin key", { exact: true })).toBeVisible();
-  checks.push({
-    state:
-      "marker cluster/z-index/checkpoint selection/follow-pan/layers; pending and dismiss; auth invalid/logout/refresh",
-    result: "PASS",
-  });
-  checks.push({
-    state:
-      "GPS aging/overlap selection/locked editor/session frozen/background error/resolve 409 version reason/device registration",
-    result: "PASS",
-  });
-  expect(unexpected).toEqual([]);
-  expect(errors).toEqual([]);
-  expect(checks.filter((check) => check.result !== "PASS")).toEqual([]);
 } finally {
   await writeFile(
     `${dir}/${process.env.QA_INTERACTIONS_ONLY ? "interactions" : "results"}.json`,
