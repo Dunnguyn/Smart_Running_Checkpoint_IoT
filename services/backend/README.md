@@ -44,7 +44,7 @@
    # Nếu terminal đang ở repo root; nếu mở thẳng services/backend thì bỏ dòng cd.
    cd services\backend
    .\.venv\Scripts\Activate.ps1
-   uvicorn app.main:app --reload
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
 4. Mở `http://127.0.0.1:8000/docs` để xem và gọi API, hoặc `http://127.0.0.1:8000/health` để xem trạng thái.
@@ -102,7 +102,7 @@ Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị t
 Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Serial rồi gọi `POST /api/v1/checkpoint-events` với `X-Gateway-Key`, `device_event_id` ổn định và `student_id=null`. Admin đăng ký mapping thiết bị qua `POST /api/v1/checkpoints/{checkpoint_id}/devices`. Chỉ trong chế độ kết hợp, backend ghép event và passage; trường hợp mơ hồ cần `POST /api/v1/checkpoint-events/{event_id}/resolve`. Các API tra cứu là `GET /api/v1/checkpoint-events/{event_id}` và `GET /api/v1/races/{race_id}/checkpoint-events`.
 ## API app sinh viên
 
-Luồng app sinh viên tách khỏi Admin key và dùng access/refresh token riêng. Admin tạo tài khoản cho hồ sơ sinh viên đã có; sinh viên xem các giải đã được đăng ký, check-in GPS, bắt đầu chạy, gửi batch GPS và xem lịch sử/thống kê cá nhân. MVP theo đặc tả app v1.1 chưa hỗ trợ tự đăng ký giải hoặc pause/resume. Hướng dẫn endpoint, ví dụ request, cấu hình Android/iOS và giới hạn đã biết: [docs/STUDENT_MOBILE_API.md](../../docs/STUDENT_MOBILE_API.md).
+Luồng app sinh viên tách khỏi Admin key và dùng access/refresh token riêng. Admin tạo hồ sơ gồm mã sinh viên, họ tên, khoa/viện và cấp tài khoản app; sinh viên khám phá giải đã công bố, tự đăng ký khi được mở, nhận bib backend cấp, check-in GPS, bắt đầu chạy, gửi batch GPS, pause/resume, xem lịch sử và dashboard cá nhân. Tự đăng ký và pause/resume là phần mở rộng theo yêu cầu bổ sung so với tài liệu app v1.1. Hướng dẫn endpoint, ví dụ request, cấu hình Android/iOS và giới hạn đã biết: [docs/STUDENT_MOBILE_API.md](../../docs/STUDENT_MOBILE_API.md).
 
 ## Tài liệu nhóm
 

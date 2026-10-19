@@ -145,6 +145,7 @@ class RaceParticipant(Base):
     student_id: Mapped[str] = mapped_column(ForeignKey("students.id"), index=True)
     bib_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
     registration_status: Mapped[str] = mapped_column(String(20), default="REGISTERED")
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=True)
     race: Mapped[Race] = relationship(back_populates="participants")
 
 
@@ -747,6 +748,10 @@ def record_lap(db: Session, run: RunSession, checkpoint: Checkpoint, crossed_at:
         return False, None
     race = db.get(Race, run.race_id)
     occurred = aware(crossed_at)
+    if run.source == "MOBILE_GPS":
+        from .student_api import run_is_paused_at
+        if run_is_paused_at(db, run.id, occurred):
+            return False, None
     anchor = aware(run.last_lap_at or run.started_at)
     duration = int((occurred - anchor).total_seconds())
     minimum_lap_seconds = race.min_lap_interval_seconds if race else settings.min_lap_interval_seconds
@@ -845,10 +850,16 @@ def finish_match(db: Session, event: DeviceEvent, candidate: dict[str, Any], pas
     event.candidates_final = True
     passage.consumed_by_event_id = event.id
     event.lap_status = "NOT_COUNTED"
+    mobile_paused = False
+    if run.source == "MOBILE_GPS":
+        from .student_api import run_is_paused_at
+        mobile_paused = run_is_paused_at(db, run.id, aware(event.occurred_at))
     if run.status != "ACTIVE":
         event.reason_code = "RUN_NOT_ACTIVE"
     elif checkpoint.kind != "LAP":
         event.reason_code = "CHECKPOINT_NOT_LAP"
+    elif mobile_paused:
+        event.reason_code = "RUN_PAUSED"
     else:
         lap_source_id = f"device-event:{event.id}"
         counted, duration = record_lap(db, run, checkpoint, aware(event.occurred_at), "ARDUINO_GATEWAY", lap_source_id)
@@ -1054,6 +1065,8 @@ def stop_demo_simulation(simulation_id: str):
 def delete_race(race_id: str, db: Session = Depends(db_session)):
     """Delete one race and its race-owned records while preserving student profiles."""
     race = get_or_404(db, Race, race_id, "giải chạy")
+    from .student_api import (MobileGpsBatchReceipt, StudentAttendance,
+        StudentAttendanceConfig, StudentMutationReceipt, StudentRacePolicy, StudentRunPause)
     for simulation_id, job in list(_simulation_jobs.items()):
         process = job.get("process")
         if not process or process.poll() is not None:
@@ -1083,6 +1096,8 @@ def delete_race(race_id: str, db: Session = Depends(db_session)):
     if event_ids:
         db.query(MatchAudit).filter(MatchAudit.event_id.in_(event_ids)).delete(synchronize_session=False)
     if run_ids:
+        db.query(StudentRunPause).filter(StudentRunPause.run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(MobileGpsBatchReceipt).filter(MobileGpsBatchReceipt.run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(IdempotencyRecord).filter(IdempotencyRecord.resource_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(GPSPassage).filter(GPSPassage.run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(GeofenceState).filter(GeofenceState.run_id.in_(run_ids)).delete(synchronize_session=False)
@@ -1095,6 +1110,12 @@ def delete_race(race_id: str, db: Session = Depends(db_session)):
         db.query(LapEvent).filter(LapEvent.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
         db.query(Device).filter(Device.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
     db.query(RaceRoutePoint).filter(RaceRoutePoint.race_id == race_id).delete(synchronize_session=False)
+    participant_ids = db.scalars(select(RaceParticipant.id).where(RaceParticipant.race_id == race_id)).all()
+    if participant_ids:
+        db.query(StudentAttendance).filter(StudentAttendance.registration_id.in_(participant_ids)).delete(synchronize_session=False)
+    db.query(StudentAttendanceConfig).filter(StudentAttendanceConfig.race_id == race_id).delete(synchronize_session=False)
+    db.query(StudentRacePolicy).filter(StudentRacePolicy.race_id == race_id).delete(synchronize_session=False)
+    db.query(StudentMutationReceipt).filter(StudentMutationReceipt.method_path.like(f"%{race_id}%")).delete(synchronize_session=False)
     db.query(RaceParticipant).filter(RaceParticipant.race_id == race_id).delete(synchronize_session=False)
     db.query(RunSession).filter(RunSession.race_id == race_id).delete(synchronize_session=False)
     db.query(Checkpoint).filter(Checkpoint.race_id == race_id).delete(synchronize_session=False)
@@ -1361,9 +1382,15 @@ def list_participants(race_id: str, db: Session = Depends(db_session)):
 
 @app.post("/api/v1/races/{race_id}/participants", status_code=201, dependencies=[Depends(admin)])
 def add_participant(race_id: str, data: ParticipantIn, db: Session = Depends(db_session)):
-    get_or_404(db, Race, race_id, "giải chạy"); get_or_404(db, Student, data.student_id, "sinh viên")
+    lock_race_configuration(db, race_id); get_or_404(db, Student, data.student_id, "sinh viên")
     existing = db.scalar(select(RaceParticipant).where(RaceParticipant.race_id == race_id, RaceParticipant.student_id == data.student_id))
     if existing: envelope_error("ALREADY_REGISTERED", "Sinh viên đã đăng ký giải chạy.")
+    from .student_api import StudentRacePolicy
+    policy = db.get(StudentRacePolicy, race_id)
+    registered_count = db.scalar(select(func.count(RaceParticipant.id)).where(
+        RaceParticipant.race_id == race_id, RaceParticipant.registration_status == "REGISTERED")) or 0
+    if policy and policy.capacity is not None and registered_count >= policy.capacity:
+        envelope_error("RACE_FULL", "Giải đã đủ số lượng sinh viên.")
     bib_number = (data.bib_number or "").strip()
     if not bib_number:
         current_bibs = db.scalars(select(RaceParticipant.bib_number).where(RaceParticipant.race_id == race_id)).all()
@@ -1371,9 +1398,12 @@ def add_participant(race_id: str, data: ParticipantIn, db: Session = Depends(db_
         bib_number = f"{max(used_numbers, default=0) + 1:02d}"
     if db.scalar(select(RaceParticipant.id).where(RaceParticipant.race_id == race_id, RaceParticipant.bib_number == bib_number)):
         envelope_error("BIB_NUMBER_EXISTS", "Số báo danh đã được dùng trong giải.")
-    participant = RaceParticipant(race_id=race_id, student_id=data.student_id, bib_number=bib_number)
+    participant = RaceParticipant(race_id=race_id, student_id=data.student_id,
+                                  bib_number=bib_number, registration_status="REGISTERED")
     db.add(participant); db.commit()
-    return {"race_id": race_id, "student_id": data.student_id, "registration_status": "REGISTERED", "display_id": participant.bib_number, "bib_number": participant.bib_number}
+    return {"race_id": race_id, "student_id": data.student_id, "registration_status": "REGISTERED",
+            "display_id": participant.bib_number, "bib_number": participant.bib_number,
+            "registered_at": participant.registered_at}
 
 
 def run_dict(db: Session, run: RunSession) -> dict[str, Any]:
@@ -1384,7 +1414,14 @@ def run_dict(db: Session, run: RunSession) -> dict[str, Any]:
     latest_telemetry = db.scalar(select(GpsPoint).where(GpsPoint.run_id == run.id).order_by(GpsPoint.recorded_at.desc()).limit(1))
     telemetry_source = latest_telemetry.source if latest_telemetry else None
     elapsed = run.duration_total_s if run.duration_total_s is not None else max(0, int((now_utc() - aware(run.started_at)).total_seconds()))
-    return {"run_id": run.id, "race_id": run.race_id, "student_id": run.student_id, "display_id": participant.bib_number if participant else None, "bib_number": participant.bib_number if participant else None, "wearable_device_id": run.wearable_device_id, "wearable_status": wearable.status if wearable else "NOT_REGISTERED", "wearable_last_seen_at": wearable.last_seen_at if wearable else None, "student_code": student.student_code if student else None, "full_name": student.full_name if student else None, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "total_laps": race.total_laps if race else None, "source": telemetry_source or run.source, "run_source": run.source, "telemetry_source": telemetry_source, "started_at": run.started_at, "ended_at": run.ended_at, "distance_total_m": round(run.distance_total_m, 2), "duration_total_s": elapsed, "lap_count": run.lap_count, "last_lap_duration_s": run.last_lap_duration_s, "total_steps": run.total_steps, "last_latitude": run.last_latitude, "last_longitude": run.last_longitude, "last_seen_at": run.last_seen_at}
+    mobile_state: dict[str, Any] = {}
+    if run.source == "MOBILE_GPS":
+        from .student_api import _run_snapshot
+        snapshot = _run_snapshot(db, run)
+        mobile_state = {key: snapshot[key] for key in (
+            "tracking_state", "active_seconds", "paused_seconds", "paused_at", "revision",
+            "segment_id", "tracking_required")}
+    return {"run_id": run.id, "race_id": run.race_id, "student_id": run.student_id, "display_id": participant.bib_number if participant else None, "bib_number": participant.bib_number if participant else None, "wearable_device_id": run.wearable_device_id, "wearable_status": wearable.status if wearable else "NOT_REGISTERED", "wearable_last_seen_at": wearable.last_seen_at if wearable else None, "student_code": student.student_code if student else None, "full_name": student.full_name if student else None, "faculty": student.faculty if student else None, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "total_laps": race.total_laps if race else None, "source": telemetry_source or run.source, "run_source": run.source, "telemetry_source": telemetry_source, "started_at": run.started_at, "ended_at": run.ended_at, "distance_total_m": round(run.distance_total_m, 2), "duration_total_s": elapsed, "lap_count": run.lap_count, "last_lap_duration_s": run.last_lap_duration_s, "total_steps": run.total_steps, "last_latitude": run.last_latitude, "last_longitude": run.last_longitude, "last_seen_at": run.last_seen_at, **mobile_state}
 
 
 # [DEVICE LINK: GPS + STEPS] A run is bound to the wearable already paired to this student.
@@ -1722,6 +1759,10 @@ async def create_lap(data: LapIn, db: Session = Depends(db_session)):
     if race.checkpoint_mode == "GPS_AND_ARDUINO":
         envelope_error("PHYSICAL_CONFIRMATION_REQUIRED", "Ở chế độ GPS_AND_ARDUINO chỉ sự kiện Arduino đã ghép mới được tính vòng.")
     occurred = aware(data.occurred_at)
+    if run.source == "MOBILE_GPS":
+        from .student_api import run_is_paused_at
+        if run_is_paused_at(db, run.id, occurred):
+            envelope_error("RUN_PAUSED", "Không thể xác nhận vòng trong khoảng tạm dừng.")
     counted, duration = record_lap(db, run, checkpoint, occurred, data.source, data.source_event_id)
     if not counted:
         envelope_error("LAP_TOO_SOON" if duration is not None and duration >= 0 else "NON_MONOTONIC_CROSSING_TIME", "Thời điểm vòng không hợp lệ hoặc chưa đủ thời gian tối thiểu.", 422)
@@ -1738,7 +1779,11 @@ async def finish_run(run_id: str, data: FinishIn, db: Session = Depends(db_sessi
     run = get_or_404(db, RunSession, run_id, "phiên chạy")
     if run.status == "COMPLETED": return {"run_id": run.id, "status": run.status, "display_status": "DONE", "is_done": True, "started_at": run.started_at, "ended_at": run.ended_at, "duration_total_s": run.duration_total_s, "distance_total_m": run.distance_total_m, "lap_count": run.lap_count, "total_steps": run.total_steps}
     if run.status != "ACTIVE": envelope_error("RUN_NOT_ACTIVE", "Chỉ phiên ACTIVE mới kết thúc được.")
-    run.ended_at = now_utc(); run.finalized_at = run.ended_at; run.revision += 1
+    run.ended_at = now_utc()
+    if run.source == "MOBILE_GPS":
+        from .student_api import close_open_pause
+        close_open_pause(db, run.id, run.ended_at)
+    run.finalized_at = run.ended_at; run.revision += 1
     run.duration_total_s = max(0, int((run.ended_at - aware(run.started_at)).total_seconds())); run.status = "COMPLETED"
     maybe_complete_race(db, db.get(Race, run.race_id), run.ended_at)
     db.commit()
@@ -1911,6 +1956,7 @@ Base.metadata.create_all(bind=engine)
 def migrate_demo_schema() -> None:
     """Keep existing demo DBs usable; production deployments should use Alembic revisions."""
     additions = {
+        "race_participants": {"registered_at": "DATETIME NULL"},
         "run_sessions": {"wearable_device_id": "VARCHAR(80) NULL",
             "revision": "INTEGER NOT NULL DEFAULT 1", "last_sequence": "INTEGER NOT NULL DEFAULT 0",
             "segment_id": "INTEGER NOT NULL DEFAULT 1", "consent_version": "VARCHAR(40) NULL",

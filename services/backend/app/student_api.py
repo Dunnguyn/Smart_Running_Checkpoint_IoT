@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, 
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func, or_, select, update
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from . import main as core
@@ -78,6 +78,32 @@ class StudentAttendanceConfig(Base):
     max_accuracy_m: Mapped[float] = mapped_column(Float, default=30)
     version: Mapped[int] = mapped_column(Integer, default=1)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StudentRacePolicy(Base):
+    """Opt-in publication and self-registration settings; old races stay hidden/closed."""
+    __tablename__ = "student_race_policies"
+    race_id: Mapped[str] = mapped_column(ForeignKey("races.id"), primary_key=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published: Mapped[bool] = mapped_column(Boolean, default=False)
+    registration_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    registration_opens_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    registration_closes_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class StudentRunPause(Base):
+    """Durable pause interval. The RunSession remains ACTIVE to block checkout/new runs."""
+    __tablename__ = "student_run_pauses"
+    __table_args__ = (UniqueConstraint("run_id", "paused_at", name="uq_student_run_pause_start"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=core.new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("run_sessions.id"), index=True)
+    paused_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    steps_at_pause: Mapped[int] = mapped_column(Integer, default=0)
+    steps_offset_after: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=core.now_utc)
 
 
 class StudentAttendance(Base):
@@ -201,6 +227,29 @@ class GpsSampleIn(StrictInput):
 class GpsBatchIn(StrictInput):
     batch_id: str
     samples: list[GpsSampleIn] = Field(min_length=1, max_length=100)
+
+
+class RunControlIn(StrictInput):
+    expected_revision: int = Field(ge=1)
+
+
+class ResumeRunIn(RunControlIn):
+    # Current app step snapshot resets the cumulative counter baseline, excluding pause steps.
+    steps_since_start: int = Field(ge=0)
+
+
+class StudentRacePolicyIn(StrictInput):
+    expected_version: int = Field(ge=0)
+    description: str | None = Field(default=None, max_length=2000)
+    published: bool
+    registration_enabled: bool
+    registration_opens_at: datetime | None = None
+    registration_closes_at: datetime | None = None
+    capacity: int | None = Field(default=None, ge=1, le=100000)
+
+
+class EmptyStudentRequest(StrictInput):
+    pass
 
 
 class AttendanceConfigIn(StrictInput):
@@ -372,6 +421,71 @@ def _latest_run(db: Session, race_id: str, student_id: str) -> core.RunSession |
     ).order_by(core.RunSession.started_at.desc()).limit(1))
 
 
+def _open_pause(db: Session, run_id: str) -> StudentRunPause | None:
+    return db.scalar(select(StudentRunPause).where(
+        StudentRunPause.run_id == run_id, StudentRunPause.resumed_at.is_(None)
+    ).order_by(StudentRunPause.paused_at.desc()).limit(1))
+
+
+def _pause_totals(db: Session, run: core.RunSession, now: datetime) -> tuple[int, StudentRunPause | None]:
+    intervals = db.scalars(select(StudentRunPause).where(
+        StudentRunPause.run_id == run.id).order_by(StudentRunPause.paused_at)).all()
+    limit_at = _utc(run.ended_at) if run.ended_at else now
+    total = 0
+    for interval in intervals:
+        start = _utc(interval.paused_at)
+        end = min(_utc(interval.resumed_at) if interval.resumed_at else now, limit_at)
+        if end > start:
+            total += int((end - start).total_seconds())
+    return total, _open_pause(db, run.id)
+
+
+def _race_policy(db: Session, race_id: str) -> StudentRacePolicy | None:
+    return db.get(StudentRacePolicy, race_id)
+
+
+def _registration_gate(db: Session, race: core.Race, student_id: str) -> tuple[bool, str | None, int, int | None]:
+    policy = _race_policy(db, race.id)
+    registration = db.scalar(select(core.RaceParticipant).where(
+        core.RaceParticipant.race_id == race.id,
+        core.RaceParticipant.student_id == student_id))
+    registered_count = db.scalar(select(func.count(core.RaceParticipant.id)).where(
+        core.RaceParticipant.race_id == race.id,
+        core.RaceParticipant.registration_status == "REGISTERED")) or 0
+    if registration:
+        return False, "ALREADY_REGISTERED", registered_count, policy.capacity if policy else None
+    if not policy or not policy.published:
+        return False, "RACE_NOT_PUBLISHED", registered_count, policy.capacity if policy else None
+    if race.status == "CANCELLED":
+        return False, "RACE_CANCELLED", registered_count, policy.capacity
+    if race.status != "SCHEDULED" or not policy.registration_enabled:
+        return False, "REGISTRATION_NOT_OPEN", registered_count, policy.capacity
+    now = core.now_utc()
+    if not policy.registration_opens_at or not policy.registration_closes_at:
+        return False, "REGISTRATION_NOT_OPEN", registered_count, policy.capacity
+    if now < _utc(policy.registration_opens_at):
+        return False, "REGISTRATION_NOT_OPEN", registered_count, policy.capacity
+    if now > _utc(policy.registration_closes_at):
+        return False, "REGISTRATION_CLOSED", registered_count, policy.capacity
+    if policy.capacity is not None and registered_count >= policy.capacity:
+        return False, "RACE_FULL", registered_count, policy.capacity
+    return True, None, registered_count, policy.capacity
+
+
+def run_is_paused_at(db: Session, run_id: str, at: datetime) -> bool:
+    moment = _utc(at)
+    intervals = db.scalars(select(StudentRunPause).where(
+        StudentRunPause.run_id == run_id).order_by(StudentRunPause.paused_at)).all()
+    return any(_utc(item.paused_at) <= moment and
+               (item.resumed_at is None or moment < _utc(item.resumed_at)) for item in intervals)
+
+
+def close_open_pause(db: Session, run_id: str, at: datetime) -> None:
+    interval = _open_pause(db, run_id)
+    if interval and _utc(at) > _utc(interval.paused_at):
+        interval.resumed_at = _utc(at)
+
+
 def _run_snapshot(db: Session, run: core.RunSession, installation_id: str | None = None) -> dict[str, Any]:
     race = db.get(core.Race, run.race_id)
     participant = db.scalar(select(core.RaceParticipant).where(
@@ -381,13 +495,18 @@ def _run_snapshot(db: Session, run: core.RunSession, installation_id: str | None
                        .order_by(core.GpsPoint.recorded_at.desc()).limit(1))
     now = core.now_utc()
     elapsed = run.duration_total_s if run.duration_total_s is not None else max(0, int((now - _utc(run.started_at)).total_seconds()))
+    paused_seconds, open_pause = _pause_totals(db, run, now)
+    tracking_state = "PAUSED" if open_pause and run.status == "ACTIVE" else "RUNNING" if run.status == "ACTIVE" else "TERMINAL"
     return {"run_id": run.id, "race_id": run.race_id,
             "registration_id": participant.id if participant else None,
             "bib_number": _bib(db, run.race_id, run.student_id), "status": run.status,
             "source": run.source, "started_at": run.started_at, "ended_at": run.ended_at,
-            "finalized_at": run.ended_at if run.status in {"COMPLETED", "ABANDONED", "CANCELLED"} else None,
-            "duration_total_s": elapsed, "active_seconds": elapsed,
-            "paused_seconds": 0, "distance_total_m": round(run.distance_total_m, 2),
+            "finalized_at": getattr(run, "finalized_at", None) if run.status in {"COMPLETED", "ABANDONED", "CANCELLED"} else None,
+            "duration_total_s": elapsed, "elapsed_seconds": elapsed,
+            "active_seconds": max(0, elapsed - paused_seconds),
+            "paused_seconds": paused_seconds, "tracking_state": tracking_state,
+            "paused_at": open_pause.paused_at if open_pause else None,
+            "segment_id": getattr(run, "segment_id", 1), "distance_total_m": round(run.distance_total_m, 2),
             "lap_count": run.lap_count, "target_laps": race.total_laps if race else 0,
             "last_lap_duration_s": run.last_lap_duration_s, "total_steps": run.total_steps,
             "last_position": ({"latitude": latest.latitude, "longitude": latest.longitude,
@@ -396,10 +515,13 @@ def _run_snapshot(db: Session, run: core.RunSession, installation_id: str | None
             "gps_freshness": ("FINAL" if run.status != "ACTIVE" else
                               "MISSING" if not latest else
                               "FRESH" if (now - _utc(latest.received_at)).total_seconds() <= 15 else "STALE"),
-            "tracking_required": run.status == "ACTIVE", "revision": getattr(run, "revision", 1),
+            "tracking_required": run.status == "ACTIVE" and open_pause is None, "revision": getattr(run, "revision", 1),
             "result_state": ("PENDING" if run.status == "ACTIVE" else
                              "VOID" if run.status == "CANCELLED" else "FINAL"),
             "last_processed_sequence": getattr(run, "last_sequence", 0),
+            "actions": {"can_pause": run.status == "ACTIVE" and open_pause is None,
+                        "can_resume": run.status == "ACTIVE" and open_pause is not None,
+                        "can_withdraw": run.status == "ACTIVE"},
             "bound_to_current_installation": (installation_id is None or run.wearable_device_id == f"MOBILE:{installation_id}"),
             "pending_matching_count": db.scalar(select(func.count(core.DeviceEvent.id)).where(
                 core.DeviceEvent.matched_run_id == run.id,
@@ -421,6 +543,7 @@ def _participation(db: Session, race: core.Race, participant: core.RaceParticipa
     now = core.now_utc()
     active = run is not None and run.status == "ACTIVE"
     checked_in = attendance is not None and attendance.status == "CHECKED_IN"
+    run_view = _run_snapshot(db, run, installation_id) if run else None
     return {"race_id": race.id, "registration_id": participant.id,
             "registration_status": participant.registration_status,
             "bib_number": participant.bib_number,
@@ -430,7 +553,7 @@ def _participation(db: Session, race: core.Race, participant: core.RaceParticipa
                            if attendance else {"attendance_id": None, "status": "NOT_CHECKED_IN",
                                               "checked_in_at": None, "checked_out_at": None,
                                               "outcome": None, "version": 0}),
-            "run": _run_snapshot(db, run, installation_id) if run else None,
+            "run": run_view,
             "actions": [
                 {"action": "CHECK_IN", "allowed": bool(config and attendance is None and
                     config.check_in_open_at <= now <= config.check_in_close_at),
@@ -440,6 +563,10 @@ def _participation(db: Session, race: core.Race, participant: core.RaceParticipa
                  "reason_code": None if checked_in and not active and race.status == "LIVE" else "CHECK_IN_REQUIRED"},
                 {"action": "WITHDRAW", "allowed": active,
                  "reason_code": None if active else "RUN_NOT_ACTIVE"},
+                {"action": "PAUSE", "allowed": bool(run_view and run_view["actions"]["can_pause"]),
+                 "reason_code": None if run_view and run_view["actions"]["can_pause"] else "RUN_NOT_ACTIVE"},
+                {"action": "RESUME", "allowed": bool(run_view and run_view["actions"]["can_resume"]),
+                 "reason_code": None if run_view and run_view["actions"]["can_resume"] else "RUN_NOT_PAUSED"},
                 {"action": "CHECK_OUT", "allowed": bool(config and checked_in and not active and
                     config.check_out_open_at <= now <= config.check_out_close_at),
                  "reason_code": None if config and checked_in and not active and
@@ -523,24 +650,40 @@ def _assert_window(now: datetime, opens: datetime, closes: datetime, *, opening:
 def _race_view(db: Session, race: core.Race, student_id: str, installation_id: str) -> dict[str, Any]:
     participant = db.scalar(select(core.RaceParticipant).where(
         core.RaceParticipant.race_id == race.id, core.RaceParticipant.student_id == student_id))
-    if not participant:
+    policy = _race_policy(db, race.id)
+    if not participant and (not policy or not policy.published or race.status == "DRAFT"):
         _fail(404, "RESOURCE_NOT_FOUND", "Không tìm thấy giải chạy.")
-    part = _participation(db, race, participant, student_id, installation_id)
+    part = _participation(db, race, participant, student_id, installation_id) if participant else None
     config = db.get(StudentAttendanceConfig, race.id)
     route = core.race_route_dict(db, race.id)
     now = core.now_utc()
-    return {"race_id": race.id, "name": race.name, "description": None,
+    can_register, blocked_reason, registered_count, capacity = _registration_gate(db, race, student_id)
+    return {"race_id": race.id, "name": race.name,
+            "description": policy.description if policy else None,
             "location": race.route_name, "status": race.status,
             "start_at": race.start_at, "end_at": race.end_at,
             "matching_mode": race.checkpoint_mode, "target_laps": race.total_laps,
             "route_length_m": route.get("distance_m"),
-            "registration_status": participant.registration_status,
-            "bib_number": participant.bib_number,
-            "attendance_status": part["attendance"]["status"],
-            "run_status": part["run"]["status"] if part["run"] else None,
+            "registration_opens_at": policy.registration_opens_at if policy else None,
+            "registration_closes_at": policy.registration_closes_at if policy else None,
+            "capacity": capacity, "registered_count": registered_count,
+            "remaining_slots": max(0, capacity - registered_count) if capacity is not None else None,
+            "registration_status": participant.registration_status if participant else None,
+            "bib_number": participant.bib_number if participant else None,
+            "attendance_status": part["attendance"]["status"] if part else None,
+            "run_status": part["run"]["status"] if part and part["run"] else None,
             "participation": part,
             "attendance_configured": config is not None,
-            "actions": part["actions"], "server_time": now}
+            "can_register": can_register,
+            "blocked_reason": blocked_reason,
+            "actions": {"can_register": can_register,
+                        "can_check_in": bool(part and any(a["action"] == "CHECK_IN" and a["allowed"] for a in part["actions"])),
+                        "can_start": bool(part and any(a["action"] == "START" and a["allowed"] for a in part["actions"])),
+                        "can_pause": bool(part and part["run"] and part["run"]["actions"]["can_pause"]),
+                        "can_resume": bool(part and part["run"] and part["run"]["actions"]["can_resume"]),
+                        "can_withdraw": bool(part and any(a["action"] == "WITHDRAW" and a["allowed"] for a in part["actions"])),
+                        "can_check_out": bool(part and any(a["action"] == "CHECK_OUT" and a["allowed"] for a in part["actions"]))},
+            "server_time": now}
 
 
 def _race_for_registered(db: Session, race_id: str, student_id: str) -> tuple[core.Race, core.RaceParticipant]:
@@ -657,14 +800,151 @@ def student_me(authorization: str | None = Header(default=None),
             "server_time": core.now_utc()}
 
 
+@router.get("/api/v1/admin/races/{race_id}/student-policy")
+def admin_get_student_race_policy(race_id: str, x_admin_key: str | None = Header(default=None),
+                                  db: Session = Depends(core.db_session)):
+    _require_admin(x_admin_key)
+    race = db.get(core.Race, race_id)
+    if not race:
+        _fail(404, "RESOURCE_NOT_FOUND", "Không tìm thấy giải chạy.")
+    policy = _race_policy(db, race_id)
+    registered_count = db.scalar(select(func.count(core.RaceParticipant.id)).where(
+        core.RaceParticipant.race_id == race_id,
+        core.RaceParticipant.registration_status == "REGISTERED")) or 0
+    return {"race_id": race_id, "description": policy.description if policy else None,
+            "published": bool(policy and policy.published),
+            "registration_enabled": bool(policy and policy.registration_enabled),
+            "registration_opens_at": policy.registration_opens_at if policy else None,
+            "registration_closes_at": policy.registration_closes_at if policy else None,
+            "capacity": policy.capacity if policy else None,
+            "registered_count": registered_count,
+            "version": policy.version if policy else 0, "server_time": core.now_utc()}
+
+
+@router.put("/api/v1/admin/races/{race_id}/student-policy")
+async def admin_put_student_race_policy(race_id: str, data: StudentRacePolicyIn,
+                                        x_admin_key: str | None = Header(default=None),
+                                        db: Session = Depends(core.db_session)):
+    _require_admin(x_admin_key)
+    race = core.lock_race_configuration(db, race_id)
+    policy = _race_policy(db, race_id)
+    current_version = policy.version if policy else 0
+    if data.expected_version != current_version:
+        _fail(409, "VERSION_CONFLICT", "Cấu hình đăng ký đã thay đổi; hãy tải lại.")
+    if data.registration_enabled:
+        if not data.published:
+            _fail(422, "REGISTRATION_REQUIRES_PUBLISHED_RACE", "Giải cần được công bố trước khi mở đăng ký.")
+        if not data.registration_opens_at or not data.registration_closes_at:
+            _fail(422, "REGISTRATION_WINDOW_REQUIRED", "Cần đặt thời điểm mở và đóng đăng ký.")
+        if _utc(data.registration_opens_at) >= _utc(data.registration_closes_at):
+            _fail(422, "INVALID_REGISTRATION_WINDOW", "Thời điểm mở phải trước thời điểm đóng đăng ký.")
+    registered_count = db.scalar(select(func.count(core.RaceParticipant.id)).where(
+        core.RaceParticipant.race_id == race_id,
+        core.RaceParticipant.registration_status == "REGISTERED")) or 0
+    if data.capacity is not None and data.capacity < registered_count:
+        _fail(409, "CAPACITY_BELOW_REGISTERED", "Sức chứa không thể nhỏ hơn số sinh viên đã đăng ký.")
+    values = data.model_dump(exclude={"expected_version"})
+    if policy:
+        for name, value in values.items():
+            setattr(policy, name, value)
+        policy.version += 1
+    else:
+        policy = StudentRacePolicy(race_id=race_id, version=1, **values)
+        db.add(policy)
+    db.commit()
+    result = {"race_id": race_id, "description": policy.description,
+              "published": policy.published, "registration_enabled": policy.registration_enabled,
+              "registration_opens_at": policy.registration_opens_at,
+              "registration_closes_at": policy.registration_closes_at,
+              "capacity": policy.capacity, "registered_count": registered_count,
+              "version": policy.version, "server_time": core.now_utc()}
+    await core.hub.publish(race_id, {"event_id": core.new_id(), "type": "race.registration.config.updated",
+        "race_id": race_id, "occurred_at": result["server_time"], "data": result})
+    return result
+
+
+def _next_bib_number(db: Session, race_id: str) -> str:
+    current = db.scalars(select(core.RaceParticipant.bib_number).where(
+        core.RaceParticipant.race_id == race_id)).all()
+    numbers = [int(value) for value in current if value and value.isdigit()]
+    candidate = max(numbers, default=0) + 1
+    return f"{candidate:02d}"
+
+
+@router.post("/api/v1/student/races/{race_id}/registrations", status_code=201)
+async def student_register_for_race(race_id: str, data: EmptyStudentRequest,
+                                    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+                                    principal: StudentPrincipal = Depends(require_student),
+                                    db: Session = Depends(core.db_session)):
+    key = _idempotency_key(idempotency_key)
+    try:
+        uuid.UUID(key)
+    except ValueError:
+        _fail(422, "VALIDATION_ERROR", "Idempotency-Key phải là UUID.")
+    path = f"POST:/api/v1/student/races/{race_id}/registrations"
+    payload = data.model_dump(mode="json")
+    replay = _receipt_replay(db, principal, key, path, payload)
+    if replay:
+        return replay
+    race = core.lock_race_configuration(db, race_id)
+    existing = db.scalar(select(core.RaceParticipant).where(
+        core.RaceParticipant.race_id == race_id,
+        core.RaceParticipant.student_id == principal.student.id))
+    if existing:
+        result = {"registration_id": existing.id, "race_id": race_id,
+                  "registration_status": existing.registration_status,
+                  "bib_number": existing.bib_number,
+                  "registered_at": getattr(existing, "registered_at", None),
+                  "server_time": core.now_utc()}
+        response = _save_receipt(db, principal, key, path, payload, result, 200)
+        db.commit()
+        return response
+    allowed, reason, registered_count, capacity = _registration_gate(db, race, principal.student.id)
+    if not allowed:
+        messages = {"RACE_NOT_PUBLISHED": "Giải chưa được công bố cho sinh viên.",
+                    "REGISTRATION_NOT_OPEN": "Giải chưa mở đăng ký.",
+                    "REGISTRATION_CLOSED": "Đã hết hạn đăng ký.",
+                    "RACE_FULL": "Giải đã đủ số lượng sinh viên.",
+                    "RACE_CANCELLED": "Giải đã bị hủy."}
+        _fail(409, reason or "REGISTRATION_NOT_OPEN", messages.get(reason, "Không thể đăng ký giải này."))
+    # lock_race_configuration obtains a per-race write lock on SQLite and a row
+    # lock on SQL Server before capacity and bib allocation are checked.
+    if capacity is not None and registered_count >= capacity:
+        _fail(409, "RACE_FULL", "Giải đã đủ số lượng sinh viên.")
+    now = core.now_utc()
+    bib_number = _next_bib_number(db, race_id)
+    participant = core.RaceParticipant(race_id=race_id, student_id=principal.student.id,
+        bib_number=bib_number, registration_status="REGISTERED")
+    db.add(participant)
+    db.flush()
+    result = {"registration_id": participant.id, "race_id": race_id,
+              "registration_status": participant.registration_status,
+              "bib_number": participant.bib_number, "registered_at": now,
+              "server_time": now}
+    response = _save_receipt(db, principal, key, path, payload, result, 201)
+    db.commit()
+    await core.hub.publish(race_id, {"event_id": core.new_id(), "type": "race.participant.registered",
+        "race_id": race_id, "occurred_at": now, "data": result})
+    await publish_student_event(principal.student.id, "registration.created", "REGISTRATION",
+        participant.id, 1, result)
+    return response
+
+
 @router.get("/api/v1/student/races")
 def student_races(status: str | None = None, keyword: str | None = Query(default=None, max_length=100),
+                  registered_only: bool = False,
                   limit: int = Query(default=20, ge=1, le=100), cursor: str | None = None,
                   principal: StudentPrincipal = Depends(require_student), db: Session = Depends(core.db_session)):
-    stmt = select(core.Race).join(core.RaceParticipant,
-        core.RaceParticipant.race_id == core.Race.id).where(
-        core.RaceParticipant.student_id == principal.student.id,
-        core.Race.status != "DRAFT")
+    registered_races = select(core.RaceParticipant.race_id).where(
+        core.RaceParticipant.student_id == principal.student.id)
+    stmt = select(core.Race).join(StudentRacePolicy,
+        StudentRacePolicy.race_id == core.Race.id).where(
+        StudentRacePolicy.published.is_(True), core.Race.status != "DRAFT")
+    if registered_only:
+        stmt = stmt.where(core.Race.id.in_(registered_races))
+    else:
+        stmt = stmt.where(or_(core.Race.status.in_(["SCHEDULED", "LIVE"]),
+                              core.Race.id.in_(registered_races)))
     if status:
         stmt = stmt.where(core.Race.status == status.upper())
     if keyword and keyword.strip():
@@ -688,7 +968,7 @@ def student_races(status: str | None = None, keyword: str | None = Query(default
 def student_race_detail(race_id: str, principal: StudentPrincipal = Depends(require_student),
                         db: Session = Depends(core.db_session)):
     race = db.get(core.Race, race_id)
-    if not race or race.status == "DRAFT":
+    if not race:
         _fail(404, "RESOURCE_NOT_FOUND", "Không tìm thấy giải chạy.")
     return _race_view(db, race, principal.student.id, principal.session.installation_id)
 
@@ -696,7 +976,10 @@ def student_race_detail(race_id: str, principal: StudentPrincipal = Depends(requ
 @router.get("/api/v1/student/races/{race_id}/map")
 def student_race_map(race_id: str, principal: StudentPrincipal = Depends(require_student),
                      db: Session = Depends(core.db_session)):
-    race, _ = _race_for_registered(db, race_id, principal.student.id)
+    race = db.get(core.Race, race_id)
+    if not race:
+        _fail(404, "RESOURCE_NOT_FOUND", "Không tìm thấy giải chạy.")
+    _race_view(db, race, principal.student.id, principal.session.installation_id)
     route = core.race_route_dict(db, race.id)
     checkpoints = db.scalars(select(core.Checkpoint).where(
         core.Checkpoint.race_id == race.id).order_by(core.Checkpoint.sequence_no)).all()
@@ -841,6 +1124,18 @@ def _owned_run(db: Session, run_id: str, student_id: str) -> core.RunSession:
     return run
 
 
+def _lock_owned_run(db: Session, run_id: str, student_id: str) -> core.RunSession:
+    run = db.scalar(select(core.RunSession).where(
+        core.RunSession.id == run_id, core.RunSession.student_id == student_id).with_for_update())
+    if not run:
+        _fail(404, "RESOURCE_NOT_FOUND", "Không tìm thấy phiên chạy.")
+    if core.engine.dialect.name == "sqlite":
+        db.execute(update(core.RunSession).where(core.RunSession.id == run_id)
+                   .values(revision=core.RunSession.revision))
+        db.refresh(run)
+    return run
+
+
 @router.get("/api/v1/student/runs/{run_id}")
 def student_run_detail(run_id: str, principal: StudentPrincipal = Depends(require_student), db: Session = Depends(core.db_session)):
     return _run_snapshot(db, _owned_run(db, run_id, principal.student.id), principal.session.installation_id)
@@ -850,8 +1145,6 @@ def student_run_detail(run_id: str, principal: StudentPrincipal = Depends(requir
 async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPrincipal = Depends(require_student),
                             db: Session = Depends(core.db_session)):
     run = _owned_run(db, run_id, principal.student.id)
-    if run.status != "ACTIVE":
-        _fail(409, "RUN_NOT_ACTIVE", "Phiên chạy không còn hoạt động.")
     if run.wearable_device_id != f"MOBILE:{principal.session.installation_id}":
         _fail(409, "DEVICE_BINDING_MISMATCH", "Phiên chạy được gắn với cài đặt app khác.")
     body = data.model_dump(mode="json")
@@ -873,6 +1166,8 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
             _fail(409, "BATCH_ID_CONFLICT", "batch_id đã được dùng với payload khác.")
         return JSONResponse(status_code=200, content=jsonable_encoder(json.loads(receipt.response_json)),
                             headers={"Idempotency-Replayed": "true", "Cache-Control": "no-store"})
+    if run.status != "ACTIVE":
+        _fail(409, "RUN_NOT_ACTIVE", "Phiên chạy không còn hoạt động.")
     items: list[dict[str, Any]] = []
     for sample in data.samples:
         sample_key = f"mobile:{run_id}:{sample.sample_id}"
@@ -891,6 +1186,12 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
             items.append({"sample_id": sample.sample_id, "status": "DUPLICATE", "accepted": True,
                           "gps_point_id": existing.id, "sequence": sample.sequence})
             continue
+        captured_at = _utc(sample.recorded_at)
+        if run_is_paused_at(db, run_id, captured_at):
+            items.append({"sample_id": sample.sample_id, "status": "REJECTED", "accepted": False,
+                          "reason_code": "RUN_PAUSED", "sequence": sample.sequence,
+                          "distance_delta_m": 0, "passage_created": False})
+            continue
         db.refresh(run)
         last_sequence = getattr(run, "last_sequence", 0)
         if sample.sequence <= last_sequence:
@@ -901,7 +1202,17 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
             items.append({"sample_id": sample.sample_id, "status": "REJECTED", "accepted": False,
                           "reason_code": "GPS_INACCURATE", "sequence": sample.sequence})
             continue
+        steps_total = run.total_steps
+        if sample.steps_since_start is not None:
+            previous_resume = db.scalar(select(StudentRunPause).where(
+                StudentRunPause.run_id == run_id,
+                StudentRunPause.resumed_at.is_not(None),
+                StudentRunPause.resumed_at <= captured_at
+            ).order_by(StudentRunPause.resumed_at.desc()).limit(1))
+            offset = previous_resume.steps_offset_after if previous_resume else 0
+            steps_total = max(run.total_steps, sample.steps_since_start + offset)
         try:
+            gps.total_steps = steps_total
             result = await core.receive_gps(gps, auth_source="MOBILE", db=db)
             db.refresh(run)
             point = db.scalar(select(core.GpsPoint).where(core.GpsPoint.idempotency_key == sample_key))
@@ -926,6 +1237,77 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
     return result
 
 
+@router.post("/api/v1/student/runs/{run_id}/pause")
+async def student_pause_run(run_id: str, data: RunControlIn,
+                            idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+                            principal: StudentPrincipal = Depends(require_student),
+                            db: Session = Depends(core.db_session)):
+    key = _idempotency_key(idempotency_key)
+    path = f"POST:/api/v1/student/runs/{run_id}/pause"
+    payload = data.model_dump(mode="json")
+    replay = _receipt_replay(db, principal, key, path, payload)
+    if replay:
+        return replay
+    run = _lock_owned_run(db, run_id, principal.student.id)
+    if run.status != "ACTIVE":
+        _fail(409, "RUN_NOT_ACTIVE", "Chỉ có thể tạm dừng phiên đang hoạt động.")
+    if _open_pause(db, run_id):
+        _fail(409, "RUN_ALREADY_PAUSED", "Phiên chạy đang tạm dừng.")
+    if data.expected_revision != run.revision:
+        _fail(409, "VERSION_CONFLICT", "Phiên chạy đã thay đổi; hãy tải lại snapshot.")
+    now = core.now_utc()
+    interval = StudentRunPause(run_id=run.id, paused_at=now, steps_at_pause=run.total_steps)
+    db.add(interval)
+    run.revision += 1
+    # Make the next accepted GPS point an anchor only; never bridge the pause gap.
+    run.segment_id += 1
+    run.last_latitude = None
+    run.last_longitude = None
+    for state in db.scalars(select(core.GeofenceState).where(core.GeofenceState.run_id == run.id)).all():
+        state.region = "UNKNOWN"
+        state.last_gps_point_id = None
+        state.last_sample_at = None
+    result = _run_snapshot(db, run, principal.session.installation_id)
+    response = _save_receipt(db, principal, key, path, payload, result)
+    db.commit()
+    await core.hub.publish(run.race_id, {"type": "runner.updated", "race_id": run.race_id,
+        "data": core.run_dict(db, run)})
+    await publish_student_event(principal.student.id, "run.paused", "RUN", run.id, run.revision, result)
+    return response
+
+
+@router.post("/api/v1/student/runs/{run_id}/resume")
+async def student_resume_run(run_id: str, data: ResumeRunIn,
+                             idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+                             principal: StudentPrincipal = Depends(require_student),
+                             db: Session = Depends(core.db_session)):
+    key = _idempotency_key(idempotency_key)
+    path = f"POST:/api/v1/student/runs/{run_id}/resume"
+    payload = data.model_dump(mode="json")
+    replay = _receipt_replay(db, principal, key, path, payload)
+    if replay:
+        return replay
+    run = _lock_owned_run(db, run_id, principal.student.id)
+    if run.status != "ACTIVE":
+        _fail(409, "RUN_NOT_ACTIVE", "Chỉ có thể tiếp tục phiên đang hoạt động.")
+    interval = _open_pause(db, run_id)
+    if not interval:
+        _fail(409, "RUN_NOT_PAUSED", "Phiên chạy hiện không tạm dừng.")
+    if data.expected_revision != run.revision:
+        _fail(409, "VERSION_CONFLICT", "Phiên chạy đã thay đổi; hãy tải lại snapshot.")
+    now = core.now_utc()
+    interval.resumed_at = now
+    interval.steps_offset_after = run.total_steps - data.steps_since_start
+    run.revision += 1
+    result = _run_snapshot(db, run, principal.session.installation_id)
+    response = _save_receipt(db, principal, key, path, payload, result)
+    db.commit()
+    await core.hub.publish(run.race_id, {"type": "runner.updated", "race_id": run.race_id,
+        "data": core.run_dict(db, run)})
+    await publish_student_event(principal.student.id, "run.resumed", "RUN", run.id, run.revision, result)
+    return response
+
+
 @router.post("/api/v1/student/runs/{run_id}/withdraw")
 async def student_withdraw(run_id: str, data: WithdrawIn,
                            idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -945,6 +1327,7 @@ async def student_withdraw(run_id: str, data: WithdrawIn,
     if data.expected_revision != revision:
         _fail(409, "VERSION_CONFLICT", "Phiên chạy đã thay đổi; hãy tải lại.")
     now = core.now_utc()
+    close_open_pause(db, run.id, now)
     run.status = "ABANDONED"
     run.ended_at = now
     run.duration_total_s = max(0, int((now - _utc(run.started_at)).total_seconds()))
