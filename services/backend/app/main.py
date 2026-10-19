@@ -26,7 +26,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, or_, select, text, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -346,9 +346,18 @@ class RaceIn(BaseModel):
 
 
 class StudentIn(BaseModel):
-    student_code: str
-    full_name: str
-    faculty: str | None = None
+    """Required profile fields shown in the Admin Web create-student form."""
+    student_code: str = Field(min_length=1, max_length=40)
+    full_name: str = Field(min_length=1, max_length=160)
+    faculty: str = Field(min_length=1, max_length=120)
+
+    @field_validator("student_code", "full_name", "faculty")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Trường này không được để trống.")
+        return value
 
 
 class RunnerWearableIn(BaseModel):
@@ -1066,7 +1075,8 @@ def create_student(data: StudentIn, db: Session = Depends(db_session)):
     if db.scalar(select(Student).where(Student.student_code == data.student_code)):
         envelope_error("STUDENT_CODE_EXISTS", "Mã sinh viên đã tồn tại.")
     student = Student(**data.model_dump()); db.add(student); db.commit(); db.refresh(student)
-    return {"student_id": student.id, "student_code": student.student_code, "full_name": student.full_name}
+    return {"student_id": student.id, "student_code": student.student_code,
+            "full_name": student.full_name, "faculty": student.faculty}
 
 @app.get("/api/v1/students", dependencies=[Depends(admin)])
 def list_students(
@@ -1079,7 +1089,7 @@ def list_students(
     stmt = select(Student)
     if q:
         pattern = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Student.student_code.ilike(pattern), Student.full_name.ilike(pattern)))
+        stmt = stmt.where(or_(Student.student_code.ilike(pattern), Student.full_name.ilike(pattern), Student.faculty.ilike(pattern)))
     students = db.scalars(stmt.order_by(Student.student_code).offset(offset).limit(limit)).all()
     return {
         "items": [

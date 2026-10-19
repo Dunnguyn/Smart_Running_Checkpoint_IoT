@@ -4,7 +4,7 @@
 
 ## Những gì đã có
 
-- Quản lý giải chạy, sinh viên, đăng ký và checkpoint.
+- Quản lý giải chạy, sinh viên, đăng ký và checkpoint. Tạo hồ sơ sinh viên yêu cầu mã sinh viên, họ tên và khoa/viện; các trường được trả lại trong API danh sách và roster.
 - Gán một wearable ID cho runner; một thiết bị đeo gửi GPS và snapshot bước chân trong cùng telemetry request.
 - Hỗ trợ hai chế độ theo race: `GPS_ONLY` giữ hành vi geofence cũ; `GPS_AND_ARDUINO` ghép GPS passage với sự kiện Arduino theo thời gian.
 - Chế độ kết hợp lưu `UNKNOWN/OUTSIDE/INSIDE` bền vững, chỉ tạo passage khi đi từ ngoài bán kính 15 m vào trong 10 m; mất mẫu quá 5 giây sẽ khởi tạo lại trạng thái.
@@ -94,6 +94,8 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 - Ví dụ payload và các điểm nối trong mã được đánh dấu `[FE LINK]`, `[SIMULATOR LINK]`, `[GATEWAY LINK]` và `[DEVICE LINK]`.
 
 ## Liên kết Simulator / Arduino Gateway
+
+Với sketch HC-SR04 đang in `LAP: n` qua Serial, dùng Gateway USB tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md): cài `pyserial`, đăng ký `device_id` vào checkpoint và chạy `python -m app.arduino_gateway --port COM5 --device-id NEU-ARDUINO-C04`. Arduino không có GPS; backend vẫn cần wearable GPS cùng runner để đối chiếu danh tính.
 
 Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
 
