@@ -230,15 +230,17 @@ try {
     name: "Đăng ký sinh viên vào giải",
   });
   await modal.getByRole("button", { name: "Chọn SV01" }).click();
-  await modal.getByLabel("Bib (không bắt buộc)").fill("01");
+  await modal.getByLabel("Số báo danh (không bắt buộc)").fill("01");
   bibConflict = true;
   await modal.getByRole("button", { name: "Xác nhận đăng ký" }).click();
   await expect(
-    modal.getByText("Bib này đã được dùng trong giải."),
+    modal.getByText("Số báo danh này đã được dùng trong giải."),
   ).toBeVisible();
-  await expect(modal.getByLabel("Bib (không bắt buộc)")).toHaveValue("01");
+  await expect(modal.getByLabel("Số báo danh (không bắt buộc)")).toHaveValue(
+    "01",
+  );
   bibConflict = false;
-  await modal.getByLabel("Bib (không bắt buộc)").fill("");
+  await modal.getByLabel("Số báo danh (không bắt buộc)").fill("");
   await modal.getByRole("button", { name: "Xác nhận đăng ký" }).click();
   await expect(modal).toHaveCount(0);
   expect(writes.at(-1).body).toEqual({ student_id: "student" });
@@ -265,7 +267,7 @@ try {
   await page.getByRole("button", { name: "Làm mới đăng ký" }).click();
   await page.getByLabel("Chọn giải chạy").selectOption("b");
   await expect(
-    page.getByRole("heading", { name: "Đăng ký của giải: Giải thứ hai" }),
+    page.locator(".roster-heading").getByText(/Giải thứ hai/),
   ).toBeVisible();
   await page.waitForTimeout(900);
   await expect(page.getByRole("cell", { name: "01", exact: true })).toHaveCount(
@@ -274,7 +276,10 @@ try {
   expect(errors).toEqual([]);
   expect(polls).toBe(0);
   expect(startCount).toBe(0);
-  await writeFile("test-results/current/enrollment-report.json",JSON.stringify({realWrites:0,interceptedWrites:writes.length,errors}));
+  await writeFile(
+    "test-results/current/enrollment-report.json",
+    JSON.stringify({ realWrites: 0, interceptedWrites: writes.length, errors }),
+  );
   console.log(
     JSON.stringify({
       checks: [

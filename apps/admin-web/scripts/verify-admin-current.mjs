@@ -153,6 +153,8 @@ await page.route("**/api/v1/**", async (r) => {
     });
   if (path.endsWith("/route"))
     return json({ race_id: id, ...meta, points: [], distance_m: 0 });
+  if (method === "GET" && path.endsWith("/participants"))
+    return json({ race_id: "a", items: [] });
   throw new Error("Unexpected fixture " + method + " " + path);
 });
 try {
@@ -162,9 +164,12 @@ try {
   await expect(
     page.getByRole("row").filter({ hasText: "Giải tùy chỉnh" }),
   ).toBeVisible();
+  await page.locator(".secondary-tools > summary").evaluate((n) => {
+    n.parentElement.open = true;
+  });
   await page.getByRole("button", { name: "Tạo mô phỏng", exact: true }).click();
   let modal = page.getByRole("dialog", { name: "Tạo mô phỏng" });
-  await modal.getByLabel("Chế độ mô phỏng").selectOption("GPS_AND_ARDUINO");
+  await modal.getByRole("radio", { name: /GPS \+ Arduino/ }).check();
   await expect(
     modal.getByText(/chưa phải dữ liệu từ kit Arduino thật/),
   ).toBeVisible();
@@ -174,8 +179,8 @@ try {
   await modal
     .getByLabel("Khoảng cách xuất phát giữa hai người (giây)")
     .fill("0");
-  await modal.getByLabel("Chế độ mô phỏng").selectOption("GPS_ONLY");
-  await modal.getByLabel("Chế độ mô phỏng").selectOption("GPS_AND_ARDUINO");
+  await modal.getByRole("radio", { name: /^GPS Tính/ }).check();
+  await modal.getByRole("radio", { name: /GPS \+ Arduino/ }).check();
   await expect(
     modal.getByLabel("Khoảng cách xuất phát giữa hai người (giây)"),
   ).toHaveValue("0");
@@ -187,7 +192,7 @@ try {
   await expect(page.getByText("Đang mô phỏng", { exact: true })).toBeVisible();
   expect(startCount).toBe(1);
   await expect.poll(() => polls).toBeGreaterThan(1);
-  await page.locator('a[href="/races/a"]').click();
+  await page.locator('a[href="/races/a"]').first().click();
   await expect(
     page.getByRole("link", { name: "← Tất cả giải chạy" }),
   ).toBeVisible();
@@ -195,6 +200,7 @@ try {
   await page.waitForTimeout(1800);
   expect(polls).toBe(unmountedPolls);
   await page.getByRole("link", { name: "← Tất cả giải chạy" }).click();
+  await page.locator(".secondary-tools > summary").click();
   jobStatus = "COMPLETED";
   await expect(page.getByText("Đã hoàn tất", { exact: true })).toBeVisible();
   const terminalPolls = polls;
@@ -217,6 +223,9 @@ try {
       fullPage: true,
     });
   }
+  await page.locator(".secondary-tools > summary").evaluate((n) => {
+    n.parentElement.open = true;
+  });
   await page.getByRole("button", { name: "Tạo mô phỏng", exact: true }).click();
   await modal.getByRole("button", { name: "Bắt đầu mô phỏng" }).click();
   await expect(page.getByText("Đang mô phỏng", { exact: true })).toBeVisible();
@@ -230,6 +239,7 @@ try {
   await page.reload();
   await page.getByLabel("Admin key", { exact: true }).fill("fixture");
   await page.getByRole("button", { name: "Kết nối", exact: true }).click();
+  await page.locator(".secondary-tools > summary").click();
   await expect(page.getByText(/Máy chủ có thể đã khởi động lại/)).toBeVisible();
   const missingPolls = polls;
   await page.waitForTimeout(1700);
@@ -238,8 +248,10 @@ try {
   await expect(
     page.getByRole("button", { name: "Mở bản đồ giải" }),
   ).toBeVisible();
-  await page.locator('a[href="/races/a"]').click();
-  await page.getByText("Cấu hình GPS / Arduino", { exact: true }).click();
+  await page.locator('a[href="/races/a"]').first().click();
+  await page
+    .getByRole("button", { name: "Cấu hình ghi nhận", exact: true })
+    .click();
   const input = page.getByLabel("Bán kính trong (m)", { exact: true });
   await expect(input).toHaveValue("10");
   await input.fill("11");
@@ -257,8 +269,8 @@ try {
   });
   await page.getByRole("link", { name: "← Tất cả giải chạy" }).click();
   const row = page.getByRole("row").filter({ hasText: "Giải tùy chỉnh" });
-  await row.getByText("Thao tác khác").click();
-  await row.getByRole("button", { name: "Xóa giải", exact: true }).click();
+  await row.getByRole("button", { name: /Thao tác khác:/ }).click();
+  await row.getByRole("menuitem", { name: "Xóa giải", exact: true }).click();
   const del = page.getByRole("dialog", { name: "Xóa giải chạy" });
   await expect(
     del.getByRole("button", { name: "Xóa giải", exact: true }),
@@ -277,9 +289,12 @@ try {
   await expect(
     page.getByRole("row").filter({ hasText: "Giải tùy chỉnh" }),
   ).toHaveCount(0);
-  await expect(page.getByLabel("Chọn giải chạy")).not.toHaveValue("a");
+  await expect(page.getByLabel("Chọn giải chạy")).toHaveCount(0);
   await expect.poll(() => sockets.size).toBe(0);
   expect(page.url()).toContain("/races");
+  await page.locator(".secondary-tools > summary").evaluate((n) => {
+    n.parentElement.open = true;
+  });
   await page.getByRole("button", { name: "Mở bản đồ giải" }).click();
   await expect(
     page.getByText(/Giải của mô phỏng không còn trong danh sách/),
@@ -287,8 +302,8 @@ try {
   expect(page.url()).toContain("/races");
   active = 1;
   const rowB = page.getByRole("row").filter({ hasText: "Giải thứ hai" });
-  await rowB.getByText("Thao tác khác").click();
-  await rowB.getByRole("button", { name: "Xóa giải", exact: true }).click();
+  await rowB.getByRole("button", { name: /Thao tác khác:/ }).click();
+  await rowB.getByRole("menuitem", { name: "Xóa giải", exact: true }).click();
   await expect(del.getByText(/Giải có 1 phiên/)).toBeVisible();
   await del.getByLabel("Nhập XÓA để xác nhận").fill("XÓA");
   await expect(
@@ -297,6 +312,9 @@ try {
   await del.getByRole("button", { name: "Xóa giải", exact: true }).click();
   await expect(del).toHaveCount(0);
   lostStart = true;
+  await page.locator(".secondary-tools > summary").evaluate((n) => {
+    n.parentElement.open = true;
+  });
   await page.getByRole("button", { name: "Tạo mô phỏng", exact: true }).click();
   await modal.getByRole("button", { name: "Bắt đầu mô phỏng" }).click();
   await expect(page.getByText(/Chưa xác định request tạo/)).toBeVisible();

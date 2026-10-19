@@ -1,0 +1,12 @@
+# Rà soát dependency — 17/10/2026
+
+`npm audit --json` lưu ở `dependency-audit-latest.json`: 23 findings (16 high, 7 moderate, 0 critical). `npm audit fix --dry-run --json` không tìm được thay đổi tương thích (0 added/changed/removed). Không dùng `--force`, không nâng/hạ major Expo/RN và không ép override dependency ngoài dải hỗ trợ.
+
+| Package gốc                                           | Trực tiếp/bắc cầu   | Đường dẫn và phạm vi                                                                     | Xử lý                                                                                                                               |
+| ----------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| braces 3.0.3                                          | Bắc cầu             | Expo → @expo/metro → metro-file-map → micromatch; xử lý glob trong công cụ bundler       | Cảnh báo DoS pattern lồng sâu; audit chưa có bản vá tương thích trong cây hiện tại                                                  |
+| node-forge 1.4.0                                      | Bắc cầu             | Expo CLI và code-signing-certificates; ký/xác minh trong công cụ dev/build               | Cảnh báo xác minh RSA; không coi đây là mã auth của app, vẫn cần bản vá công cụ tương thích                                         |
+| uuid 7.0.3                                            | Bắc cầu             | @expo/config-plugins → xcode; sinh project native                                        | Cảnh báo buffer các hàm v3/v5/v6; cập nhật cần tương thích xcode/config-plugin                                                      |
+| Expo/RN/react-native-maps và các package Metro/config | Trực tiếp + bắc cầu | Phần lớn cảnh báo lan truyền dependency `via`; Expo/RN/Maps cũng là runtime dependencies | Không quy mọi cảnh báo sang runtime khai thác được, cũng không khẳng định an toàn. Cần kiểm tra reachability/bản vá trước phát hành |
+
+Các đề xuất audit gồm Expo 44, RN 0.72 và Maps 1.20, là đổi dòng phiên bản lớn so với Expo 57/RN 0.86/Maps 1.27, nên không áp dụng chỉ để giảm số cảnh báo. Cây dependency đã kiểm tra bằng `npm ls braces node-forge uuid --all`. App không trực tiếp import ba package gốc này; báo cáo này không thay thế đánh giá bảo mật artifact release hoặc supply chain.

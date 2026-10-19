@@ -1,3 +1,4 @@
+import { ReferenceIcon } from "../components/ReferenceIcon";
 import { Link, useLocation, useBlocker } from "react-router-dom";
 import {
   createContext,
@@ -39,7 +40,7 @@ interface LiveContextValue {
   retry: () => void;
   reloadRaces: (signal?: AbortSignal) => Promise<Race[]>;
   forgetRace: (id: string) => void;
-  refreshData: () => void;
+  refreshData: () => Promise<void>;
   connection: string;
   start: () => void;
   pause: () => void;
@@ -174,7 +175,6 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         setSnapshot((previous) =>
           dataMode === "mock" ? s : reconcileSnapshot(previous, s),
         );
-        setError("");
       }
     };
     const fail = (e: Error) => {
@@ -189,6 +189,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const unsubscribe = raceService.subscribeRaceLive(raceId, {
       onSnapshot: accept,
       onError: fail,
+      onSynced: () => {
+        if (!disposed) setError("");
+      },
       onStatus: setConnection,
     });
     liveCleanup.current = unsubscribe;
@@ -257,52 +260,70 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       }}
     >
       {!ready ? (
-        <main className="panel auth-panel">
-          <h1>NEU Smart Running</h1>
-          <p>
-            Kết nối API demo. Admin key chỉ được giữ trong bộ nhớ; tải lại trang
-            cần nhập lại.
-          </p>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (authGuard.current || !keyInput.trim()) return;
-              authGuard.current = true;
-              setAuthBusy(true);
-              setError("");
-              setAdminKey(keyInput.trim());
-              try {
-                await request("/auth/admin-key", { method: "POST" });
-                setKeyInput("");
-                setReady(true);
-              } catch (error) {
-                setAdminKey("");
-                setError((error as Error).message);
-              } finally {
-                authGuard.current = false;
-                setAuthBusy(false);
-              }
-            }}
-          >
-            <label>
-              Admin key{" "}
-              <input
-                type="password"
-                autoComplete="off"
-                required
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-              />
-            </label>
-            <button
-              className="button primary"
-              type="submit"
-              disabled={authBusy}
+        <main className="access-screen">
+          <div className="access-brand">
+            <div className="brand-icon">NR</div>
+            <strong>NEU RUN</strong>
+            <p>
+              Nền tảng quản lý giải chạy sinh viên
+              <br />
+              Đại học Kinh tế Quốc dân
+            </p>
+          </div>
+          <section className="panel auth-panel">
+            <div className="access-icon">
+              <ReferenceIcon name="lock" />
+            </div>
+            <h1>Truy cập quản trị</h1>
+            <p>
+              Dành cho ban tổ chức giải chạy. Khóa chỉ lưu trong bộ nhớ phiên.
+            </p>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (authGuard.current || !keyInput.trim()) return;
+                authGuard.current = true;
+                setAuthBusy(true);
+                setError("");
+                setAdminKey(keyInput.trim());
+                try {
+                  await request("/auth/admin-key", { method: "POST" });
+                  setKeyInput("");
+                  setReady(true);
+                } catch (error) {
+                  setAdminKey("");
+                  setError((error as Error).message);
+                } finally {
+                  authGuard.current = false;
+                  setAuthBusy(false);
+                }
+              }}
             >
-              {authBusy ? "Đang xác thực…" : "Kết nối"}
-            </button>
-          </form>
-          {error && <p role="alert">{error}</p>}
+              <label>
+                Khóa quản trị{" "}
+                <input
+                  type="password"
+                  aria-label="Admin key"
+                  placeholder="Nhập khóa quản trị"
+                  autoComplete="off"
+                  required
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                />
+              </label>
+              <button
+                className="button primary"
+                type="submit"
+                disabled={authBusy}
+              >
+                {authBusy ? "Đang xác thực…" : "Kết nối"}
+              </button>
+            </form>
+            {error && <p role="alert">{error}</p>}
+          </section>
+          <p className="access-foot">
+            NEU RUN · Hệ thống nội bộ dành cho ban tổ chức
+          </p>
         </main>
       ) : (
         <>

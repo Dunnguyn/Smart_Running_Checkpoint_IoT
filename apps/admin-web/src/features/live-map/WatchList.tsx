@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { LiveSnapshot } from "../../types/domain";
 import { Panel, Empty, Badge } from "../../components/ui";
-import { datetime } from "../../utils/format";
+import { GpsTimestamp } from "../../components/GpsTimestamp";
 import { gpsLabel, sourceLabel } from "../../utils/labels";
 export function WatchList({
   snapshot,
@@ -35,7 +35,7 @@ export function WatchList({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Tên, mã sinh viên, bib"
+            placeholder="Tên, mã sinh viên, số báo danh"
           />
         </label>
         <label>
@@ -78,7 +78,10 @@ export function WatchList({
               </small>
               <Badge status={r.status} />
               <small>
-                {gpsLabel(r.connection)} · {datetime(r.last_seen_at)}
+                <GpsTimestamp
+                  value={r.last_seen_at}
+                  completed={r.status === "COMPLETED"}
+                />
                 <br />
                 {sourceLabel(r.source)}
               </small>

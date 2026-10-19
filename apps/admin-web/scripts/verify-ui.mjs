@@ -30,9 +30,13 @@ await page.getByRole("button", { name: "Lớp bản đồ", exact: true }).click
 await page.getByRole("checkbox", { name: "Sinh viên", exact: true }).uncheck();
 await expect(page.locator(".runner-marker")).toHaveCount(0);
 await page.getByRole("checkbox", { name: "Sinh viên", exact: true }).check();
-await page.getByRole("checkbox", { name: "Checkpoint", exact: true }).uncheck();
+await page
+  .getByRole("checkbox", { name: "Trạm kiểm soát", exact: true })
+  .uncheck();
 await expect(page.locator(".checkpoint-marker")).toHaveCount(0);
-await page.getByRole("checkbox", { name: "Checkpoint", exact: true }).check();
+await page
+  .getByRole("checkbox", { name: "Trạm kiểm soát", exact: true })
+  .check();
 await page.getByRole("button", { name: "Về toàn tuyến", exact: true }).click();
 await page.waitForTimeout(800);
 const mapTransform = await page

@@ -35,6 +35,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("backend contract and live consistency", () => {
+  it("does not label future GPS samples as online", () => {
+    expect(
+      normalizeRunner({
+        ...row,
+        last_seen_at: new Date(Date.now() + 60000).toISOString(),
+      }).connection,
+    ).toBe("UNAVAILABLE");
+  });
   it("maps REGISTERED without inventing a run or position, handles SQLite UTC", () => {
     const r = normalizeRunner({
       ...row,

@@ -203,8 +203,9 @@ try {
     "10",
   );
   await expect(save()).toBeDisabled();
-  const marker = page.locator(".leaflet-marker-draggable"),
-    bb = await marker.boundingBox();
+  const marker = page.locator(".leaflet-marker-draggable");
+  await marker.scrollIntoViewIfNeeded();
+  const bb = await marker.boundingBox();
   await page.mouse.move(bb.x + 15, bb.y + 15);
   await page.mouse.down();
   await page.mouse.move(bb.x + 35, bb.y + 20, { steps: 6 });
@@ -347,7 +348,9 @@ try {
   await page.getByLabel("Điểm / đoạn đang chọn").selectOption("1");
   await page.getByLabel("Vĩ độ điểm").fill("21.00097");
   version++;
-  await page.getByRole("button", { name: "Làm mới", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Làm mới dữ liệu", exact: true })
+    .click();
   await expect(
     page.getByText(/Dữ liệu server đã thay đổi, draft vẫn được giữ/),
   ).toBeVisible();
@@ -387,7 +390,9 @@ try {
   empty = true;
   version++;
   fail = "";
-  await page.getByRole("button", { name: "Làm mới", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Làm mới dữ liệu", exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "Chỉnh sửa bản đồ", exact: true }),
   ).toBeEnabled();

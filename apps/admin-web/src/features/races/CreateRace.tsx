@@ -59,7 +59,7 @@ export function CreateRace({
         tuyến trước khi tạo phiên chạy.
       </p>
       <form
-        className="editor-fields"
+        className="editor-fields form-grid"
         noValidate
         onSubmit={async (e) => {
           e.preventDefault();
@@ -97,7 +97,7 @@ export function CreateRace({
       >
         <fieldset
           disabled={busy || uncertain}
-          className="editor-fields"
+          className="editor-fields form-grid"
           style={{ border: 0, padding: 0 }}
         >
           <label>

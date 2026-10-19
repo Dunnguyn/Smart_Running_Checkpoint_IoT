@@ -119,7 +119,9 @@ try {
   await expect(
     page.getByRole("link", { name: "Mở giải vừa tạo" }),
   ).toBeVisible();
-  await expect(page.getByLabel("Chọn giải chạy")).toHaveValue("new-fixture");
+  await expect(
+    page.getByRole("row").filter({ hasText: "Giải fixture cô lập" }),
+  ).toContainText("Đang xem");
   expect(writes).toHaveLength(2);
   expect(writes[1]).toMatchObject({
     status: "DRAFT",

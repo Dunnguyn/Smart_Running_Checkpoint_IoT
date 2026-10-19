@@ -1,3 +1,4 @@
+import { MapResize } from "./MapResize";
 import { useEffect, useRef, useState } from "react";
 import {
   MapContainer,
@@ -523,7 +524,8 @@ export function MapEditor({
                       })}
                     />
                   ))}
-              </MapContainer>
+              <MapResize />
+        </MapContainer>
               {tileError && (
                 <p className="map-warning" role="status">
                   Không tải được nền bản đồ. Draft và tọa độ vẫn hoạt động.
@@ -535,8 +537,8 @@ export function MapEditor({
                 Xem toàn tuyến
               </button>
               <p>
-                Không theo dõi runner hoặc tự đổi khung nhìn khi chỉnh sửa.
-                Runner chỉ để xem.
+                Không theo dõi người chạy hoặc tự đổi khung nhìn khi chỉnh sửa.
+                Người chạy chỉ để xem.
               </p>
               <fieldset disabled={blocked || busy}>
                 {mode === "checkpoint" ? (

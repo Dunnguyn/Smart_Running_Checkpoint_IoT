@@ -1,3 +1,6 @@
+import { SimulationControls } from "../dashboard/Dashboard";
+import { CreateStudent } from "./CreateStudent";
+import { useSearchParams } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { useLive } from "../../app/LiveProvider";
 import { Modal } from "../../components/Modal";
@@ -8,12 +11,46 @@ import {
 } from "../../services/enrollment";
 import { RequestError } from "../../services/client";
 import { RunnerTable } from "./RunnerTable";
-export function People() {
+export function People({ defaultView = "runs" }: { defaultView?: string }) {
+  const [creating, setCreating] = useState(false),
+    [directoryRevision, setDirectoryRevision] = useState(0);
   const { raceId } = useLive();
-  const [tab, setTab] = useState("runs");
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("view") ?? defaultView;
+  const setTab = (value: string) => {
+    const next = new URLSearchParams(params);
+    next.set("view", value);
+    setParams(next);
+  };
   return (
     <>
-      <nav className="filter-bar" aria-label="Danh sách sinh viên">
+      {creating && (
+        <CreateStudent
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            setCreating(false);
+            setDirectoryRevision((n) => n + 1);
+          }}
+        />
+      )}
+      <div className="page-title">
+        <div>
+          <h1>Sinh viên</h1>
+          <p>
+            {tab === "students"
+              ? "Quản lý hồ sơ sinh viên trong hệ thống."
+              : "Theo dõi tiến độ và đăng ký của giải đang chọn."}
+          </p>
+        </div>
+        {tab === "students" ? (
+          <button className="button primary" onClick={() => setCreating(true)}>
+            Thêm sinh viên
+          </button>
+        ) : (
+          <SimulationControls />
+        )}
+      </div>
+      <nav className="tabs" aria-label="Danh sách sinh viên">
         {[
           ["runs", "Phiên chạy"],
           ["participants", "Đăng ký của giải"],
@@ -21,7 +58,7 @@ export function People() {
         ].map(([id, label]) => (
           <button
             key={id}
-            className={`button ${tab === id ? "primary" : ""}`}
+            className={tab === id ? "active" : ""}
             aria-pressed={tab === id}
             onClick={() => setTab(id)}
           >
@@ -32,7 +69,7 @@ export function People() {
       {tab === "runs" ? (
         <RunnerTable />
       ) : tab === "students" ? (
-        <StudentDirectory />
+        <StudentDirectory key={directoryRevision} />
       ) : raceId ? (
         <Roster key={raceId} raceId={raceId} />
       ) : (
@@ -161,7 +198,7 @@ function StudentDirectory({
     </section>
   );
 }
-function Roster({ raceId }: { raceId: string }) {
+export function Roster({ raceId }: { raceId: string }) {
   const { snapshot, refreshData, races } = useLive();
   const [rows, setRows] = useState<Participant[]>([]),
     [loading, setLoading] = useState(true),
@@ -192,18 +229,27 @@ function Roster({ raceId }: { raceId: string }) {
   }, [raceId, revision]);
   return (
     <section className="panel people-panel">
-      <h2>Đăng ký của giải: {races.find((r) => r.race_id === raceId)?.name}</h2>
-      <p>Đăng ký tham gia không đồng nghĩa đã có phiên chạy.</p>
-      <button
-        className="button"
-        disabled={loading}
-        onClick={() => setRevision((n) => n + 1)}
-      >
-        Làm mới đăng ký
-      </button>
-      <button className="button primary" onClick={() => setOpen(true)}>
-        Đăng ký sinh viên
-      </button>
+      <div className="roster-heading">
+        <div>
+          <h2>Người tham gia</h2>
+          <p>
+            {races.find((r) => r.race_id === raceId)?.name} · Đăng ký không đồng
+            nghĩa đã có phiên chạy.
+          </p>
+        </div>
+        <div className="row-actions">
+          <button
+            className="button"
+            disabled={loading}
+            onClick={() => setRevision((n) => n + 1)}
+          >
+            Làm mới đăng ký
+          </button>
+          <button className="button primary" onClick={() => setOpen(true)}>
+            Đăng ký sinh viên
+          </button>
+        </div>
+      </div>
       {message && <p role="status">{message}</p>}
       {loading && (
         <p className={rows.length ? "" : "skeleton"} role="status">
@@ -222,7 +268,7 @@ function Roster({ raceId }: { raceId: string }) {
         <table>
           <thead>
             <tr>
-              <th>Bib</th>
+              <th>Số báo danh</th>
               <th>Sinh viên</th>
               <th>Đăng ký</th>
               <th>Phiên chạy</th>
@@ -262,7 +308,10 @@ function Roster({ raceId }: { raceId: string }) {
       {open && (
         <Enroll
           raceId={raceId}
-          onClose={() => {setOpen(false);setRevision(n=>n+1);}}
+          onClose={() => {
+            setOpen(false);
+            setRevision((n) => n + 1);
+          }}
           onSaved={() => {
             setOpen(false);
             setRevision((n) => n + 1);
@@ -325,7 +374,7 @@ function Enroll({
               if (c.signal.aborted) return;
               const f = e as RequestError;
               if (f.code === "BIB_NUMBER_EXISTS")
-                setBibError("Bib này đã được dùng trong giải.");
+                setBibError("Số báo danh này đã được dùng trong giải.");
               else if (f.status === 0 || f.status >= 500) {
                 setUncertain(true);
                 setError(
@@ -350,7 +399,7 @@ function Enroll({
             Chọn sinh viên khác
           </button>
           <label>
-            Bib (không bắt buộc)
+            Số báo danh (không bắt buộc)
             <input
               value={bib}
               disabled={busy || uncertain}

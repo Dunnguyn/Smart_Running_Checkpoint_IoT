@@ -2831,3 +2831,243 @@ th button {
 .races-table strong {
   overflow-wrap: anywhere;
 }
+
+/* End-user polish: section rhythm, compact actions, keyboard-visible hints. */
+:root {
+  --section-gap: 24px;
+  --card-padding: 22px;
+  --control-size: 40px;
+}
+.main-shell > main {
+  padding: 24px;
+}
+.dashboard-sections {
+  display: grid;
+  gap: var(--section-gap);
+}
+.dashboard-sections > .page-title,
+.dashboard-sections > .kpi-grid,
+.dashboard-sections > .detail-grid {
+  margin: 0;
+}
+.dashboard-sections .live-grid,
+.dashboard-sections .detail-grid {
+  gap: 24px;
+  align-items: start;
+}
+.panel-heading {
+  padding: var(--card-padding);
+  gap: 16px;
+}
+.panel-heading h2 {
+  font-size: 18px;
+}
+.kpi-card {
+  position: relative;
+  padding: 20px;
+  gap: 10px;
+}
+.kpi-arrow {
+  position: absolute;
+  right: 18px;
+  bottom: 22px;
+  color: #46668d;
+}
+.calm-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #315773;
+}
+.unified-header {
+  gap: 16px;
+  min-height: 76px;
+}
+.global-context {
+  font-size: 16px;
+}
+.global-scope {
+  color: #536980;
+  font-size: 13px;
+}
+.connection-notice {
+  padding: 14px 18px;
+  border: 1px solid #d8cda7;
+  border-radius: 12px;
+  background: #fffbef;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.connection-notice p {
+  margin: 4px 0 0;
+}
+.icon-action {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.icon-button {
+  width: var(--control-size);
+  min-width: var(--control-size);
+  height: var(--control-size);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.action-tooltip {
+  position: absolute;
+  z-index: 1100;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  max-width: 230px;
+  background: #173654;
+  color: white;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1.4;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.icon-action:hover > .action-tooltip,
+.icon-action:focus-within > .action-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+.topbar .action-tooltip {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+.compact-actions {
+  display: flex;
+  gap: 8px;
+  position: relative;
+  align-items: center;
+  width: max-content;
+}
+.race-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 25;
+  padding: 8px;
+  background: white;
+  border: 1px solid #d6e1ee;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px #13345622;
+  min-width: 160px;
+}
+.race-popover .button {
+  width: 100%;
+  white-space: nowrap;
+}
+.race-table {
+  max-height: none;
+  overflow: visible;
+}
+.race-table td {
+  padding: 12px 18px;
+  vertical-align: middle;
+}
+.race-name {
+  display: block;
+  color: #123b65;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  max-width: 650px;
+}
+.race-name:hover {
+  text-decoration: underline;
+}
+.race-filter-bar {
+  gap: 16px;
+  align-items: end;
+}
+.race-filter-bar > label:first-child {
+  flex: 0 1 400px;
+}
+.search-input {
+  position: relative;
+  display: block;
+}
+.search-input > svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #5b7188;
+}
+.search-input > input {
+  padding-left: 38px;
+}
+.refresh-spinning {
+  animation: refresh-turn 1s linear infinite;
+}
+@keyframes refresh-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.simulation-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+}
+.simulation-status > p {
+  margin: 0;
+}
+.simulation-status > .filter-bar {
+  padding: 0;
+  margin: 0;
+}
+.simulation-status > details {
+  flex-basis: 100%;
+  margin: 0;
+}
+@media (max-width: 900px) {
+  :root {
+    --card-padding: 18px;
+    --control-size: 44px;
+  }
+  .main-shell > main {
+    padding: 18px;
+  }
+  .global-scope {
+    display: none;
+  }
+  .race-table {
+    overflow-x: auto;
+  }
+  .race-name {
+    min-width: 150px;
+  }
+  .race-filter-bar > label:first-child {
+    flex: 1 1 240px;
+  }
+}
+
+.search-input > input {
+  width: 100%;
+  max-width: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .refresh-spinning {
+    animation: none;
+  }
+}
+
+.race-popover {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+.icon-action:has([aria-expanded="true"]) > .action-tooltip {
+  visibility: hidden;
+  opacity: 0;
+}
