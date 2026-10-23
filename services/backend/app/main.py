@@ -983,7 +983,12 @@ def create_race(data: RaceIn, db: Session = Depends(db_session)):
 
 @app.get("/api/v1/races", dependencies=[Depends(admin)])
 def list_races(db: Session = Depends(db_session)):
-    return {"items": [{"race_id": r.id, "name": r.name, "status": r.status, "start_at": r.start_at} for r in db.scalars(select(Race)).all()]}
+    rows = db.scalars(select(Race).order_by(Race.start_at.desc().nullslast(), Race.id.desc())).all()
+    return {"items": [{"race_id": r.id, "name": r.name, "status": r.status,
+        "start_at": r.start_at, "end_at": r.end_at, "location": r.route_name or "NEU",
+        "total_laps": r.total_laps,
+        "participant_count": db.scalar(select(func.count(RaceParticipant.id)).where(
+            RaceParticipant.race_id == r.id)) or 0} for r in rows]}
 
 
 # [FE LINK: SIMULATOR CONTROL] Admin starts, polls, or stops the five-runner
@@ -1095,6 +1100,28 @@ def delete_race(race_id: str, db: Session = Depends(db_session)):
     event_ids = db.scalars(select(DeviceEvent.id).where(DeviceEvent.checkpoint_id.in_(checkpoint_ids))).all() if checkpoint_ids else []
     if event_ids:
         db.query(MatchAudit).filter(MatchAudit.event_id.in_(event_ids)).delete(synchronize_session=False)
+    # Demo-specific rows reference race/run records; remove their metadata before
+    # the shared race deletion below. Student profiles and accounts are retained.
+    from .demos import (
+        ChallengeAppSession,
+        HealthChallengeDemo,
+        HealthChallengeDemoDay,
+        KitDemoSession,
+        StudentRaceChallenge,
+    )
+    health_demo_ids = db.scalars(select(HealthChallengeDemo.id).where(
+        HealthChallengeDemo.race_id == race_id)).all()
+    if health_demo_ids:
+        db.query(HealthChallengeDemoDay).filter(
+            HealthChallengeDemoDay.demo_id.in_(health_demo_ids)).delete(synchronize_session=False)
+        db.query(HealthChallengeDemo).filter(
+            HealthChallengeDemo.id.in_(health_demo_ids)).delete(synchronize_session=False)
+    db.query(ChallengeAppSession).filter(
+        ChallengeAppSession.race_id == race_id).delete(synchronize_session=False)
+    db.query(StudentRaceChallenge).filter(
+        StudentRaceChallenge.race_id == race_id).delete(synchronize_session=False)
+    db.query(KitDemoSession).filter(
+        KitDemoSession.race_id == race_id).delete(synchronize_session=False)
     if run_ids:
         db.query(StudentRunPause).filter(StudentRunPause.run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(MobileGpsBatchReceipt).filter(MobileGpsBatchReceipt.run_id.in_(run_ids)).delete(synchronize_session=False)
@@ -1919,6 +1946,13 @@ def run_events(student_id: str, run_id: str, page: int = Query(1, ge=1), page_si
     points = db.scalars(select(GpsPoint).where(GpsPoint.run_id == run_id).order_by(GpsPoint.recorded_at)).all()
     laps = db.scalars(select(LapEvent).where(LapEvent.run_id == run_id).order_by(LapEvent.occurred_at)).all()
     all_events = [{"type": "GPS", "id": x.id, "occurred_at": x.recorded_at, "wearable_device_id": x.wearable_device_id, "latitude": x.latitude, "longitude": x.longitude, "total_steps": x.total_steps} for x in points] + [{"type": "LAP", "id": x.id, "occurred_at": x.occurred_at, "lap_no": x.lap_no, "duration_s": x.duration_s} for x in laps]
+    checkpoints = db.scalars(select(DeviceEvent).where(
+        DeviceEvent.matched_run_id == run_id).order_by(DeviceEvent.occurred_at)).all()
+    all_events += [{"type": "CHECKPOINT", "id": x.id, "event_id": x.id,
+        "checkpoint_id": x.checkpoint_id, "student_id": run.student_id, "run_id": run_id,
+        "occurred_at": x.occurred_at, "source": x.method or x.event_type,
+        "status": "MATCHED" if x.status == "MATCHED" else x.status}
+        for x in checkpoints]
     all_events.sort(key=lambda x: x["occurred_at"]); start = (page - 1) * page_size
     return {"items": all_events[start:start + page_size], "page": page, "page_size": page_size, "total": len(all_events)}
 
@@ -1948,6 +1982,8 @@ async def live_socket(websocket: WebSocket, race_id: str, key: str | None = None
 # Import mobile models before create_all so the shared SQLite database creates their tables.
 from .student_api import router as student_api_router
 app.include_router(student_api_router)
+from .demos import router as demo_api_router
+app.include_router(demo_api_router)
 
 # Create demo tables, then apply small forward-only migrations for existing local SQLite/SQL Server databases.
 Base.metadata.create_all(bind=engine)
