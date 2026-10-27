@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { build } from "esbuild";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "@playwright/test";
+import { normalize } from "node:path";
 const ref = "E:/Hocccc/Project/Admin Dashboard for NEU RUN";
 const out = "test-results/design-reference";
 await mkdir(out, { recursive: true });
@@ -31,7 +32,13 @@ await writeFile(
 );
 const server = createServer(async (req, res) => {
   try {
-    const path = req.url === "/" ? "index.html" : req.url.slice(1);
+    const requestPath = req.url === "/" ? "index.html" : req.url.slice(1);
+    const path = normalize(requestPath).replace(/^(\.\.(\/|\\|$))+/, "");
+    if (path.startsWith("/") || path.startsWith("\\")) {
+      res.statusCode = 400;
+      res.end();
+      return;
+    }
     res.setHeader(
       "Content-Type",
       path.endsWith(".js")
