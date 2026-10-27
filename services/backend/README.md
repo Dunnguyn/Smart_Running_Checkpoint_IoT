@@ -1,6 +1,6 @@
 # NEU Smart Running — Backend
 
-**Phạm vi: chỉ backend web.** Dự án cung cấp REST API và WebSocket cho Admin Web, dùng **FastAPI**, **SQLAlchemy** và **SQLite** làm cơ sở dữ liệu mặc định. Có thể cấu hình SQL Server sau nếu triển khai cần thiết. Không xây frontend hoặc ứng dụng di động. Thư mục Python `app/` chỉ là tên package chứa mã backend và trình mô phỏng.
+**Phạm vi: backend web và API cho app sinh viên.** Dự án cung cấp REST API và WebSocket cho Admin Web, wearable/Arduino gateway, cùng API Bearer riêng cho app sinh viên trên điện thoại. Dùng **FastAPI**, **SQLAlchemy** và **SQLite** làm cơ sở dữ liệu mặc định. Không xây frontend Admin hoặc giao diện/app mobile trong repository. Thư mục Python `app/` là package backend và trình mô phỏng.
 
 ## Những gì đã có
 
@@ -13,7 +13,7 @@
 - Kiểm tra tọa độ/thời điểm/bước tăng dần, chống gửi lặp và cộng khoảng cách Haversine.
 - API Admin khởi động mặc định 5 sinh viên mô phỏng, gán bib `01`–`05`, tạo wearable/run rồi phát GPS/bước chân chuyển động quanh tòa Thế Kỷ. `GPS_ONLY` cho runner xuất phát đồng thời; `GPS_AND_ARDUINO` mặc định giãn runner 8 giây để tách các event ẩn danh.
 - Simulator chạy liên tục theo polyline khép kín khoảng 425 m/vòng, đi qua bốn tọa độ checkpoint bạn cung cấp; có thêm các điểm bẻ tuyến mô phỏng để đạt 400–450 m. Các điểm bẻ hiện chưa được xác minh là đường chạy thực địa và có thể thay bằng điểm lấy từ bản đồ.
-- API khởi chạy simulator ở chế độ `GPS_ONLY` hoặc `GPS_AND_ARDUINO`; dữ liệu giả được ghi rõ nguồn, không chứng minh danh tính người thật trước cảm biến.
+- API khởi chạy simulator ở chế độ `GPS_ONLY`, Arduino giả lập, hoặc GPS/bước chân mô phỏng kết hợp checkpoint Arduino thật qua cổng COM; chế độ kit không tạo sự kiện Arduino giả.
 - Nhận lap event chỉ từ nguồn có runner ID, kiểm tra giải, thời gian tối thiểu và sự kiện trùng.
 - Kết thúc phiên, tra cứu overview/runners/live/history và phát cập nhật WebSocket sau khi lưu thành công.
 - Phân quyền demo bằng ba API key riêng: Admin, Simulator, Gateway. Khóa cấu hình bằng biến môi trường.
@@ -44,7 +44,7 @@
    # Nếu terminal đang ở repo root; nếu mở thẳng services/backend thì bỏ dòng cd.
    cd services\backend
    .\.venv\Scripts\Activate.ps1
-   uvicorn app.main:app --reload
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
 4. Mở `http://127.0.0.1:8000/docs` để xem và gọi API, hoặc `http://127.0.0.1:8000/health` để xem trạng thái.
@@ -77,6 +77,15 @@ Admin Web có thể đọc tuyến bằng `GET /api/v1/races/{race_id}/route`, t
 
 Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trường; không lưu các key này vào bảng và không commit `.env`. Dùng khóa riêng của bạn thay giá trị mẫu. Các bảng demo được tạo tự động khi ứng dụng khởi động. Với dữ liệu cần bảo toàn hoặc triển khai production, hãy chuyển sang Alembic migration và không dùng `create_all` làm quy trình nâng cấp schema.
 
+## Demo kit COM03 và challenge app sinh viên
+
+- Admin Web chạy từ `apps/admin-web`; cấu hình `.env` tại thư mục này với `VITE_DATA_MODE=api`, `VITE_API_BASE_URL=http://127.0.0.1:8000`, `VITE_WS_BASE_URL=ws://127.0.0.1:8000` và `VITE_ADMIN_API_KEY` phải trùng `ADMIN_API_KEY` của backend. Chạy `npm ci`, `npm run dev` rồi mở `http://127.0.0.1:5173/demos`.
+- Trang **Demo tích hợp** gọi API kit để backend mở trực tiếp cổng Serial COM03 ở 9600 baud. Sketch hiện tại phát `START!` từ nút START và `LAP: n` từ cảm biến; lần qua đầu mở phiên cho MSSV `11235723`, GPS/bước chân mô phỏng chạy một vòng 31 m quanh C04, lần qua thứ hai sau tối thiểu 8 giây chốt phiên. Đóng Arduino Serial Monitor trước khi kết nối vì chỉ một tiến trình có thể giữ COM.
+- API quản trị kit: `GET /api/v1/demos/kit/ports`, `POST /api/v1/demos/kit/sessions` với `{"serial_port":"COM03"}`, `GET /api/v1/demos/kit/sessions/{demo_id}` và `POST /api/v1/demos/kit/sessions/{demo_id}/stop`. Đây là demo; chuyển động và bước chân được gắn nhãn mô phỏng, còn HC-SR04 chỉ xác nhận người qua.
+- API app challenge dùng Bearer token sinh viên: `GET /api/v1/student/races/{race_id}/challenge`, `POST /api/v1/student/races/{race_id}/challenge/sessions` để bắt đầu tại checkpoint GPS, gửi các batch bằng `POST /api/v1/student/runs/{run_id}/gps-batches`, rồi kết thúc tại checkpoint bằng `POST /api/v1/student/challenge-runs/{run_id}/finish`. Mỗi lần chạy là một run riêng; tổng thời gian, GPS, bước và quãng đường được cộng từ các run đã hoàn tất. Tạm dừng/tiếp tục dùng API app hiện có cho run; khi tạm dừng FE dừng thu GPS và khi tiếp tục phải mở segment mới.
+- Admin tạo demo 30 ngày/60 giây bằng `POST /api/v1/demos/health-month` với `{"duration_seconds":60,"seed":42}`. Backend tạo giải 50 km, ba tài khoản thử nghiệm và 30 ngày virtual; response đầu tiên trả MSSV/mật khẩu tạm. Theo dõi bằng `GET /api/v1/demos/health-month/{demo_id}`, dashboard bằng `GET /api/v1/races/{race_id}/challenge/dashboard`, xóa toàn bộ dữ liệu riêng của demo bằng `DELETE /api/v1/demos/health-month/{demo_id}`. Ba kết quả mô phỏng lần lượt khoảng 30 km, 50 km, 64.8 km; dữ liệu mô phỏng được lưu chung schema và có source riêng.
+- Nếu `/api/v1/demos/kit/ports` không liệt kê COM03, kiểm tra Device Manager và cáp USB; không thể xác minh tương tác phần cứng cho đến khi máy nhận đúng cổng.
+
 ## Liên kết frontend
 
 - REST base URL khi chạy local: `http://localhost:8000/api/v1`.
@@ -95,11 +104,15 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 
 ## Liên kết Simulator / Arduino Gateway
 
-Với sketch HC-SR04 đang in `LAP: n` qua Serial, dùng Gateway USB tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md): cài `pyserial`, đăng ký `device_id` vào checkpoint và chạy `python -m app.arduino_gateway --port COM5 --device-id NEU-ARDUINO-C04`. Arduino không có GPS; backend vẫn cần wearable GPS cùng runner để đối chiếu danh tính.
+Với sketch HC-SR04 đang in `LAP: n` qua Serial, chạy demo hỗn hợp ngay từ Admin API: gửi `checkpoint_mode=GPS_AND_ARDUINO`, `kit_serial_port=COM03`, `kit_checkpoint_code=NEU-C01` tới `POST /api/v1/simulations`. Backend tạo 5 sinh viên và GPS/bước chân chuyển động, mở COM03 và chuyển riêng các dòng Serial thật thành checkpoint event; không tạo event Arduino giả. Xem hướng dẫn tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md). Đóng Arduino Serial Monitor trước; cổng COM chỉ một tiến trình được mở.
 
 Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
 
 Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Serial rồi gọi `POST /api/v1/checkpoint-events` với `X-Gateway-Key`, `device_event_id` ổn định và `student_id=null`. Admin đăng ký mapping thiết bị qua `POST /api/v1/checkpoints/{checkpoint_id}/devices`. Chỉ trong chế độ kết hợp, backend ghép event và passage; trường hợp mơ hồ cần `POST /api/v1/checkpoint-events/{event_id}/resolve`. Các API tra cứu là `GET /api/v1/checkpoint-events/{event_id}` và `GET /api/v1/races/{race_id}/checkpoint-events`.
+## API app sinh viên
+
+Luồng app sinh viên tách khỏi Admin key và dùng access/refresh token riêng. Admin tạo hồ sơ gồm mã sinh viên, họ tên, khoa/viện và cấp tài khoản app; sinh viên khám phá giải đã công bố, tự đăng ký khi được mở, nhận bib backend cấp, check-in GPS, bắt đầu chạy, gửi batch GPS, pause/resume, xem lịch sử và dashboard cá nhân. Tự đăng ký và pause/resume là phần mở rộng theo yêu cầu bổ sung so với tài liệu app v1.1. Hướng dẫn endpoint, ví dụ request, cấu hình Android/iOS và giới hạn đã biết: [docs/STUDENT_MOBILE_API.md](../../docs/STUDENT_MOBILE_API.md).
+
 ## Tài liệu nhóm
 
 - [Mã sơ đồ PlantUML](docs/PLANTUML_DIAGRAMS.puml)

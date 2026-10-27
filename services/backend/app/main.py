@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     simulator_api_key: str = "dev-simulator-key-change-me"
     wearable_api_key: str = "dev-wearable-key-change-me"
     gateway_api_key: str = "dev-gateway-key-change-me"
+    student_jwt_secret: str = "dev-student-jwt-secret-change-me"
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     min_lap_interval_seconds: int = 30
     max_gps_speed_mps: float = 12.0
@@ -144,6 +145,7 @@ class RaceParticipant(Base):
     student_id: Mapped[str] = mapped_column(ForeignKey("students.id"), index=True)
     bib_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
     registration_status: Mapped[str] = mapped_column(String(20), default="REGISTERED")
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=True)
     race: Mapped[Race] = relationship(back_populates="participants")
 
 
@@ -194,6 +196,13 @@ class RunSession(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_gps_recorded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_lap_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Mobile app session state and accepted GPS sequence; defaults preserve old rows.
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    last_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    segment_id: Mapped[int] = mapped_column(Integer, default=1)
+    consent_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    consent_granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class GpsPoint(Base):
@@ -212,6 +221,10 @@ class GpsPoint(Base):
     source: Mapped[str] = mapped_column(String(30))
     idempotency_key: Mapped[str] = mapped_column(String(120))
     payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sample_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    segment_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class GPSPassage(Base):
@@ -420,10 +433,17 @@ class SimulationStartIn(BaseModel):
     interval_seconds: float = Field(default=0.5, ge=0.5, le=5)
     # Set 0 to deliberately reproduce close-pack AMBIGUOUS events.
     runner_start_gap_seconds: float | None = Field(default=None, ge=0, le=12)
+    # When supplied, GPS/steps remain simulated but LAP events come only from this USB kit.
+    kit_serial_port: str | None = Field(default=None, min_length=4, max_length=8, pattern=r"^COM\d{1,3}$")
+    kit_checkpoint_code: str = Field(default="NEU-C01", pattern=r"^NEU-C0[1-4]$")
 
 
 class GpsIn(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
+    sample_id: str | None = None
+    sequence: int | None = Field(default=None, ge=1)
+    batch_id: str | None = None
+    segment_id: int | None = Field(default=None, ge=1)
     race_id: str
     run_id: str
     student_id: str
@@ -703,13 +723,20 @@ def maybe_complete_race(db: Session, race: Race, ended_at: datetime) -> None:
     race.end_at = aware(ended_at)
 
 
+def _mobile_run_event_data(db: Session, run: RunSession) -> dict[str, Any]:
+    from .student_api import _run_snapshot
+    return _run_snapshot(db, run)
+
+
 def maybe_complete_run(db: Session, run: RunSession, crossed_at: datetime) -> bool:
     """Stop the clock and mark the runner complete as soon as the race lap target is met."""
     race = db.get(Race, run.race_id)
     if run.status == "ACTIVE" and race and run.lap_count >= race.total_laps:
         run.status = "COMPLETED"
         run.ended_at = aware(crossed_at)
+        run.finalized_at = now_utc()
         run.duration_total_s = max(0, int((aware(crossed_at) - aware(run.started_at)).total_seconds()))
+        run.revision += 1
         maybe_complete_race(db, race, crossed_at)
         return True
     return False
@@ -721,6 +748,10 @@ def record_lap(db: Session, run: RunSession, checkpoint: Checkpoint, crossed_at:
         return False, None
     race = db.get(Race, run.race_id)
     occurred = aware(crossed_at)
+    if run.source == "MOBILE_GPS":
+        from .student_api import run_is_paused_at
+        if run_is_paused_at(db, run.id, occurred):
+            return False, None
     anchor = aware(run.last_lap_at or run.started_at)
     duration = int((occurred - anchor).total_seconds())
     minimum_lap_seconds = race.min_lap_interval_seconds if race else settings.min_lap_interval_seconds
@@ -819,10 +850,16 @@ def finish_match(db: Session, event: DeviceEvent, candidate: dict[str, Any], pas
     event.candidates_final = True
     passage.consumed_by_event_id = event.id
     event.lap_status = "NOT_COUNTED"
+    mobile_paused = False
+    if run.source == "MOBILE_GPS":
+        from .student_api import run_is_paused_at
+        mobile_paused = run_is_paused_at(db, run.id, aware(event.occurred_at))
     if run.status != "ACTIVE":
         event.reason_code = "RUN_NOT_ACTIVE"
     elif checkpoint.kind != "LAP":
         event.reason_code = "CHECKPOINT_NOT_LAP"
+    elif mobile_paused:
+        event.reason_code = "RUN_PAUSED"
     else:
         lap_source_id = f"device-event:{event.id}"
         counted, duration = record_lap(db, run, checkpoint, aware(event.occurred_at), "ARDUINO_GATEWAY", lap_source_id)
@@ -946,7 +983,12 @@ def create_race(data: RaceIn, db: Session = Depends(db_session)):
 
 @app.get("/api/v1/races", dependencies=[Depends(admin)])
 def list_races(db: Session = Depends(db_session)):
-    return {"items": [{"race_id": r.id, "name": r.name, "status": r.status, "start_at": r.start_at} for r in db.scalars(select(Race)).all()]}
+    rows = db.scalars(select(Race).order_by(Race.start_at.desc().nullslast(), Race.id.desc())).all()
+    return {"items": [{"race_id": r.id, "name": r.name, "status": r.status,
+        "start_at": r.start_at, "end_at": r.end_at, "location": r.route_name or "NEU",
+        "total_laps": r.total_laps,
+        "participant_count": db.scalar(select(func.count(RaceParticipant.id)).where(
+            RaceParticipant.race_id == r.id)) or 0} for r in rows]}
 
 
 # [FE LINK: SIMULATOR CONTROL] Admin starts, polls, or stops the five-runner
@@ -955,6 +997,8 @@ def list_races(db: Session = Depends(db_session)):
 def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
     if data.checkpoint_mode not in {"GPS_ONLY", "GPS_AND_ARDUINO"}:
         envelope_error("INVALID_CHECKPOINT_MODE", "checkpoint_mode phải là GPS_ONLY hoặc GPS_AND_ARDUINO.", 422)
+    if data.kit_serial_port and data.checkpoint_mode != "GPS_AND_ARDUINO":
+        envelope_error("KIT_REQUIRES_COMBINED_MODE", "Kết nối bộ kit yêu cầu checkpoint_mode=GPS_AND_ARDUINO.", 422)
     with _simulation_jobs_lock:
         for existing_id, existing in _simulation_jobs.items():
             process = existing.get("process")
@@ -970,6 +1014,9 @@ def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
                    "--interval", str(data.interval_seconds)]
         if data.runner_start_gap_seconds is not None:
             command.extend(["--start-gap", str(data.runner_start_gap_seconds)])
+        if data.kit_serial_port:
+            command.extend(["--kit-port", data.kit_serial_port,
+                            "--kit-checkpoint-code", data.kit_checkpoint_code])
         child_env = os.environ.copy()
         child_env["PYTHONUNBUFFERED"] = "1"
         try:
@@ -984,8 +1031,10 @@ def start_demo_simulation(data: SimulationStartIn = SimulationStartIn()):
                 )
         except OSError as exc:
             envelope_error("SIMULATOR_START_FAILED", f"Không khởi chạy được simulator: {exc}", 500)
+        displayed_mode = (f"GPS_AND_ARDUINO_KIT:{data.kit_serial_port}:{data.kit_checkpoint_code}"
+                         if data.kit_serial_port else data.checkpoint_mode)
         _simulation_jobs[job_id] = {"process": process, "log_path": log_path,
-                                    "started_at": now_utc(), "mode": data.checkpoint_mode,
+                                    "started_at": now_utc(), "mode": displayed_mode,
                                     "stop_requested": False, "finished_at": None}
         return {**_simulation_job_snapshot(job_id), "already_running": False}
 
@@ -1021,6 +1070,8 @@ def stop_demo_simulation(simulation_id: str):
 def delete_race(race_id: str, db: Session = Depends(db_session)):
     """Delete one race and its race-owned records while preserving student profiles."""
     race = get_or_404(db, Race, race_id, "giải chạy")
+    from .student_api import (MobileGpsBatchReceipt, StudentAttendance,
+        StudentAttendanceConfig, StudentMutationReceipt, StudentRacePolicy, StudentRunPause)
     for simulation_id, job in list(_simulation_jobs.items()):
         process = job.get("process")
         if not process or process.poll() is not None:
@@ -1049,7 +1100,31 @@ def delete_race(race_id: str, db: Session = Depends(db_session)):
     event_ids = db.scalars(select(DeviceEvent.id).where(DeviceEvent.checkpoint_id.in_(checkpoint_ids))).all() if checkpoint_ids else []
     if event_ids:
         db.query(MatchAudit).filter(MatchAudit.event_id.in_(event_ids)).delete(synchronize_session=False)
+    # Demo-specific rows reference race/run records; remove their metadata before
+    # the shared race deletion below. Student profiles and accounts are retained.
+    from .demos import (
+        ChallengeAppSession,
+        HealthChallengeDemo,
+        HealthChallengeDemoDay,
+        KitDemoSession,
+        StudentRaceChallenge,
+    )
+    health_demo_ids = db.scalars(select(HealthChallengeDemo.id).where(
+        HealthChallengeDemo.race_id == race_id)).all()
+    if health_demo_ids:
+        db.query(HealthChallengeDemoDay).filter(
+            HealthChallengeDemoDay.demo_id.in_(health_demo_ids)).delete(synchronize_session=False)
+        db.query(HealthChallengeDemo).filter(
+            HealthChallengeDemo.id.in_(health_demo_ids)).delete(synchronize_session=False)
+    db.query(ChallengeAppSession).filter(
+        ChallengeAppSession.race_id == race_id).delete(synchronize_session=False)
+    db.query(StudentRaceChallenge).filter(
+        StudentRaceChallenge.race_id == race_id).delete(synchronize_session=False)
+    db.query(KitDemoSession).filter(
+        KitDemoSession.race_id == race_id).delete(synchronize_session=False)
     if run_ids:
+        db.query(StudentRunPause).filter(StudentRunPause.run_id.in_(run_ids)).delete(synchronize_session=False)
+        db.query(MobileGpsBatchReceipt).filter(MobileGpsBatchReceipt.run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(IdempotencyRecord).filter(IdempotencyRecord.resource_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(GPSPassage).filter(GPSPassage.run_id.in_(run_ids)).delete(synchronize_session=False)
         db.query(GeofenceState).filter(GeofenceState.run_id.in_(run_ids)).delete(synchronize_session=False)
@@ -1062,6 +1137,12 @@ def delete_race(race_id: str, db: Session = Depends(db_session)):
         db.query(LapEvent).filter(LapEvent.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
         db.query(Device).filter(Device.checkpoint_id.in_(checkpoint_ids)).delete(synchronize_session=False)
     db.query(RaceRoutePoint).filter(RaceRoutePoint.race_id == race_id).delete(synchronize_session=False)
+    participant_ids = db.scalars(select(RaceParticipant.id).where(RaceParticipant.race_id == race_id)).all()
+    if participant_ids:
+        db.query(StudentAttendance).filter(StudentAttendance.registration_id.in_(participant_ids)).delete(synchronize_session=False)
+    db.query(StudentAttendanceConfig).filter(StudentAttendanceConfig.race_id == race_id).delete(synchronize_session=False)
+    db.query(StudentRacePolicy).filter(StudentRacePolicy.race_id == race_id).delete(synchronize_session=False)
+    db.query(StudentMutationReceipt).filter(StudentMutationReceipt.method_path.like(f"%{race_id}%")).delete(synchronize_session=False)
     db.query(RaceParticipant).filter(RaceParticipant.race_id == race_id).delete(synchronize_session=False)
     db.query(RunSession).filter(RunSession.race_id == race_id).delete(synchronize_session=False)
     db.query(Checkpoint).filter(Checkpoint.race_id == race_id).delete(synchronize_session=False)
@@ -1328,9 +1409,15 @@ def list_participants(race_id: str, db: Session = Depends(db_session)):
 
 @app.post("/api/v1/races/{race_id}/participants", status_code=201, dependencies=[Depends(admin)])
 def add_participant(race_id: str, data: ParticipantIn, db: Session = Depends(db_session)):
-    get_or_404(db, Race, race_id, "giải chạy"); get_or_404(db, Student, data.student_id, "sinh viên")
+    lock_race_configuration(db, race_id); get_or_404(db, Student, data.student_id, "sinh viên")
     existing = db.scalar(select(RaceParticipant).where(RaceParticipant.race_id == race_id, RaceParticipant.student_id == data.student_id))
     if existing: envelope_error("ALREADY_REGISTERED", "Sinh viên đã đăng ký giải chạy.")
+    from .student_api import StudentRacePolicy
+    policy = db.get(StudentRacePolicy, race_id)
+    registered_count = db.scalar(select(func.count(RaceParticipant.id)).where(
+        RaceParticipant.race_id == race_id, RaceParticipant.registration_status == "REGISTERED")) or 0
+    if policy and policy.capacity is not None and registered_count >= policy.capacity:
+        envelope_error("RACE_FULL", "Giải đã đủ số lượng sinh viên.")
     bib_number = (data.bib_number or "").strip()
     if not bib_number:
         current_bibs = db.scalars(select(RaceParticipant.bib_number).where(RaceParticipant.race_id == race_id)).all()
@@ -1338,9 +1425,12 @@ def add_participant(race_id: str, data: ParticipantIn, db: Session = Depends(db_
         bib_number = f"{max(used_numbers, default=0) + 1:02d}"
     if db.scalar(select(RaceParticipant.id).where(RaceParticipant.race_id == race_id, RaceParticipant.bib_number == bib_number)):
         envelope_error("BIB_NUMBER_EXISTS", "Số báo danh đã được dùng trong giải.")
-    participant = RaceParticipant(race_id=race_id, student_id=data.student_id, bib_number=bib_number)
+    participant = RaceParticipant(race_id=race_id, student_id=data.student_id,
+                                  bib_number=bib_number, registration_status="REGISTERED")
     db.add(participant); db.commit()
-    return {"race_id": race_id, "student_id": data.student_id, "registration_status": "REGISTERED", "display_id": participant.bib_number, "bib_number": participant.bib_number}
+    return {"race_id": race_id, "student_id": data.student_id, "registration_status": "REGISTERED",
+            "display_id": participant.bib_number, "bib_number": participant.bib_number,
+            "registered_at": participant.registered_at}
 
 
 def run_dict(db: Session, run: RunSession) -> dict[str, Any]:
@@ -1351,7 +1441,14 @@ def run_dict(db: Session, run: RunSession) -> dict[str, Any]:
     latest_telemetry = db.scalar(select(GpsPoint).where(GpsPoint.run_id == run.id).order_by(GpsPoint.recorded_at.desc()).limit(1))
     telemetry_source = latest_telemetry.source if latest_telemetry else None
     elapsed = run.duration_total_s if run.duration_total_s is not None else max(0, int((now_utc() - aware(run.started_at)).total_seconds()))
-    return {"run_id": run.id, "race_id": run.race_id, "student_id": run.student_id, "display_id": participant.bib_number if participant else None, "bib_number": participant.bib_number if participant else None, "wearable_device_id": run.wearable_device_id, "wearable_status": wearable.status if wearable else "NOT_REGISTERED", "wearable_last_seen_at": wearable.last_seen_at if wearable else None, "student_code": student.student_code if student else None, "full_name": student.full_name if student else None, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "total_laps": race.total_laps if race else None, "source": telemetry_source or run.source, "run_source": run.source, "telemetry_source": telemetry_source, "started_at": run.started_at, "ended_at": run.ended_at, "distance_total_m": round(run.distance_total_m, 2), "duration_total_s": elapsed, "lap_count": run.lap_count, "last_lap_duration_s": run.last_lap_duration_s, "total_steps": run.total_steps, "last_latitude": run.last_latitude, "last_longitude": run.last_longitude, "last_seen_at": run.last_seen_at}
+    mobile_state: dict[str, Any] = {}
+    if run.source == "MOBILE_GPS":
+        from .student_api import _run_snapshot
+        snapshot = _run_snapshot(db, run)
+        mobile_state = {key: snapshot[key] for key in (
+            "tracking_state", "active_seconds", "paused_seconds", "paused_at", "revision",
+            "segment_id", "tracking_required")}
+    return {"run_id": run.id, "race_id": run.race_id, "student_id": run.student_id, "display_id": participant.bib_number if participant else None, "bib_number": participant.bib_number if participant else None, "wearable_device_id": run.wearable_device_id, "wearable_status": wearable.status if wearable else "NOT_REGISTERED", "wearable_last_seen_at": wearable.last_seen_at if wearable else None, "student_code": student.student_code if student else None, "full_name": student.full_name if student else None, "faculty": student.faculty if student else None, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "total_laps": race.total_laps if race else None, "source": telemetry_source or run.source, "run_source": run.source, "telemetry_source": telemetry_source, "started_at": run.started_at, "ended_at": run.ended_at, "distance_total_m": round(run.distance_total_m, 2), "duration_total_s": elapsed, "lap_count": run.lap_count, "last_lap_duration_s": run.last_lap_duration_s, "total_steps": run.total_steps, "last_latitude": run.last_latitude, "last_longitude": run.last_longitude, "last_seen_at": run.last_seen_at, **mobile_state}
 
 
 # [DEVICE LINK: GPS + STEPS] A run is bound to the wearable already paired to this student.
@@ -1411,8 +1508,13 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
     if run.race_id != data.race_id or run.student_id != data.student_id: envelope_error("RUN_IDENTITY_MISMATCH", "Thông tin giải hoặc sinh viên không khớp phiên chạy.")
     if run.status != "ACTIVE": envelope_error("RUN_NOT_ACTIVE", "Phiên chạy không ở trạng thái đang chạy.")
     if run.wearable_device_id != data.wearable_device_id: envelope_error("WEARABLE_RUN_MISMATCH", "Thiết bị telemetry không được gán cho phiên chạy này.")
-    wearable = get_or_404(db, RunnerWearable, data.wearable_device_id, "thiết bị đeo")
-    if wearable.student_id != run.student_id or wearable.status != "ACTIVE": envelope_error("WEARABLE_RUNNER_MISMATCH", "Thiết bị GPS/bước chân không được gán cho runner này.")
+    if auth_source == "MOBILE":
+        if run.source != "MOBILE_GPS" or not (data.wearable_device_id or "").startswith("MOBILE:"):
+            envelope_error("MOBILE_RUN_BINDING_MISMATCH", "Phiên chạy không được mở bởi app sinh viên.", 403)
+        wearable = None
+    else:
+        wearable = get_or_404(db, RunnerWearable, data.wearable_device_id, "thiết bị đeo")
+        if wearable.student_id != run.student_id or wearable.status != "ACTIVE": envelope_error("WEARABLE_RUNNER_MISMATCH", "Thiết bị GPS/bước chân không được gán cho runner này.")
     recorded = aware(data.recorded_at)
     race = get_or_404(db, Race, run.race_id, "giải chạy")
     validation_now = now_utc()
@@ -1425,18 +1527,29 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
     if run.last_gps_recorded_at and recorded <= aware(run.last_gps_recorded_at): envelope_error("GPS_OUT_OF_ORDER", "Thời điểm GPS phải tăng dần.", 422)
     if data.total_steps < run.total_steps: envelope_error("STEPS_DECREASED", "Snapshot bước chân không được nhỏ hơn giá trị đã lưu.", 422)
     previous_latitude, previous_longitude = run.last_latitude, run.last_longitude
+    current_segment_id = run.segment_id
+    sample_gap_seconds = ((recorded - aware(run.last_gps_recorded_at)).total_seconds()
+                          if run.last_gps_recorded_at is not None else None)
+    if sample_gap_seconds is not None and sample_gap_seconds > race.max_sample_gap_seconds:
+        # A long outage starts a new GPS segment. Never bridge distance or infer a checkpoint passage.
+        previous_latitude = previous_longitude = None
+        current_segment_id += 1
     delta = 0.0
     if previous_latitude is not None and previous_longitude is not None:
         delta = haversine_m(previous_latitude, previous_longitude, data.latitude, data.longitude)
-        if run.last_gps_recorded_at is not None:
-            seconds = (recorded - aware(run.last_gps_recorded_at)).total_seconds()
+        if sample_gap_seconds is not None:
             max_speed = settings.max_simulator_speed_mps if auth_source == "SIMULATOR" else settings.max_gps_speed_mps
-            if delta / seconds > max_speed: envelope_error("GPS_JUMP_REJECTED", f"Điểm GPS vượt ngưỡng {max_speed:g} m/s của nguồn {auth_source}.", 422)
+            if delta / sample_gap_seconds > max_speed: envelope_error("GPS_JUMP_REJECTED", f"Điểm GPS vượt ngưỡng {max_speed:g} m/s của nguồn {auth_source}.", 422)
     received = validation_now
-    telemetry_source = "SIMULATED_GPS" if auth_source == "SIMULATOR" else "WEARABLE_GPS"
-    point = GpsPoint(run_id=run.id, wearable_device_id=wearable.id, latitude=data.latitude, longitude=data.longitude, recorded_at=recorded, received_at=received, accuracy_m=data.accuracy_m, speed_mps=data.speed_mps, total_steps=data.total_steps, source=telemetry_source, idempotency_key=data.idempotency_key, payload_hash=request_hash)
+    telemetry_source = "SIMULATED_GPS" if auth_source == "SIMULATOR" else "MOBILE_GPS" if auth_source == "MOBILE" else "WEARABLE_GPS"
+    point = GpsPoint(run_id=run.id, wearable_device_id=wearable.id if wearable else data.wearable_device_id, latitude=data.latitude, longitude=data.longitude, recorded_at=recorded, received_at=received, accuracy_m=data.accuracy_m, speed_mps=data.speed_mps, total_steps=data.total_steps, source=telemetry_source, idempotency_key=data.idempotency_key, payload_hash=request_hash, sample_id=data.sample_id, sequence=data.sequence, batch_id=data.batch_id, segment_id=current_segment_id)
     db.add(point); run.distance_total_m += delta; run.total_steps = data.total_steps; run.last_latitude = data.latitude; run.last_longitude = data.longitude; run.last_seen_at = received; run.last_gps_recorded_at = recorded
-    wearable.last_seen_at = received
+    if data.sequence is not None:
+        run.last_sequence = data.sequence
+    run.segment_id = current_segment_id
+    run.revision += 1
+    if wearable:
+        wearable.last_seen_at = received
     db.flush()
 
     # A checkpoint pass is inferred from an outside-to-inside GPS geofence transition.
@@ -1459,7 +1572,7 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
                 continue
             passage = GPSPassage(
                 race_id=race.id, checkpoint_id=checkpoint.id, run_id=run.id, student_id=run.student_id,
-                wearable_device_id=wearable.id, entry_gps_point_id=point.id, entry_at=recorded,
+                wearable_device_id=wearable.id if wearable else data.wearable_device_id, entry_gps_point_id=point.id, entry_at=recorded,
                 received_at=received, entry_distance_m=current_distance,
                 telemetry_source=telemetry_source, config_version=race.config_version,
             )
@@ -1506,7 +1619,7 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
             elif previous_region == "OUTSIDE" and distance <= race.inner_radius_m:
                 state.region = "INSIDE"
                 passage = GPSPassage(race_id=race.id, checkpoint_id=checkpoint.id, run_id=run.id, student_id=run.student_id,
-                    wearable_device_id=wearable.id, previous_gps_point_id=previous_point_id, entry_gps_point_id=point.id,
+                    wearable_device_id=wearable.id if wearable else data.wearable_device_id, previous_gps_point_id=previous_point_id, entry_gps_point_id=point.id,
                     entry_at=recorded, received_at=received, entry_distance_m=distance,
                     telemetry_source=telemetry_source, config_version=race.config_version)
                 db.add(passage); db.flush()
@@ -1530,6 +1643,10 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
         await hub.publish(run.race_id, {"type": "checkpoint.passed", "race_id": run.race_id, "occurred_at": recorded.isoformat(), "data": crossing})
     if run.status == "COMPLETED":
         await hub.publish(run.race_id, {"type": "runner.completed", "race_id": run.race_id, "occurred_at": received.isoformat(), "data": run_dict(db, run)})
+    if auth_source == "MOBILE":
+        from .student_api import publish_student_event
+        await publish_student_event(run.student_id, "run.completed" if run.status == "COMPLETED" else "run.updated",
+                                    "RUN", run.id, run.revision, _mobile_run_event_data(db, run))
     return {"accepted": True, "gps_point_id": point.id, "source": telemetry_source, "distance_delta_m": round(delta, 2), "distance_total_m": round(run.distance_total_m, 2), "total_steps": run.total_steps, "lap_count": run.lap_count, "status": run.status, "display_status": "DONE" if run.status == "COMPLETED" else run.status, "is_done": run.status == "COMPLETED", "duration_total_s": run_dict(db, run)["duration_total_s"], "ended_at": run.ended_at, "checkpoint_crossings": crossings, "received_at": received}
 
 
@@ -1669,6 +1786,10 @@ async def create_lap(data: LapIn, db: Session = Depends(db_session)):
     if race.checkpoint_mode == "GPS_AND_ARDUINO":
         envelope_error("PHYSICAL_CONFIRMATION_REQUIRED", "Ở chế độ GPS_AND_ARDUINO chỉ sự kiện Arduino đã ghép mới được tính vòng.")
     occurred = aware(data.occurred_at)
+    if run.source == "MOBILE_GPS":
+        from .student_api import run_is_paused_at
+        if run_is_paused_at(db, run.id, occurred):
+            envelope_error("RUN_PAUSED", "Không thể xác nhận vòng trong khoảng tạm dừng.")
     counted, duration = record_lap(db, run, checkpoint, occurred, data.source, data.source_event_id)
     if not counted:
         envelope_error("LAP_TOO_SOON" if duration is not None and duration >= 0 else "NON_MONOTONIC_CROSSING_TIME", "Thời điểm vòng không hợp lệ hoặc chưa đủ thời gian tối thiểu.", 422)
@@ -1685,7 +1806,12 @@ async def finish_run(run_id: str, data: FinishIn, db: Session = Depends(db_sessi
     run = get_or_404(db, RunSession, run_id, "phiên chạy")
     if run.status == "COMPLETED": return {"run_id": run.id, "status": run.status, "display_status": "DONE", "is_done": True, "started_at": run.started_at, "ended_at": run.ended_at, "duration_total_s": run.duration_total_s, "distance_total_m": run.distance_total_m, "lap_count": run.lap_count, "total_steps": run.total_steps}
     if run.status != "ACTIVE": envelope_error("RUN_NOT_ACTIVE", "Chỉ phiên ACTIVE mới kết thúc được.")
-    run.ended_at = now_utc(); run.duration_total_s = max(0, int((run.ended_at - aware(run.started_at)).total_seconds())); run.status = "COMPLETED"
+    run.ended_at = now_utc()
+    if run.source == "MOBILE_GPS":
+        from .student_api import close_open_pause
+        close_open_pause(db, run.id, run.ended_at)
+    run.finalized_at = run.ended_at; run.revision += 1
+    run.duration_total_s = max(0, int((run.ended_at - aware(run.started_at)).total_seconds())); run.status = "COMPLETED"
     maybe_complete_race(db, db.get(Race, run.race_id), run.ended_at)
     db.commit()
     await hub.publish(run.race_id, {"type": "runner.completed", "data": {"student_id": run.student_id, "run_id": run.id, "duration_total_s": run.duration_total_s}})
@@ -1820,6 +1946,13 @@ def run_events(student_id: str, run_id: str, page: int = Query(1, ge=1), page_si
     points = db.scalars(select(GpsPoint).where(GpsPoint.run_id == run_id).order_by(GpsPoint.recorded_at)).all()
     laps = db.scalars(select(LapEvent).where(LapEvent.run_id == run_id).order_by(LapEvent.occurred_at)).all()
     all_events = [{"type": "GPS", "id": x.id, "occurred_at": x.recorded_at, "wearable_device_id": x.wearable_device_id, "latitude": x.latitude, "longitude": x.longitude, "total_steps": x.total_steps} for x in points] + [{"type": "LAP", "id": x.id, "occurred_at": x.occurred_at, "lap_no": x.lap_no, "duration_s": x.duration_s} for x in laps]
+    checkpoints = db.scalars(select(DeviceEvent).where(
+        DeviceEvent.matched_run_id == run_id).order_by(DeviceEvent.occurred_at)).all()
+    all_events += [{"type": "CHECKPOINT", "id": x.id, "event_id": x.id,
+        "checkpoint_id": x.checkpoint_id, "student_id": run.student_id, "run_id": run_id,
+        "occurred_at": x.occurred_at, "source": x.method or x.event_type,
+        "status": "MATCHED" if x.status == "MATCHED" else x.status}
+        for x in checkpoints]
     all_events.sort(key=lambda x: x["occurred_at"]); start = (page - 1) * page_size
     return {"items": all_events[start:start + page_size], "page": page, "page_size": page_size, "total": len(all_events)}
 
@@ -1846,6 +1979,12 @@ async def live_socket(websocket: WebSocket, race_id: str, key: str | None = None
         hub.disconnect(race_id, websocket)
 
 
+# Import mobile models before create_all so the shared SQLite database creates their tables.
+from .student_api import router as student_api_router
+app.include_router(student_api_router)
+from .demos import router as demo_api_router
+app.include_router(demo_api_router)
+
 # Create demo tables, then apply small forward-only migrations for existing local SQLite/SQL Server databases.
 Base.metadata.create_all(bind=engine)
 
@@ -1853,8 +1992,14 @@ Base.metadata.create_all(bind=engine)
 def migrate_demo_schema() -> None:
     """Keep existing demo DBs usable; production deployments should use Alembic revisions."""
     additions = {
-        "run_sessions": {"wearable_device_id": "VARCHAR(80) NULL"},
-        "gps_points": {"wearable_device_id": "VARCHAR(80) NULL", "payload_hash": "VARCHAR(64) NULL"},
+        "race_participants": {"registered_at": "DATETIME NULL"},
+        "run_sessions": {"wearable_device_id": "VARCHAR(80) NULL",
+            "revision": "INTEGER NOT NULL DEFAULT 1", "last_sequence": "INTEGER NOT NULL DEFAULT 0",
+            "segment_id": "INTEGER NOT NULL DEFAULT 1", "consent_version": "VARCHAR(40) NULL",
+            "consent_granted_at": "DATETIME NULL", "finalized_at": "DATETIME NULL"},
+        "gps_points": {"wearable_device_id": "VARCHAR(80) NULL", "payload_hash": "VARCHAR(64) NULL",
+            "sample_id": "VARCHAR(36) NULL", "sequence": "INTEGER NULL", "batch_id": "VARCHAR(36) NULL",
+            "segment_id": "INTEGER NULL"},
         "idempotency_records": {"request_hash": "VARCHAR(64) NULL"},
         "races": {
             "route_profile": "VARCHAR(30) NOT NULL DEFAULT 'CUSTOM'",

@@ -1,7 +1,8 @@
-"""Stream moving GPS and step snapshots around the NEU Centennial Building demo loop.
+"""Stream simulated GPS/steps, optionally using a real Arduino checkpoint on COM.
 
 Run with: python -m app.simulator
-Coordinates and step counts are simulated; no real wearable or Arduino is needed.
+In kit mode only checkpoint events are read from the connected Arduino; runner
+identity, route movement, GPS, and steps remain simulated demo data.
 """
 from __future__ import annotations
 
@@ -10,6 +11,8 @@ import json
 import math
 import os
 import random
+import re
+import serial
 import sys
 import time
 import urllib.error
@@ -112,8 +115,16 @@ def position_at(points: list[dict], lengths: list[float], along_m: float) -> tup
     return points[0]["latitude"], points[0]["longitude"]
 
 
+def normalize_com_port(value: str) -> str:
+    """Windows and pyserial use canonical COMn names; accept user spelling COM03."""
+    match = re.fullmatch(r"COM0*(\d+)", value.strip(), flags=re.IGNORECASE)
+    if not match or int(match.group(1)) < 1:
+        raise ValueError("Cổng kit phải có dạng COM3 hoặc COM03.")
+    return f"COM{int(match.group(1))}"
+
+
 def main() -> None:
-    """Create five moving demo runners and stream GPS/steps over four laps."""
+    """Create five moving GPS/step simulations and optionally read real Arduino events."""
     parser = argparse.ArgumentParser(description="Mô phỏng sinh viên chạy quanh tòa Thế Kỷ NEU với 4 checkpoint/vòng.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Địa chỉ API backend")
     parser.add_argument("--interval", type=float, default=0.5, help="Chu kỳ gửi GPS, mặc định 0.5 giây")
@@ -121,14 +132,30 @@ def main() -> None:
     parser.add_argument("--students", type=int, default=5, help="Số sinh viên giả lập, mặc định 5")
     parser.add_argument("--seed", type=int, default=42, help="Seed để tái lập cùng tốc độ từng runner")
     parser.add_argument("--mode", choices=("GPS_ONLY", "GPS_AND_ARDUINO"), default="GPS_ONLY",
-                        help="GPS_ONLY mô phỏng GPS/bước chân; combined kiểm tra ghép event Arduino")
+                        help="GPS_ONLY; GPS_AND_ARDUINO dùng Arduino giả lập trừ khi có --kit-port")
     parser.add_argument("--start-gap", type=float, default=None,
                         help="Khoảng cách thời gian giữa runner; mặc định 8 giây ở GPS_AND_ARDUINO, 0 ở GPS_ONLY")
+    parser.add_argument("--kit-port", default=None, help="Cổng COM của bộ kit thật, ví dụ COM03")
+    parser.add_argument("--kit-checkpoint-code", default="NEU-C01", choices=[p["code"] for p in ROUTE_CHECKPOINTS],
+                        help="Checkpoint ánh xạ với kit thật; mặc định NEU-C01")
     args = parser.parse_args()
     if args.interval < 0.5 or args.laps < 1 or not 1 <= args.students <= 100:
         parser.error("interval phải >= 0.5 giây, laps >= 1 và students nằm trong 1..100")
     if args.start_gap is not None and not 0 <= args.start_gap <= 12:
         parser.error("start-gap phải nằm trong 0..12 giây")
+    if args.kit_port and args.mode != "GPS_AND_ARDUINO":
+        parser.error("--kit-port chỉ dùng với --mode GPS_AND_ARDUINO")
+    kit_board = None
+    kit_port = None
+    if args.kit_port:
+        try:
+            kit_port = normalize_com_port(args.kit_port)
+            kit_board = serial.Serial(kit_port, 9600, timeout=0)
+            # Opening USB serial may reset the Arduino. Allow its sketch to boot.
+            time.sleep(2.0)
+            kit_board.reset_input_buffer()
+        except (ValueError, serial.SerialException) as exc:
+            raise RuntimeError(f"Không mở được bộ kit trên {args.kit_port}: {exc}") from exc
     start_gap_seconds = args.start_gap
     if start_gap_seconds is None:
         start_gap_seconds = 8.0 if args.mode == "GPS_AND_ARDUINO" else 0.0
@@ -154,17 +181,22 @@ def main() -> None:
     print(f"Race {race_id} đang được khởi tạo.", flush=True)
 
     created_checkpoints = []
-    gateway_device_ids = []
+    gateway_device_ids = {}
+    selected_kit_checkpoint = args.kit_checkpoint_code if kit_board else "NEU-C01"
     for point in ROUTE_CHECKPOINTS:
+        checkpoint_data = dict(point)
+        if args.mode == "GPS_AND_ARDUINO":
+            checkpoint_data["kind"] = "LAP" if point["code"] == selected_kit_checkpoint else "CHECKPOINT"
         checkpoint = request_json(args.base_url, f"/api/v1/races/{race_id}/checkpoints", "POST", {
-            **point, "radius_m": 8.0,
+            **checkpoint_data, "radius_m": 8.0,
         }, admin_key, admin_header)
         created_checkpoints.append(checkpoint)
-        if args.mode == "GPS_AND_ARDUINO":
-            device_id = f"sim-arduino-{run_tag}-c{point['sequence_no']}"
+        if args.mode == "GPS_AND_ARDUINO" and point["code"] == selected_kit_checkpoint:
+            device_id = f"neu-arduino-{run_tag}-{point['code'].lower()}"
+            device_name = f"Bộ kit thật {kit_port}" if kit_board else f"Gateway mô phỏng {point['code']}"
             request_json(args.base_url, f"/api/v1/checkpoints/{checkpoint['checkpoint_id']}/devices", "POST",
-                         {"device_id": device_id, "name": f"Gateway mô phỏng {point['code']}"}, admin_key, admin_header)
-            gateway_device_ids.append(device_id)
+                         {"device_id": device_id, "name": device_name}, admin_key, admin_header)
+            gateway_device_ids[point["code"]] = device_id
 
     # Save the ordered route geometry so the map/dashboard use the same path
     # as the simulator. The route API synchronizes all checkpoint anchor points.
@@ -249,9 +281,12 @@ def main() -> None:
         runner["run_id"] = run["run_id"]
 
     print(f"Race {race_id}: {args.students} sinh viên, {args.laps} vòng, 4 checkpoint/vòng.")
-    print(f"Tuyến polyline mô phỏng: khoảng {route_length:.1f}m/vòng, xuất phát/đích vòng tại NEU-C01.")
-    if args.mode == "GPS_AND_ARDUINO":
-        print(f"GPS_AND_ARDUINO: cách nhau {start_gap_seconds:.1f}s/runner để event có thể ghép duy nhất; nếu cửa sổ vẫn chồng lấn, backend giữ AMBIGUOUS.")
+    print(f"Tuyến polyline mô phỏng: khoảng {route_length:.1f}m/vòng, xuất phát tại NEU-C01; điểm tính lap: {selected_kit_checkpoint}.")
+    if args.mode == "GPS_AND_ARDUINO" and kit_board:
+        print(f"BỘ KIT THẬT: {kit_port} → {selected_kit_checkpoint}; chỉ dòng LAP từ Serial tạo checkpoint event. GPS/bước chân/sinh viên đang mô phỏng.")
+        print(f"Thiết bị đã đăng ký: {gateway_device_ids[selected_kit_checkpoint]}. Đưa vật qua cảm biến khi GPS runner ở checkpoint; matching vẫn dùng cửa sổ thời gian của backend.")
+    elif args.mode == "GPS_AND_ARDUINO":
+        print(f"GPS_AND_ARDUINO mô phỏng: cách nhau {start_gap_seconds:.1f}s/runner để event có thể ghép duy nhất; nếu cửa sổ chồng lấn, backend giữ AMBIGUOUS.")
     else:
         print("GPS_ONLY: các runner xuất phát đồng thời.")
     print(f"GPS + bước chân chuyển động liên tục; pace mô phỏng tăng tốc {min(r['speed_mps'] for r in runners):.2f}–{max(r['speed_mps'] for r in runners):.2f} m/s.")
@@ -262,10 +297,14 @@ def main() -> None:
     print(f"Giữ MIN_LAP_INTERVAL_SECONDS={race.get('min_lap_interval_seconds', 30)}; hoàn thành dự kiến khoảng {min(finish_ranges):.0f}–{max(finish_ranges):.0f} giây cộng độ trễ API.")
     while datetime.now(timezone.utc) < simulator_started_at:
         time.sleep(0.02)
+    if kit_board:
+        # Discard boot chatter before the race clock starts; only new kit hits count.
+        kit_board.reset_input_buffer()
     simulator_started = time.monotonic()
     expected_finish = max(runner["start_delay_seconds"] + runner["finish_elapsed"] for runner in runners)
     last_progress_print = -1
     event_ids: list[str] = []
+    kit_buffer = ""
     rejected_gps_points = 0
     while not all(runner["done"] for runner in runners):
         elapsed = time.monotonic() - simulator_started
@@ -312,10 +351,12 @@ def main() -> None:
                 raise
             runner["done"] = bool(accepted.get("is_done"))
 
-            # Send anonymous Arduino events for lap passages. Never identify a
-            # runner by simulator identity; real overlap remains AMBIGUOUS.
-            if args.mode == "GPS_AND_ARDUINO":
-                finish_cp = created_checkpoints[0]
+            # In synthetic Arduino mode, create anonymous events for the selected
+            # lap checkpoint. Hardware mode never fabricates a checkpoint event.
+            if args.mode == "GPS_AND_ARDUINO" and kit_board is None:
+                finish_cp_index = next(i for i, p in enumerate(ROUTE_CHECKPOINTS)
+                                       if p["code"] == selected_kit_checkpoint)
+                finish_cp = created_checkpoints[finish_cp_index]
                 for crossing in accepted.get("checkpoint_crossings", []):
                     if crossing["checkpoint_id"] != finish_cp["checkpoint_id"]:
                         continue
@@ -324,7 +365,7 @@ def main() -> None:
                         continue
                     runner["last_checkpoint_keys"].add(lap_key)
                     event = request_json(args.base_url, "/api/v1/checkpoint-events", "POST", {
-                        "device_id": gateway_device_ids[-1],
+                        "device_id": gateway_device_ids[selected_kit_checkpoint],
                         "device_event_id": f"sim-event-{run_tag}-{runner['display_id']}-{len(runner['last_checkpoint_keys']):02d}",
                         "checkpoint_id": finish_cp["checkpoint_id"],
                         "occurred_at": timestamp(point_time), "student_id": None,
@@ -332,7 +373,33 @@ def main() -> None:
                     event_ids.append(event["event_id"])
         if all(runner["done"] for runner in runners):
             break
-        if elapsed > expected_finish + 8:
+        if kit_board is not None:
+            # Read the real kit continuously. It emits anonymous PASSAGE_DETECTED events;
+            # the backend identifies the simulated runner only by time-correlated GPS.
+            available = kit_board.in_waiting
+            if available:
+                kit_buffer += kit_board.read(available).decode("utf-8", errors="replace")
+                while "\n" in kit_buffer:
+                    line, kit_buffer = kit_buffer.split("\n", 1)
+                    line = line.strip().rstrip("\r")
+                    if not line:
+                        continue
+                    print(f"KIT {kit_port}: {line}", flush=True)
+                    match = re.fullmatch(r"LAP:\s*(\d+)\s*", line, flags=re.IGNORECASE)
+                    if not match:
+                        continue
+                    finish_index = next(i for i, p in enumerate(ROUTE_CHECKPOINTS)
+                                        if p["code"] == selected_kit_checkpoint)
+                    finish_cp = created_checkpoints[finish_index]
+                    kit_event = request_json(args.base_url, "/api/v1/checkpoint-events", "POST", {
+                        "device_id": gateway_device_ids[selected_kit_checkpoint],
+                        "device_event_id": str(uuid.uuid4()), "checkpoint_id": finish_cp["checkpoint_id"],
+                        "occurred_at": timestamp(datetime.now(timezone.utc)), "student_id": None,
+                        "raw_payload": line,
+                    }, gateway_key, "X-Gateway-Key")
+                    event_ids.append(kit_event["event_id"])
+                    print(f"Kit event đã gửi: {kit_event['event_id']} (Arduino local lap {match.group(1)}; danh tính do GPS matching xác định).", flush=True)
+        if elapsed > expected_finish + 8 and kit_board is None:
             unfinished = [runner["display_id"] for runner in runners if not runner["done"]]
             print(f"Quá thời gian dự kiến; các runner chưa đủ vòng: {', '.join(unfinished)}")
             break
@@ -351,6 +418,8 @@ def main() -> None:
     print(f"Race ID: {race_id}")
     print(f"Dashboard: GET /api/v1/races/{race_id}/dashboard")
     print("Checkpoint ID theo thứ tự: " + ", ".join(cp["checkpoint_id"] for cp in created_checkpoints))
+    if kit_board:
+        kit_board.close()
 
 
 if __name__ == "__main__":

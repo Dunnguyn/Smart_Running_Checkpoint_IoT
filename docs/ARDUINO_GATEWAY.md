@@ -25,6 +25,24 @@ Sketch không có GPS, Wi-Fi hoặc HTTP; nó không gửi danh tính sinh viên
    python -m pip install -r requirements.txt
    ```
 
+## Demo hỗn hợp qua Admin API (COM03 thật)
+
+Đây là cách trình diễn khi chỉ có một bộ kit: GPS, bước chân, runner và tuyến đường được mô phỏng; checkpoint event chỉ đến từ HC-SR04 thật. Backend tự mở cổng Serial, vì vậy không cần chạy `python -m app.arduino_gateway` ở terminal thứ hai.
+
+1. Cắm kit vào chính máy đang chạy backend. Trong Device Manager xác nhận cổng; yêu cầu hiện tại là `COM03` (Windows/pyserial sẽ chuẩn hóa tên thành `COM3`). Đóng Arduino IDE Serial Monitor/Plotter.
+2. Xác nhận sketch in `LAP: <n>` ở 9600 baud. Backend mở COM sẽ reset board; chờ sketch khởi động xong.
+3. Mở `http://127.0.0.1:8000/docs`, Authorize bằng Admin key, gọi `POST /api/v1/simulations`:
+
+   ```json
+   {"checkpoint_mode":"GPS_AND_ARDUINO","kit_serial_port":"COM03","kit_checkpoint_code":"NEU-C01","seed":42,"interval_seconds":0.5}
+   ```
+
+4. Poll `GET /api/v1/simulations/{simulation_id}` để xem log. Simulator tạo 5 runner, sinh GPS/bước chân liên tục, đăng ký đúng một thiết bị Gateway vào checkpoint đã chọn và tự đọc Serial. Các dòng `LAP:` duy nhất tạo checkpoint event. Mặc định thiết bị map vào checkpoint `NEU-C01`, loại `LAP`.
+5. Đưa vật qua cảm biến khi một runner mô phỏng đang đi qua vùng checkpoint. Arduino không gửi ID sinh viên; backend ghép sự kiện phần cứng với GPS mô phỏng trong cửa sổ thời gian. Nếu event không trùng passage hoặc có nhiều ứng viên, hệ thống giữ `UNASSIGNED`/`AMBIGUOUS`, không tự đoán người.
+6. Theo dõi `GET /api/v1/races/{race_id}/dashboard` và `GET /api/v1/races/{race_id}/checkpoint-events`. Chạy tiếp tới khi backend xác nhận đủ số vòng; nếu dừng demo, gọi `POST /api/v1/simulations/{simulation_id}/stop`.
+
+`kit_checkpoint_code` nhận `NEU-C01` đến `NEU-C04`; đặt kit ở đúng checkpoint đã chọn. Bộ kit chỉ xác nhận có người/vật đi qua, còn danh tính hiển thị trong demo được suy ra theo thời điểm GPS mô phỏng. Đây là demo tích hợp, không phải xác thực danh tính người thật.
+
 ## Chạy Gateway
 
 Trong terminal thứ hai, tại `services/backend`:
