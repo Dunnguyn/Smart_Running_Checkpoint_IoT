@@ -18,11 +18,22 @@ export type Student = {
   faculty: string;
   className: string;
 };
-export type Auth = { token: string; student: Student; expiresAt: number };
+export type Auth = {
+  token: string;
+  student: Student;
+  expiresAt: number;
+  refreshToken?: string;
+  installationId?: string;
+  mustChangePassword?: boolean;
+};
 export type Race = {
   id: string;
   name: string;
   place: string;
+  description?: string;
+  actions?: Record<string, boolean>;
+  registrationAllowed?: boolean;
+  registrationMessage?: string;
   startsAt: number;
   opensAt: number;
   closesAt: number;
@@ -64,6 +75,8 @@ export type Run = {
   revision: number;
   outsideLapZone: boolean;
   lastSegment?: number;
+  lastSequence?: number;
+  boundToInstallation?: boolean;
 };
 export type Snapshot = {
   races: Race[];
@@ -125,6 +138,7 @@ export function meters(a: Point, b: Point) {
   return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 export function registrationLabel(r: Race, now = Date.now()) {
+  if (r.registrationMessage) return r.registrationMessage;
   if (r.phase === "CANCELLED") return "Giải đã hủy";
   if (now < r.opensAt) return "Chưa mở đăng ký";
   if (now > r.closesAt || r.phase === "ENDED") return "Hết hạn đăng ký";
@@ -132,4 +146,4 @@ export function registrationLabel(r: Race, now = Date.now()) {
   return `Còn ${r.capacity - r.registered} chỗ`;
 }
 export const canRegister = (r: Race, now = Date.now()) =>
-  registrationLabel(r, now).startsWith("Còn");
+  r.registrationAllowed ?? registrationLabel(r, now).startsWith("Còn");

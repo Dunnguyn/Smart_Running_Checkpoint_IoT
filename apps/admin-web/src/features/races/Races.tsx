@@ -1,3 +1,4 @@
+import { StudentPolicy } from "./StudentPolicy";
 import { Roster } from "../runners/People";
 import { LiveMap } from "../live-map/LiveMap";
 import { Search, FlaskConical, Plus } from "lucide-react";
@@ -74,9 +75,16 @@ export function Races() {
         {selected && <Badge status={selected.status} />}
         {!selected && dataMode === "api" && (
           <div className="action-row">
-            <Link className="button" to="/simulation"><FlaskConical size={14} aria-hidden="true" />Tạo mô phỏng</Link>
-            <button className="button primary" onClick={() => setCreating(true)}>
-              <Plus size={14} aria-hidden="true" />Tạo giải chạy
+            <Link className="button" to="/simulation">
+              <FlaskConical size={14} aria-hidden="true" />
+              Tạo mô phỏng
+            </Link>
+            <button
+              className="button primary"
+              onClick={() => setCreating(true)}
+            >
+              <Plus size={14} aria-hidden="true" />
+              Tạo giải chạy
             </button>
           </div>
         )}
@@ -117,6 +125,7 @@ export function Races() {
               ["route", "Tuyến & trạm"],
               ["matching", "Cấu hình ghi nhận"],
               ["general", "Thông tin giải"],
+              ...(dataMode === "api" ? [["student", "App sinh viên"]] : []),
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -143,6 +152,9 @@ export function Races() {
             />
           )}
           {setupTab === "matching" && <MatchingSettings />}
+          {setupTab === "student" && dataMode === "api" && (
+            <StudentPolicy key={selected.race_id} raceId={selected.race_id} />
+          )}
           {setupTab === "general" && (
             <Panel title="Thông tin giải">
               <dl className="info-list">
@@ -221,10 +233,20 @@ export function Races() {
               </select>
             </label>
             {(query || status) && (
-              <button className="button race-clear-filter" onClick={() => { setQuery(""); setStatus(""); }}>Xóa bộ lọc</button>
+              <button
+                className="button race-clear-filter"
+                onClick={() => {
+                  setQuery("");
+                  setStatus("");
+                }}
+              >
+                Xóa bộ lọc
+              </button>
             )}
             <span className="race-result-count" role="status">
-              {racesLoaded ? `${rows.length} / ${races.length} giải` : "Đang tải…"}
+              {racesLoaded
+                ? `${rows.length} / ${races.length} giải`
+                : "Đang tải…"}
             </span>
           </div>
           <div className="table-scroll race-table">
@@ -252,17 +274,31 @@ export function Races() {
                         {r.name}
                       </Link>
                       <div className="race-row-meta">
-                        {r.race_id === current && <span className="race-current-label">Đang xem</span>}
-                        {r.participant_count != null && <span>{r.participant_count} người tham gia</span>}
-                        {r.total_laps != null && <span>{r.total_laps} vòng</span>}
+                        {r.race_id === current && (
+                          <span className="race-current-label">Đang xem</span>
+                        )}
+                        {r.participant_count != null && (
+                          <span>{r.participant_count} người tham gia</span>
+                        )}
+                        {r.total_laps != null && (
+                          <span>{r.total_laps} vòng</span>
+                        )}
                       </div>
-                      {r.location && r.location !== "—" && <small className="race-location">{r.location}</small>}
+                      {r.location && r.location !== "—" && (
+                        <small className="race-location">{r.location}</small>
+                      )}
                     </td>
                     <td>
                       <Badge status={r.status} />
                     </td>
                     <td>
-                      <span className={r.started_at ? "race-schedule" : "race-unscheduled"}>{r.started_at ? datetime(r.started_at) : "Chưa có lịch"}</span>
+                      <span
+                        className={
+                          r.started_at ? "race-schedule" : "race-unscheduled"
+                        }
+                      >
+                        {r.started_at ? datetime(r.started_at) : "Chưa có lịch"}
+                      </span>
                     </td>
                     <td>
                       <RaceActions

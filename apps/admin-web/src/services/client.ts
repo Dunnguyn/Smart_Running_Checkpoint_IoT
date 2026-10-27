@@ -81,9 +81,15 @@ export async function request<T>(
       };
       throw new RequestError(
         response.status,
-        messages[response.status] ?? "Backend gặp lỗi. Hãy thử lại.",
+        body?.detail?.error?.message ??
+          body?.detail?.message ??
+          messages[response.status] ??
+          "Backend gặp lỗi. Hãy thử lại.",
         fields,
-        typeof body?.detail?.code === "string" ? body.detail.code : undefined,
+        body?.detail?.error?.code ??
+          (typeof body?.detail?.code === "string"
+            ? body.detail.code
+            : undefined),
       );
     }
     return body as T;

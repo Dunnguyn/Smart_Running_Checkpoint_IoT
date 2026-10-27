@@ -1,3 +1,5 @@
+> Tài liệu lịch sử trước bản backend `67927c1`. Trạng thái tích hợp hiện tại: [API_INTEGRATION.md](API_INTEGRATION.md). Các mô tả CONTRACT_PENDING bên dưới không còn áp dụng cho adapter hiện tại.
+
 # Hợp đồng API sinh viên — chờ BE
 
 ## Ma trận bàn giao tích hợp — 17/10/2026

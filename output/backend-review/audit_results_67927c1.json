@@ -1,0 +1,608 @@
+[
+  {
+    "name": "health",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "openapi",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "create_student_AUDIT_A",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "provision_account_AUDIT_A",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "login_temporary_AUDIT_A",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "temporary_password_gate_AUDIT_A",
+    "pass": true,
+    "expected_http": 403,
+    "http": 403,
+    "code": "PASSWORD_CHANGE_REQUIRED",
+    "exception": null
+  },
+  {
+    "name": "change_password_AUDIT_A",
+    "pass": true,
+    "expected_http": 204,
+    "http": 204,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "old_session_revoked_AUDIT_A",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "UNAUTHENTICATED",
+    "exception": null
+  },
+  {
+    "name": "login_new_AUDIT_A",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "create_student_AUDIT_B",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "provision_account_AUDIT_B",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "login_temporary_AUDIT_B",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "temporary_password_gate_AUDIT_B",
+    "pass": true,
+    "expected_http": 403,
+    "http": 403,
+    "code": "PASSWORD_CHANGE_REQUIRED",
+    "exception": null
+  },
+  {
+    "name": "change_password_AUDIT_B",
+    "pass": true,
+    "expected_http": 204,
+    "http": 204,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "old_session_revoked_AUDIT_B",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "UNAUTHENTICATED",
+    "exception": null
+  },
+  {
+    "name": "login_new_AUDIT_B",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "wrong_password",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "INVALID_CREDENTIALS",
+    "exception": null
+  },
+  {
+    "name": "student_cannot_read_admin",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "UNAUTHORIZED",
+    "exception": null
+  },
+  {
+    "name": "create_race_primary",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "create_checkpoint_primary",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "set_policy_primary",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "register_self",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "register_replay",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "capacity_rejected",
+    "pass": true,
+    "expected_http": 409,
+    "http": 409,
+    "code": "RACE_FULL",
+    "exception": null
+  },
+  {
+    "name": "races_before_attendance_config",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "admin_race_list_fields",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "configure_attendance",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "races_after_attendance_config",
+    "pass": false,
+    "expected_http": 200,
+    "http": 500,
+    "code": null,
+    "exception": "TypeError: can't compare offset-naive and offset-aware datetimes"
+  },
+  {
+    "name": "race_detail_after_config",
+    "pass": false,
+    "expected_http": 200,
+    "http": 500,
+    "code": null,
+    "exception": "TypeError: can't compare offset-naive and offset-aware datetimes"
+  },
+  {
+    "name": "map_after_config",
+    "pass": false,
+    "expected_http": 200,
+    "http": 500,
+    "code": null,
+    "exception": "TypeError: can't compare offset-naive and offset-aware datetimes"
+  },
+  {
+    "name": "checkin_stale_position",
+    "pass": true,
+    "expected_http": 422,
+    "http": 422,
+    "code": "GPS_SAMPLE_STALE",
+    "exception": null
+  },
+  {
+    "name": "checkin_inaccurate_position",
+    "pass": true,
+    "expected_http": 422,
+    "http": 422,
+    "code": "GPS_INACCURATE",
+    "exception": null
+  },
+  {
+    "name": "checkin_outside_zone",
+    "pass": true,
+    "expected_http": 422,
+    "http": 422,
+    "code": "OUTSIDE_ATTENDANCE_ZONE",
+    "exception": null
+  },
+  {
+    "name": "checkin_valid_position",
+    "pass": false,
+    "expected_http": 201,
+    "http": 500,
+    "code": null,
+    "exception": "TypeError: can't compare offset-naive and offset-aware datetimes"
+  },
+  {
+    "name": "start_with_fixture_attendance",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "start_replay",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "ownership_other_student",
+    "pass": true,
+    "expected_http": 404,
+    "http": 404,
+    "code": "RESOURCE_NOT_FOUND",
+    "exception": null
+  },
+  {
+    "name": "current_run",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "gps_fresh",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "gps_same_batch_retry",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "gps_same_sample_new_batch",
+    "pass": false,
+    "expected_http": 200,
+    "http": 409,
+    "code": "SAMPLE_ID_CONFLICT",
+    "exception": null
+  },
+  {
+    "name": "gps_offline_20_seconds",
+    "pass": false,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null,
+    "observed": [
+      {
+        "sample_id": "0bbcd41a-8d5c-4f44-b543-ef1656e02224",
+        "status": "REJECTED",
+        "accepted": false,
+        "sequence": 2,
+        "reason_code": "GPS_TOO_OLD"
+      }
+    ]
+  },
+  {
+    "name": "gps_gap_no_bridge",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "gps_inaccurate_rejected",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "pause",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "pause_replay",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "gps_during_pause_rejected",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "resume_stale_revision",
+    "pass": true,
+    "expected_http": 409,
+    "http": 409,
+    "code": "VERSION_CONFLICT",
+    "exception": null
+  },
+  {
+    "name": "resume",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "gps_after_resume_no_bridge",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "track_segments",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "run_history",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "student_dashboard",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "withdraw_early",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "withdraw_replay",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "checkout_after_withdraw",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "admin_finish_0_laps_not_completed",
+    "pass": false,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null,
+    "observed": {
+      "status": "COMPLETED",
+      "lap_count": 0,
+      "is_done": true
+    }
+  },
+  {
+    "name": "create_race_live-socket",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "create_checkpoint_live-socket",
+    "pass": true,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "set_policy_live-socket",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "registration_websocket_broadcast",
+    "pass": false,
+    "expected_http": 201,
+    "http": 201,
+    "code": null,
+    "exception": null,
+    "observed": {
+      "messages": 1,
+      "subscribed_after": false
+    }
+  },
+  {
+    "name": "lap_missing_control_not_counted",
+    "pass": false,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null,
+    "observed": {
+      "counted": true,
+      "lap_count": 1
+    }
+  },
+  {
+    "name": "operation_key_conflict",
+    "pass": true,
+    "expected_http": 409,
+    "http": 409,
+    "code": "IDEMPOTENCY_CONFLICT",
+    "exception": null
+  },
+  {
+    "name": "other_student_cannot_withdraw",
+    "pass": true,
+    "expected_http": 404,
+    "http": 404,
+    "code": "RESOURCE_NOT_FOUND",
+    "exception": null
+  },
+  {
+    "name": "expired_access_token",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "UNAUTHENTICATED",
+    "exception": null
+  },
+  {
+    "name": "refresh_rotation",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "refresh_reuse_revokes",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "REFRESH_REUSE_DETECTED",
+    "exception": null
+  },
+  {
+    "name": "login_before_reset",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "admin_reset_password",
+    "pass": true,
+    "expected_http": 200,
+    "http": 200,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "reset_revokes_access",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "UNAUTHENTICATED",
+    "exception": null
+  },
+  {
+    "name": "reset_invalidates_old_password",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "INVALID_CREDENTIALS",
+    "exception": null
+  },
+  {
+    "name": "logout",
+    "pass": true,
+    "expected_http": 204,
+    "http": 204,
+    "code": null,
+    "exception": null
+  },
+  {
+    "name": "logout_access_revoked",
+    "pass": true,
+    "expected_http": 401,
+    "http": 401,
+    "code": "UNAUTHENTICATED",
+    "exception": null
+  }
+]

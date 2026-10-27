@@ -151,7 +151,11 @@ export default function Result() {
                 Check-out chỉ ghi nhận điểm danh, không thay đổi kết quả chạy.
               </Text>
               {enrollment?.checkedInAt && !enrollment.checkedOutAt && (
-                <Button icon="gps" onPress={() => setCheckout(true)}>
+                <Button
+                  icon="gps"
+                  disabled={race.actions?.can_check_out === false}
+                  onPress={() => setCheckout(true)}
+                >
                   Check-out bằng GPS
                 </Button>
               )}

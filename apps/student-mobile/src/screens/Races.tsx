@@ -217,10 +217,7 @@ function RaceCard({
       <View style={{ padding: 16, gap: 10 }}>
         <View style={s.between}>
           <Text
-            style={[
-              s.h3,
-              { flex: 1, color: c.navy950, fontFamily: "Inter" },
-            ]}
+            style={[s.h3, { flex: 1, color: c.navy950, fontFamily: "Inter" }]}
           >
             {race.name}
           </Text>
@@ -237,7 +234,10 @@ function RaceCard({
         <View style={s.divider} />
         <View style={s.between}>
           <Text style={[s.strong, { color: c.blue }]}>
-            {race.targetLaps} vòng · {race.lapMeters} m/vòng
+            {race.targetLaps} vòng ·{" "}
+            {race.lapMeters > 0
+              ? `${race.lapMeters} m/vòng`
+              : "Chưa có độ dài tuyến"}
           </Text>
           <Text style={s.small}>
             {registered ? "Đã đăng ký" : "Xem chi tiết"}

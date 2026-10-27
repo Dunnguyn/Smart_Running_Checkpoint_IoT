@@ -13,6 +13,10 @@ export interface BackendRace {
   name: string;
   status: RaceStatus;
   start_at: string | null;
+  end_at?: string | null;
+  location?: string | null;
+  total_laps?: number | null;
+  participant_count?: number | null;
 }
 export interface BackendRoute extends RouteMetadata {
   points: {

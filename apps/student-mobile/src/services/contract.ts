@@ -8,10 +8,12 @@ export class ServiceError extends Error {
     super(message);
   }
 }
-// Proposed STUDENT boundary, not the existing admin/wearable protocol.
+// Student-only boundary. Never uses admin or wearable credentials.
 export interface StudentService {
   login(code: string, password: string): Promise<Auth>;
   snapshot(auth: Auth): Promise<Snapshot>;
   execute(auth: Auth, operation: Operation): Promise<Snapshot>;
   upload(auth: Auth, samples: Sample[]): Promise<Ack>;
+  logout?(auth: Auth): Promise<void>;
+  changePassword?(auth: Auth, current: string, next: string): Promise<void>;
 }

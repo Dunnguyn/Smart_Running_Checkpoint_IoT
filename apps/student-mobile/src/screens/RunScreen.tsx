@@ -60,6 +60,12 @@ export default function RunScreen() {
       : "—";
   return (
     <View style={[s.page, { backgroundColor: paused ? "#fbf7f2" : c.white }]}>
+      {run.boundToInstallation === false && (
+        <Notice error>
+          Phiên chạy thuộc thiết bị khác. Tiếp tục ghi GPS trên thiết bị đã bắt
+          đầu phiên.
+        </Notice>
+      )}
       <Header
         title={race.name}
         subtitle={`Số báo danh ${enrollment?.bib}`}

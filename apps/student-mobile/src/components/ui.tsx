@@ -391,14 +391,16 @@ export function Dialog({
   );
 }
 export const date = (value: number) =>
-  new Intl.DateTimeFormat("vi-VN", {
-    timeZone: "Asia/Ho_Chi_Minh",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(value);
+  !value || !Number.isFinite(value)
+    ? "Chưa cấu hình"
+    : new Intl.DateTimeFormat("vi-VN", {
+        timeZone: "Asia/Ho_Chi_Minh",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(value);
 export function duration(ms: number) {
   const sec = Math.floor(ms / 1000);
   return [Math.floor(sec / 3600), Math.floor(sec / 60) % 60, sec % 60]

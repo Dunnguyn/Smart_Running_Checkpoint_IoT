@@ -11,5 +11,7 @@ export function configurationError() {
     return "GPS_MODE phải là demo hoặc device.";
   if (config.mode === "api" && config.gps === "demo")
     return "Không được gửi GPS giả trong chế độ API thật. Chọn GPS_MODE=device.";
+  if (config.mode === "api" && !/^https?:\/\//.test(config.baseUrl))
+    return "Cần cấu hình EXPO_PUBLIC_API_BASE_URL là địa chỉ backend http(s).";
   return "";
 }
