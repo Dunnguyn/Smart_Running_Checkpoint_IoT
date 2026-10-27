@@ -1,3 +1,5 @@
+import { StudentAccount } from "./StudentAccount";
+import { dataMode } from "../../services";
 import { SimulationControls } from "../dashboard/Dashboard";
 import { CreateStudent } from "./CreateStudent";
 import { useSearchParams } from "react-router-dom";
@@ -83,6 +85,7 @@ function StudentDirectory({
 }: {
   onSelect?: (student: Student) => void;
 }) {
+  const [accountStudent, setAccountStudent] = useState<Student>();
   const [q, setQ] = useState(""),
     [offset, setOffset] = useState(0),
     [rows, setRows] = useState<Student[]>([]),
@@ -114,6 +117,12 @@ function StudentDirectory({
   return (
     <section className="panel people-panel">
       <h2>Sinh viên toàn hệ thống</h2>
+      {accountStudent && (
+        <StudentAccount
+          student={accountStudent}
+          onClose={() => setAccountStudent(undefined)}
+        />
+      )}
       <label>
         Tìm sinh viên theo tên hoặc mã
         <input
@@ -146,7 +155,7 @@ function StudentDirectory({
               <th>Mã sinh viên</th>
               <th>Họ tên</th>
               <th>Khoa/Viện</th>
-              {onSelect && <th>Thao tác</th>}
+              {(onSelect || dataMode === "api") && <th>Thao tác</th>}
             </tr>
           </thead>
           <tbody>
@@ -155,6 +164,17 @@ function StudentDirectory({
                 <td>{s.student_code}</td>
                 <td>{s.full_name}</td>
                 <td>{s.faculty || "Chưa có"}</td>
+                {!onSelect && dataMode === "api" && (
+                  <td>
+                    <button
+                      className="button"
+                      disabled={loading || !!error}
+                      onClick={() => setAccountStudent(s)}
+                    >
+                      Cấp tài khoản app
+                    </button>
+                  </td>
+                )}
                 {onSelect && (
                   <td>
                     <button

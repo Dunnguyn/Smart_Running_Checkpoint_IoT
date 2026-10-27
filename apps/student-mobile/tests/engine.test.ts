@@ -9,7 +9,7 @@ import {
 import type { Gps } from "../src/gps/port";
 import { demoRoute } from "../src/services/fixtures";
 import { MockService } from "../src/services/mock";
-import { apiService } from "../src/services/api";
+import { ApiService } from "../src/services/api";
 import { MemoryStore } from "../src/storage/port";
 import { Engine, MAX_QUEUE, type AuthStore } from "../src/state/engine";
 import { statistics } from "../src/domain/statistics";
@@ -263,12 +263,15 @@ describe("student authentication and isolation", () => {
   });
   it("API adapter never falls back to fixtures or guessed endpoints", async () => {
     await expect(
-      apiService.login("11223344", "NeuRun@demo"),
-    ).rejects.toMatchObject({ code: "CONTRACT_PENDING" });
+      new ApiService("", store, authStore, "ANDROID").login(
+        "11223344",
+        "NeuRun@demo",
+      ),
+    ).rejects.toMatchObject({ code: "CONFIG" });
   });
   it("does not restore mock credentials after switching to API mode", async () => {
     const real = new Engine(
-      apiService,
+      new ApiService("", store, authStore, "ANDROID"),
       store,
       authStore,
       gps,
@@ -539,4 +542,30 @@ describe("capture and synchronization", () => {
         ?.checkedOutAt,
     ).toBe(now);
   });
+});
+
+it("holds the password-change gate without loading protected resources", async () => {
+  const original = mock.login.bind(mock);
+  mock.login = async (code, password) => ({
+    ...(await original(code, password)),
+    mustChangePassword: true,
+  });
+  let reads = 0;
+  const snapshot = mock.snapshot.bind(mock);
+  mock.snapshot = async (auth) => {
+    reads++;
+    return snapshot(auth);
+  };
+  await engine.login("11223345", "NeuRun@demo");
+  await engine.sync();
+  expect(engine.get().auth?.mustChangePassword).toBe(true);
+  expect(reads).toBe(0);
+});
+it("requires connectivity for real API actions without queueing an offline transition", async () => {
+  const real = new Engine(mock, store, authStore, gps, "api", () => now);
+  await real.login("11223344", "NeuRun@demo");
+  real.setOnline(false);
+  expect(await real.action("register", "campus")).toBe(false);
+  expect(real.get().tracking?.operations ?? []).toEqual([]);
+  expect(real.get().error).toContain("kết nối mạng");
 });

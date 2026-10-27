@@ -232,3 +232,64 @@ describe("backend contract and live consistency", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+it("maps backend race metadata without discarding zero counts", async () => {
+  setAdminKey("test");
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                race_id: "race",
+                name: "Race",
+                status: "SCHEDULED",
+                start_at: null,
+                end_at: null,
+                location: "NEU",
+                total_laps: 4,
+                participant_count: 0,
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+  );
+  const { apiAdapter } = await import("./apiAdapter");
+  expect((await apiAdapter.listRaces())[0]).toMatchObject({
+    location: "NEU",
+    total_laps: 4,
+    participant_count: 0,
+  });
+});
+it("preserves student admin error code and message", async () => {
+  setAdminKey("test");
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: {
+              error: {
+                code: "VERSION_CONFLICT",
+                message: "Cấu hình đã thay đổi",
+              },
+            },
+          }),
+          { status: 409 },
+        ),
+      ),
+  );
+  await expect(
+    request("/admin/races/race/student-policy"),
+  ).rejects.toMatchObject({
+    code: "VERSION_CONFLICT",
+    message: "Cấu hình đã thay đổi",
+  });
+});

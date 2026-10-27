@@ -100,8 +100,8 @@ export default function RaceDetail() {
           <View style={s.card}>
             <Text style={s.h2}>Thông tin giải</Text>
             <Text style={s.text}>
-              Giải chạy dành cho sinh viên NEU, khuyến khích tinh thần vận động
-              và kết nối trong khuôn viên trường.
+              {race.description ??
+                "Giải chạy dành cho sinh viên NEU, khuyến khích tinh thần vận động và kết nối trong khuôn viên trường."}
             </Text>
             <View style={s.row}>
               <View
@@ -113,7 +113,11 @@ export default function RaceDetail() {
                 }}
               >
                 <Text style={s.small}>Độ dài một vòng</Text>
-                <Text style={s.strong}>Khoảng {race.lapMeters} m</Text>
+                <Text style={s.strong}>
+                  {race.lapMeters > 0
+                    ? `Khoảng ${race.lapMeters} m`
+                    : "Chưa có thông tin"}
+                </Text>
               </View>
               <View
                 style={{
@@ -193,10 +197,12 @@ export default function RaceDetail() {
               {!enrollment.checkedInAt && (
                 <Button
                   icon="gps"
-                  disabled={race.phase !== "LIVE"}
+                  disabled={
+                    !(race.actions?.can_check_in ?? race.phase === "LIVE")
+                  }
                   onPress={() => setDialog("checkin")}
                 >
-                  {race.phase === "LIVE"
+                  {(race.actions?.can_check_in ?? race.phase === "LIVE")
                     ? "Check-in bằng GPS"
                     : "Chưa mở check-in"}
                 </Button>
@@ -235,7 +241,7 @@ export default function RaceDetail() {
             <Button
               icon="flag"
               onPress={() => setDialog("start")}
-              disabled={race.phase !== "LIVE"}
+              disabled={!(race.actions?.can_start ?? race.phase === "LIVE")}
             >
               Bắt đầu chạy
             </Button>
@@ -264,7 +270,7 @@ export default function RaceDetail() {
                 ? `${race.name} · Số báo danh ${enrollment?.bib ?? ""}`
                 : dialog === "checkin"
                   ? "NEU RUN cần một vị trí GPS mới để kiểm tra bạn trong vùng điểm danh. Cho phép truy cập vị trí khi hệ điều hành yêu cầu."
-                  : `Chỉ bắt đầu ghi tuyến khi phiên được hệ thống xác nhận. ${config.background ? "Bản build này ghi GPS khi khóa màn hình; hệ điều hành sẽ hỏi quyền vị trí nền. Bạn có thể ngừng bằng Tạm dừng." : "Bản build này thu GPS khi app ở màn hình trước. Ra nền sẽ ngừng thu và cần lấy lại GPS khi quay lại."}`}
+                  : `Khi bấm bắt đầu, bạn đồng ý cho NEU RUN thu thập vị trí GPS để xác nhận tuyến chạy và kết quả (gps-v1). Chỉ bắt đầu ghi tuyến khi phiên được hệ thống xác nhận. ${config.background ? "Bản build này ghi GPS khi khóa màn hình; hệ điều hành sẽ hỏi quyền vị trí nền. Bạn có thể ngừng bằng Tạm dừng." : "Bản build này thu GPS khi app ở màn hình trước. Ra nền sẽ ngừng thu và cần lấy lại GPS khi quay lại."}`}
           </Text>
           {dialog === "success" && (
             <View

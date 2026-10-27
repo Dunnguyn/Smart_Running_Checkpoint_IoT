@@ -30,9 +30,7 @@ export interface AuthStore {
 export const MAX_QUEUE = 3000;
 // Device continuity policy, not a backend result/pace threshold.
 export const MAX_FIX_GAP_MS = 30000;
-let serial = 0;
-const id = () =>
-  `${Date.now().toString(36)}-${(++serial).toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+import { uuid as id } from "../services/ids";
 export class Engine {
   private view: ViewState = {
     busy: false,
@@ -108,7 +106,8 @@ export class Engine {
         }
         this.restoreAccount(auth, background);
         if (!background) await this.gps.stop();
-        if (auth.expiresAt <= this.now()) await this.expire();
+        if (auth.expiresAt <= this.now() && !auth.refreshToken)
+          await this.expire();
         else await this.refresh();
       }
     } catch (error) {
@@ -172,8 +171,48 @@ export class Engine {
     });
   }
   async logout() {
-    await this.expire();
-    this.update({ error: undefined });
+    this.resetting = true;
+    this.update({ busy: true });
+    let error: unknown;
+    try {
+      const tracking = this.view.tracking;
+      if (tracking)
+        this.saveTracking({ ...tracking, capture: "PAUSED", last: undefined });
+      await this.gps.stop();
+      // Let an in-flight token rotation finish before clearing stored credentials.
+      if (this.syncTask) await this.syncTask;
+      const auth = this.view.auth;
+      await this.expire();
+      try {
+        if (auth) await this.service.logout?.(auth);
+      } catch (e) {
+        error = e;
+      }
+      this.update({
+        error: error
+          ? "Đã đăng xuất khỏi thiết bị. Chưa xác nhận thu hồi phiên trên máy chủ do lỗi kết nối."
+          : undefined,
+      });
+    } finally {
+      this.resetting = false;
+      this.update({ busy: false });
+    }
+  }
+  async changePassword(current: string, next: string) {
+    if (!this.view.auth || this.view.busy || !this.service.changePassword)
+      return;
+    this.update({ busy: true, error: undefined });
+    try {
+      await this.service.changePassword(this.view.auth, current, next);
+      await this.expire();
+      this.update({
+        error: "Đổi mật khẩu thành công. Hãy đăng nhập bằng mật khẩu mới.",
+      });
+    } catch (e) {
+      await this.report(e);
+    } finally {
+      this.update({ busy: false });
+    }
   }
   async report(error: unknown) {
     if (error instanceof ServiceError && error.code === "UNAUTHORIZED") {
@@ -196,7 +235,7 @@ export class Engine {
   }
   async refresh() {
     const auth = this.view.auth;
-    if (!auth) return;
+    if (!auth || auth.mustChangePassword) return;
     try {
       const snapshot = await this.service.snapshot(auth);
       if (this.view.auth?.student.id === auth.student.id) this.apply(snapshot);
@@ -223,6 +262,8 @@ export class Engine {
     this.update({ busy: true, error: undefined });
     try {
       const auth = this.view.auth;
+      if (this.mode === "api" && !this.view.online)
+        throw new Error("Cần kết nối mạng để xác nhận thao tác với backend.");
       let tracking = this.view.tracking ?? this.emptyTracking(auth.student.id);
       if (kind === "pause" || kind === "finish") {
         // Synchronous gate first: ignore callbacks already in the native bridge.
@@ -255,7 +296,10 @@ export class Engine {
         (o) => o.kind === kind && o.raceId === raceId && o.runId === runId,
       );
       const fix =
-        !pending && (kind === "checkin" || kind === "checkout")
+        !pending &&
+        (kind === "checkin" ||
+          kind === "checkout" ||
+          (kind === "start" && this.mode === "api"))
           ? await this.gps.fresh()
           : undefined;
       if (fix?.simulated && this.mode === "api")
@@ -304,6 +348,14 @@ export class Engine {
     const auth = this.view.auth,
       run = this.view.snapshot?.runs.find((r) => r.id === runId);
     if (!auth || run?.status !== "ACTIVE") return;
+    if (run.boundToInstallation === false) {
+      await this.report(
+        new Error(
+          "Phiên chạy thuộc thiết bị khác. Hãy tiếp tục trên thiết bị đã bắt đầu phiên.",
+        ),
+      );
+      return;
+    }
     let tracking = this.view.tracking ?? this.emptyTracking(auth.student.id);
     if (tracking.operations.length)
       throw new Error("Cần đồng bộ thao tác đang chờ trước khi ghi GPS.");
@@ -313,7 +365,8 @@ export class Engine {
       ...tracking,
       runId,
       capture: "ACQUIRING",
-      segment: tracking.segment + 1,
+      segment: Math.max(tracking.segment, run.lastSegment ?? 0) + 1,
+      sequence: Math.max(tracking.sequence, run.lastSequence ?? 0),
       last: undefined,
       boundaryAt: this.now(),
       error: undefined,
@@ -378,7 +431,7 @@ export class Engine {
       !["ACQUIRING", "RECORDING"].includes(tracking.capture)
     )
       return;
-    if (auth.expiresAt <= this.now()) {
+    if (auth.expiresAt <= this.now() && !auth.refreshToken) {
       void this.expire();
       return;
     }
@@ -465,20 +518,29 @@ export class Engine {
     }
   }
   private async syncOnce() {
-    if (this.syncing || this.resetting || !this.view.auth || !this.view.online)
+    if (
+      this.syncing ||
+      this.resetting ||
+      !this.view.auth ||
+      this.view.auth.mustChangePassword ||
+      !this.view.online
+    )
       return;
     const auth = this.view.auth;
-    if (auth.expiresAt <= this.now()) {
+    if (auth.expiresAt <= this.now() && !auth.refreshToken) {
       await this.expire();
       return;
     }
     this.syncing = true;
     this.update({ syncing: true });
     try {
-      // Snapshot reconciliation always precedes retries; operation IDs/payloads stay unchanged.
-      const snapshot = await this.service.snapshot(auth);
-      if (this.view.auth?.student.id !== auth.student.id) return;
-      this.apply(snapshot);
+      // Upload real GPS promptly; server validates run ownership/state. A full
+      // history refresh must not consume the backend's short freshness window.
+      if (this.mode !== "api") {
+        const snapshot = await this.service.snapshot(auth);
+        if (this.view.auth?.student.id !== auth.student.id) return;
+        this.apply(snapshot);
+      }
       const batch = this.view.tracking?.queue.slice(0, 100) ?? [];
       if (batch.length) {
         const ack = await this.service.upload(auth, batch);

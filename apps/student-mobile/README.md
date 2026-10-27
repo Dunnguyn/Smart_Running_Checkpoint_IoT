@@ -63,7 +63,7 @@ Lượt Android bổ sung có `.env.local` đặt `mock` + `device` + background
 | Tích hợp backend thật khi có contract        | `api`        | `device` |
 | Tổ hợp bị chặn                               | `api`        | `demo`   |
 
-Biến đầy đủ: `EXPO_PUBLIC_SERVICE_MODE`, `EXPO_PUBLIC_GPS_MODE`, `EXPO_PUBLIC_API_BASE_URL`. Chế độ `api` hiện trả lỗi **CONTRACT_PENDING**, không gọi endpoint tự đoán, không dùng khóa admin/wearable và không tự rơi về mock. Đây là blocker backend thực tế, không phải API sinh viên đã tích hợp thành công. Xem [danh sách contract còn thiếu](docs/API_GAPS.md).
+Biến đầy đủ: `EXPO_PUBLIC_SERVICE_MODE`, `EXPO_PUBLIC_GPS_MODE`, `EXPO_PUBLIC_API_BASE_URL`. Chế độ `api` đã nối API sinh viên của backend `67927c1`, không dùng khóa admin/wearable và không tự chuyển sang mock. Xem [hướng dẫn tích hợp và các giới hạn còn chờ backend](docs/API_INTEGRATION.md).
 
 Backend trên điện thoại không phải `localhost` của máy dev. Khi endpoint sinh viên được triển khai, cấu hình base URL HTTPS mà điện thoại truy cập được (IP LAN/hostname của máy BE), bind BE đúng interface và cấu hình firewall/CORS theo môi trường. Android emulator có địa chỉ host riêng như `10.0.2.2`; điện thoại thật dùng địa chỉ mạng của máy BE. Không nhúng khóa máy chủ vào biến `EXPO_PUBLIC_*`.
 

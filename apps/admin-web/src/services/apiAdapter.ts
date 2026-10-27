@@ -130,9 +130,10 @@ export const apiAdapter: RaceService = {
     const mapped = result.items.map((r) => ({
       ...r,
       started_at: utc(r.start_at),
-      location: "—",
-      total_laps: null,
-      participant_count: null,
+      ended_at: utc(r.end_at),
+      location: r.location ?? "—",
+      total_laps: r.total_laps ?? null,
+      participant_count: r.participant_count ?? null,
     }));
     if (version === keyGeneration()) races = mapped;
     return mapped;

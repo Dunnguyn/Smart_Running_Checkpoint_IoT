@@ -21,6 +21,7 @@ import { config, configurationError } from "./src/config";
 import { terminal } from "./src/domain/model";
 import { AppContext, type Route, type Screen } from "./src/state/context";
 import { engine } from "./src/state/runtime";
+import ChangePassword from "./src/screens/ChangePassword";
 import Login from "./src/screens/Login";
 import Races from "./src/screens/Races";
 import RaceDetail from "./src/screens/RaceDetail";
@@ -111,6 +112,7 @@ export default function App() {
       </View>
     );
   else if (!view.auth) content = <Login />;
+  else if (view.auth.mustChangePassword) content = <ChangePassword />;
   else if (!view.snapshot && !view.error)
     content = (
       <View style={[s.grow, s.center]}>
@@ -191,55 +193,59 @@ export default function App() {
                 </View>
               </View>
             )}
-            {view.auth && ongoing && tabScreen && (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Quay lại phiên chạy"
-                onPress={() =>
-                  go({
-                    screen: "run",
-                    runId: ongoing.id,
-                    raceId: ongoing.raceId,
-                  })
-                }
-                style={{
-                  margin: 12,
-                  marginBottom: 0,
-                  padding: 14,
-                  borderRadius: 16,
-                  backgroundColor:
-                    view.tracking?.capture === "PAUSED" ||
-                    ongoing.status === "PAUSED"
-                      ? c.orange
-                      : c.navy,
-                  flexDirection: "row",
-                  gap: 10,
-                  alignItems: "center",
-                }}
-              >
-                <Icon name="gps" color={c.white} />
-                <View style={s.grow}>
-                  <Text style={[s.strong, { color: c.white }]}>
-                    {view.tracking?.capture === "PAUSED" ||
-                    ongoing.status === "PAUSED"
-                      ? "Phiên chạy đang tạm dừng"
-                      : "Bạn có phiên chạy chưa kết thúc"}
-                  </Text>
-                  <Text style={[s.small, { color: "#ffffffcc" }]}>
-                    {
-                      view.snapshot?.races.find((r) => r.id === ongoing.raceId)
-                        ?.name
-                    }{" "}
-                    · Chạm để quay lại
-                  </Text>
-                </View>
-                <Icon name="chevron" color={c.white} />
-              </Pressable>
-            )}
+            {view.auth &&
+              !view.auth.mustChangePassword &&
+              ongoing &&
+              tabScreen && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Quay lại phiên chạy"
+                  onPress={() =>
+                    go({
+                      screen: "run",
+                      runId: ongoing.id,
+                      raceId: ongoing.raceId,
+                    })
+                  }
+                  style={{
+                    margin: 12,
+                    marginBottom: 0,
+                    padding: 14,
+                    borderRadius: 16,
+                    backgroundColor:
+                      view.tracking?.capture === "PAUSED" ||
+                      ongoing.status === "PAUSED"
+                        ? c.orange
+                        : c.navy,
+                    flexDirection: "row",
+                    gap: 10,
+                    alignItems: "center",
+                  }}
+                >
+                  <Icon name="gps" color={c.white} />
+                  <View style={s.grow}>
+                    <Text style={[s.strong, { color: c.white }]}>
+                      {view.tracking?.capture === "PAUSED" ||
+                      ongoing.status === "PAUSED"
+                        ? "Phiên chạy đang tạm dừng"
+                        : "Bạn có phiên chạy chưa kết thúc"}
+                    </Text>
+                    <Text style={[s.small, { color: "#ffffffcc" }]}>
+                      {
+                        view.snapshot?.races.find(
+                          (r) => r.id === ongoing.raceId,
+                        )?.name
+                      }{" "}
+                      · Chạm để quay lại
+                    </Text>
+                  </View>
+                  <Icon name="chevron" color={c.white} />
+                </Pressable>
+              )}
             <View style={{ flex: 1 }} key={view.auth?.student.id ?? "login"}>
               {content}
             </View>
-            {view.auth && tabScreen && (
+            {view.auth && !view.auth.mustChangePassword && tabScreen && (
               <View
                 style={{
                   flexDirection: "row",
