@@ -540,10 +540,18 @@ def _participation(db: Session, race: core.Race, participant: core.RaceParticipa
     attendance = _attendance(db, participant.id)
     run = _latest_run(db, race.id, student_id)
     config = db.get(StudentAttendanceConfig, race.id)
-    now = core.now_utc()
+    # SQLite drops timezone metadata on DateTime reads; normalize both sides
+    # before building UI action projections to avoid naive/aware TypeErrors.
+    now = _utc(core.now_utc())
+    check_in_open = _utc(config.check_in_open_at) if config else None
+    check_in_close = _utc(config.check_in_close_at) if config else None
+    check_out_open = _utc(config.check_out_open_at) if config else None
+    check_out_close = _utc(config.check_out_close_at) if config else None
     active = run is not None and run.status == "ACTIVE"
     checked_in = attendance is not None and attendance.status == "CHECKED_IN"
     run_view = _run_snapshot(db, run, installation_id) if run else None
+    check_in_allowed = bool(config and attendance is None and check_in_open <= now <= check_in_close)
+    check_out_allowed = bool(config and checked_in and not active and check_out_open <= now <= check_out_close)
     return {"race_id": race.id, "registration_id": participant.id,
             "registration_status": participant.registration_status,
             "bib_number": participant.bib_number,
@@ -555,10 +563,8 @@ def _participation(db: Session, race: core.Race, participant: core.RaceParticipa
                                               "outcome": None, "version": 0}),
             "run": run_view,
             "actions": [
-                {"action": "CHECK_IN", "allowed": bool(config and attendance is None and
-                    config.check_in_open_at <= now <= config.check_in_close_at),
-                 "reason_code": None if config and attendance is None and
-                    config.check_in_open_at <= now <= config.check_in_close_at else "CHECK_IN_NOT_OPEN"},
+                {"action": "CHECK_IN", "allowed": check_in_allowed,
+                 "reason_code": None if check_in_allowed else "CHECK_IN_NOT_OPEN"},
                 {"action": "START", "allowed": checked_in and not active and race.status == "LIVE",
                  "reason_code": None if checked_in and not active and race.status == "LIVE" else "CHECK_IN_REQUIRED"},
                 {"action": "WITHDRAW", "allowed": active,
@@ -567,10 +573,8 @@ def _participation(db: Session, race: core.Race, participant: core.RaceParticipa
                  "reason_code": None if run_view and run_view["actions"]["can_pause"] else "RUN_NOT_ACTIVE"},
                 {"action": "RESUME", "allowed": bool(run_view and run_view["actions"]["can_resume"]),
                  "reason_code": None if run_view and run_view["actions"]["can_resume"] else "RUN_NOT_PAUSED"},
-                {"action": "CHECK_OUT", "allowed": bool(config and checked_in and not active and
-                    config.check_out_open_at <= now <= config.check_out_close_at),
-                 "reason_code": None if config and checked_in and not active and
-                    config.check_out_open_at <= now <= config.check_out_close_at else "CHECK_OUT_NOT_OPEN"},
+                {"action": "CHECK_OUT", "allowed": check_out_allowed,
+                 "reason_code": None if check_out_allowed else "CHECK_OUT_NOT_OPEN"},
             ], "server_time": now}
 
 
@@ -1171,6 +1175,39 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
     items: list[dict[str, Any]] = []
     for sample in data.samples:
         sample_key = f"mobile:{run_id}:{sample.sample_id}"
+        captured_at = _utc(sample.recorded_at)
+        # A sample's identity belongs to its immutable body, not the transport
+        # batch that happened to carry it. This makes retries across batches safe.
+        sample_hash = _canonical_hash(sample.model_dump(mode="json"))
+        previous_resume = db.scalar(select(StudentRunPause).where(
+            StudentRunPause.run_id == run_id,
+            StudentRunPause.resumed_at.is_not(None),
+            StudentRunPause.resumed_at <= captured_at
+        ).order_by(StudentRunPause.resumed_at.desc()).limit(1))
+        offset = previous_resume.steps_offset_after if previous_resume else 0
+        normalized_steps = (sample.steps_since_start + offset) if sample.steps_since_start is not None else None
+        existing = db.scalar(select(core.GpsPoint).where(core.GpsPoint.idempotency_key == sample_key))
+        if existing:
+            same_sample = existing.mobile_sample_hash == sample_hash
+            if existing.mobile_sample_hash is None:
+                # Compatibility for records created before canonical mobile hashes.
+                same_sample = (existing.sample_id == sample.sample_id
+                    and existing.sequence == sample.sequence
+                    and _utc(existing.recorded_at) == captured_at
+                    and existing.latitude == sample.latitude and existing.longitude == sample.longitude
+                    and existing.accuracy_m == sample.accuracy_m and existing.speed_mps == sample.speed_mps
+                    and (normalized_steps is None or existing.total_steps == normalized_steps))
+            if not same_sample:
+                _fail(409, "SAMPLE_ID_CONFLICT", "sample_id đã được dùng với payload GPS khác.")
+            items.append({"sample_id": sample.sample_id, "status": "DUPLICATE", "accepted": True,
+                          "retryable": False, "gps_point_id": existing.id, "sequence": sample.sequence})
+            continue
+        if captured_at < _utc(core.now_utc()) - timedelta(seconds=core.settings.max_mobile_offline_age_seconds):
+            items.append({"sample_id": sample.sample_id, "status": "REJECTED", "accepted": False,
+                          "retryable": False, "reason_code": "GPS_TOO_OLD",
+                          "max_age_seconds": core.settings.max_mobile_offline_age_seconds,
+                          "sequence": sample.sequence})
+            continue
         gps = core.GpsIn(idempotency_key=sample_key, race_id=run.race_id, run_id=run.id,
             student_id=run.student_id, wearable_device_id=run.wearable_device_id,
             latitude=sample.latitude, longitude=sample.longitude, recorded_at=sample.recorded_at,
@@ -1178,15 +1215,7 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
             total_steps=sample.steps_since_start if sample.steps_since_start is not None else run.total_steps,
             source="MOBILE_GPS", sample_id=sample.sample_id, sequence=sample.sequence,
             batch_id=data.batch_id)
-        sample_hash = hashlib.sha256(json.dumps(gps.model_dump(mode="json"), sort_keys=True).encode("utf-8")).hexdigest()
-        existing = db.scalar(select(core.GpsPoint).where(core.GpsPoint.idempotency_key == sample_key))
-        if existing:
-            if existing.payload_hash and existing.payload_hash != sample_hash:
-                _fail(409, "SAMPLE_ID_CONFLICT", "sample_id đã được dùng với payload khác.")
-            items.append({"sample_id": sample.sample_id, "status": "DUPLICATE", "accepted": True,
-                          "gps_point_id": existing.id, "sequence": sample.sequence})
-            continue
-        captured_at = _utc(sample.recorded_at)
+        gps._mobile_sample_hash = sample_hash
         if run_is_paused_at(db, run_id, captured_at):
             items.append({"sample_id": sample.sample_id, "status": "REJECTED", "accepted": False,
                           "reason_code": "RUN_PAUSED", "sequence": sample.sequence,
@@ -1204,12 +1233,6 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
             continue
         steps_total = run.total_steps
         if sample.steps_since_start is not None:
-            previous_resume = db.scalar(select(StudentRunPause).where(
-                StudentRunPause.run_id == run_id,
-                StudentRunPause.resumed_at.is_not(None),
-                StudentRunPause.resumed_at <= captured_at
-            ).order_by(StudentRunPause.resumed_at.desc()).limit(1))
-            offset = previous_resume.steps_offset_after if previous_resume else 0
             steps_total = max(run.total_steps, sample.steps_since_start + offset)
         try:
             gps.total_steps = steps_total
@@ -1227,6 +1250,10 @@ async def student_gps_batch(run_id: str, data: GpsBatchIn, principal: StudentPri
             items.append({"sample_id": sample.sample_id, "status": "REJECTED", "accepted": False,
                           "sequence": sample.sequence, "reason_code": detail.get("code", "GPS_REJECTED")})
             run = _owned_run(db, run_id, principal.student.id)
+    # Every row-level decision is final for this sample. Clients should not
+    # retry validation failures; transient transport failures retry the batch.
+    for item in items:
+        item.setdefault("retryable", False)
     snapshot = _run_snapshot(db, run, principal.session.installation_id)
     result = {"run_id": run.id, "batch_id": data.batch_id, "items": items,
               "run": snapshot, "last_processed_sequence": getattr(run, "last_sequence", 0),

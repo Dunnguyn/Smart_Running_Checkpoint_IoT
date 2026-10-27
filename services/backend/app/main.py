@@ -21,12 +21,13 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, or_, select, text, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -44,6 +45,9 @@ class Settings(BaseSettings):
     min_lap_interval_seconds: int = 30
     max_gps_speed_mps: float = 12.0
     max_simulator_speed_mps: float = 18.0
+    # Mobile apps may upload a short offline queue; Arduino/Gateway freshness
+    # continues to use Race.max_event_age_seconds and is not widened by this.
+    max_mobile_offline_age_seconds: int = Field(default=300, ge=0, le=3600)
     simulator_base_url: str = "http://127.0.0.1:8000"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -105,6 +109,7 @@ class Race(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(160))
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="DRAFT")
     route_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
@@ -221,6 +226,7 @@ class GpsPoint(Base):
     source: Mapped[str] = mapped_column(String(30))
     idempotency_key: Mapped[str] = mapped_column(String(120))
     payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mobile_sample_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sample_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -455,6 +461,15 @@ class GpsIn(BaseModel):
     speed_mps: float | None = Field(default=None, ge=0)
     total_steps: int = Field(ge=0)
     source: str = "SIMULATOR"
+    # Set only by the authenticated student batch handler, never from JSON.
+    # PrivateAttr keeps this implementation detail out of the public OpenAPI.
+    _mobile_sample_hash: str | None = PrivateAttr(default=None)
+
+
+class RaceStatusPatch(BaseModel):
+    """Optimistic admin transition; terminal results are owned by run rules."""
+    status: Literal["SCHEDULED", "LIVE", "CANCELLED"] = Field(description="Trạng thái đích của giải.")
+    expected_status: Literal["DRAFT", "SCHEDULED", "LIVE"] = Field(description="Trạng thái hiện tại FE vừa đọc, dùng chống cập nhật ghi đè.")
 
 
 class DeviceEventIn(BaseModel):
@@ -522,12 +537,22 @@ class EventHub:
         self.clients.get(race_id, set()).discard(socket)
 
     async def publish(self, race_id: str, payload: dict[str, Any]) -> None:
+        # Encode once before fan-out: WebSocket payloads contain datetime values
+        # that are valid API data but are not accepted by raw JSON encoders.
+        try:
+            encoded_payload = jsonable_encoder(payload)
+        except Exception:
+            logger.exception("Could not encode WebSocket event for race %s", race_id)
+            return
         stale = []
         for socket in self.clients.get(race_id, set()):
             try:
-                await socket.send_json(payload)
-            except Exception:
+                await socket.send_json(encoded_payload)
+            except (WebSocketDisconnect, OSError, RuntimeError):
                 stale.append(socket)
+            except Exception:
+                # A client-specific send failure should not affect healthy peers.
+                logger.exception("WebSocket send failed for race %s", race_id)
         for socket in stale:
             self.disconnect(race_id, socket)
 
@@ -742,11 +767,91 @@ def maybe_complete_run(db: Session, run: RunSession, crossed_at: datetime) -> bo
     return False
 
 
+def _ordered_checkpoints(db: Session, race_id: str) -> list[Checkpoint]:
+    """Return configured route checkpoints in the canonical order."""
+    return db.scalars(select(Checkpoint).where(Checkpoint.race_id == race_id)
+                      .order_by(Checkpoint.sequence_no, Checkpoint.id)).all()
+
+
+def _is_lap_checkpoint(db: Session, race_id: str, checkpoint: Checkpoint) -> bool:
+    """Honor the single configured LAP marker; legacy routes fall back to the last point."""
+    route = _ordered_checkpoints(db, race_id)
+    if not route:
+        return False
+    declared = [point for point in route if point.kind.upper() == "LAP"]
+    finish = declared[0] if len(declared) == 1 else route[-1]
+    return finish.id == checkpoint.id
+
+
+def _route_sequence_complete(db: Session, run: RunSession, checkpoint: Checkpoint,
+                             occurred_at: datetime) -> bool:
+    """Require ordered passage evidence for every checkpoint since the prior lap.
+
+    GPS_ONLY uses assigned GPS passages. GPS_AND_ARDUINO requires those passages
+    to have been consumed by a matched device event, preserving the identity rule.
+    """
+    route = _ordered_checkpoints(db, run.race_id)
+    if not route:
+        return True  # Existing races without configured checkpoints remain compatible.
+    race = db.get(Race, run.race_id)
+    declared = [point for point in route if point.kind.upper() == "LAP"]
+    finish = declared[0] if len(declared) == 1 else route[-1]
+    if finish.id != checkpoint.id:
+        return False
+    if len(route) == 1:
+        # A lone checkpoint acts as start and finish: require two separate
+        # observed entries, so the starting hit cannot also award the lap.
+        single = select(GPSPassage).where(
+            GPSPassage.run_id == run.id,
+            GPSPassage.checkpoint_id == route[0].id,
+            GPSPassage.entry_at >= aware(run.last_lap_at or run.started_at),
+            GPSPassage.entry_at <= aware(occurred_at) + timedelta(seconds=(
+                race.match_window_seconds + race.late_grace_seconds
+                if race and race.checkpoint_mode == "GPS_AND_ARDUINO" else 0)),
+        )
+        if race and race.checkpoint_mode == "GPS_AND_ARDUINO":
+            single = single.where(GPSPassage.consumed_by_event_id.is_not(None))
+        return (db.scalar(select(func.count()).select_from(single.subquery())) or 0) >= 2
+    finish_index = route.index(finish)
+    expected_route = route[finish_index + 1:] + route[:finish_index + 1]
+    anchor = aware(run.last_lap_at or run.started_at)
+    stmt = select(GPSPassage).where(
+        GPSPassage.run_id == run.id,
+        GPSPassage.entry_at >= anchor,
+    )
+    if race and race.checkpoint_mode == "GPS_AND_ARDUINO":
+        stmt = stmt.where(GPSPassage.consumed_by_event_id.is_not(None))
+        stmt = stmt.where(GPSPassage.entry_at <= aware(occurred_at) + timedelta(
+            seconds=race.match_window_seconds + race.late_grace_seconds))
+    else:
+        stmt = stmt.where(GPSPassage.entry_at <= aware(occurred_at))
+    passages = db.scalars(stmt.order_by(GPSPassage.entry_at, GPSPassage.id)).all()
+    expected = 0
+    for passage in passages:
+        if passage.checkpoint_id == expected_route[expected].id:
+            expected += 1
+            if expected == len(expected_route):
+                return passage.checkpoint_id == checkpoint.id
+        elif passage.checkpoint_id == expected_route[0].id:
+            # A new start marker restarts an incomplete lap sequence.
+            expected = 1
+        elif expected and passage.checkpoint_id == expected_route[expected - 1].id:
+            # Duplicate evidence for the immediately preceding checkpoint does not advance.
+            continue
+        else:
+            expected = 0
+    return False
+
+
 def record_lap(db: Session, run: RunSession, checkpoint: Checkpoint, crossed_at: datetime, source: str, source_event_id: str) -> tuple[bool, int | None]:
     """Apply the shared minimum-time and total-lap rules; never count beyond the target."""
     if run.status != "ACTIVE":
         return False, None
     race = db.get(Race, run.race_id)
+    if not _is_lap_checkpoint(db, run.race_id, checkpoint):
+        return False, -2
+    if not _route_sequence_complete(db, run, checkpoint, crossed_at):
+        return False, -2
     occurred = aware(crossed_at)
     if run.source == "MOBILE_GPS":
         from .student_api import run_is_paused_at
@@ -856,7 +961,7 @@ def finish_match(db: Session, event: DeviceEvent, candidate: dict[str, Any], pas
         mobile_paused = run_is_paused_at(db, run.id, aware(event.occurred_at))
     if run.status != "ACTIVE":
         event.reason_code = "RUN_NOT_ACTIVE"
-    elif checkpoint.kind != "LAP":
+    elif not _is_lap_checkpoint(db, run.race_id, checkpoint):
         event.reason_code = "CHECKPOINT_NOT_LAP"
     elif mobile_paused:
         event.reason_code = "RUN_PAUSED"
@@ -872,7 +977,7 @@ def finish_match(db: Session, event: DeviceEvent, candidate: dict[str, Any], pas
         elif duration is None:
             event.reason_code = "RUN_NOT_ACTIVE"
         elif duration < 0:
-            event.reason_code = "NON_MONOTONIC_CROSSING_TIME"
+            event.reason_code = "CHECKPOINT_SEQUENCE_INCOMPLETE" if duration == -2 else "NON_MONOTONIC_CROSSING_TIME"
         else:
             event.reason_code = "MIN_LAP_INTERVAL_NOT_MET"
     return {"completed": run.status == "COMPLETED", "race_id": run.race_id, "student_id": run.student_id, "run_id": run.id}
@@ -961,6 +1066,8 @@ def verify_admin_key():
 # 5. Race setup APIs: Admin Web creates races, students, checkpoints and registrations.
 @app.post("/api/v1/races", status_code=201, dependencies=[Depends(admin)])
 def create_race(data: RaceIn, db: Session = Depends(db_session)):
+    if data.status not in {"DRAFT", "SCHEDULED"}:
+        envelope_error("INVALID_INITIAL_RACE_STATUS", "Giải mới chỉ được tạo ở trạng thái DRAFT hoặc SCHEDULED; dùng API chuyển trạng thái để mở LIVE.", 422)
     if data.checkpoint_mode not in {"GPS_ONLY", "GPS_AND_ARDUINO"}:
         envelope_error("INVALID_CHECKPOINT_MODE", "checkpoint_mode phải là GPS_ONLY hoặc GPS_AND_ARDUINO.", 422)
     race_values = data.model_dump(exclude={"min_lap_interval_seconds"})
@@ -981,11 +1088,51 @@ def create_race(data: RaceIn, db: Session = Depends(db_session)):
     return {"race_id": race.id, "name": race.name, "status": race.status, "total_laps": race.total_laps, "min_lap_interval_seconds": race.min_lap_interval_seconds, "route_profile": race.route_profile, "route_length_min_m": race.route_length_min_m, "route_length_max_m": race.route_length_max_m, **race_matching_config(race)}
 
 
+@app.patch("/api/v1/races/{race_id}/status", dependencies=[Depends(admin)])
+def change_race_status(race_id: str, data: RaceStatusPatch, db: Session = Depends(db_session)):
+    """Admin opens a scheduled race; student start remains guarded by LIVE status."""
+    race = get_or_404(db, Race, race_id, "giải chạy")
+    requested = data.status.upper()
+    expected = data.expected_status.upper()
+    if requested not in {"SCHEDULED", "LIVE", "CANCELLED"}:
+        envelope_error("INVALID_RACE_STATUS", "status chỉ nhận SCHEDULED, LIVE hoặc CANCELLED.", 422)
+    if race.status != expected:
+        if race.status == requested:
+            return {"race_id": race.id, "status": race.status, "actual_start_at": race.actual_start_at,
+                    "idempotent": True, "server_time": now_utc()}
+        envelope_error("RACE_STATUS_CONFLICT", f"Giải hiện ở trạng thái {race.status}, không khớp expected_status={expected}.", 409)
+    allowed = {"DRAFT": {"SCHEDULED", "CANCELLED"},
+               "SCHEDULED": {"LIVE", "CANCELLED"},
+               "LIVE": set()}
+    if requested not in allowed.get(race.status, set()):
+        envelope_error("INVALID_RACE_TRANSITION", f"Không thể chuyển giải từ {race.status} sang {requested}.", 409)
+    now = now_utc()
+    values: dict[str, Any] = {"status": requested}
+    if requested == "LIVE":
+        values["actual_start_at"] = now
+    # Compare-and-swap makes expected_status effective under concurrent admin requests.
+    changed = db.execute(update(Race).where(
+        Race.id == race_id, Race.status == expected).values(**values))
+    if changed.rowcount != 1:
+        db.rollback()
+        current = get_or_404(db, Race, race_id, "giải chạy")
+        if current.status == requested:
+            return {"race_id": current.id, "status": current.status,
+                    "actual_start_at": current.actual_start_at,
+                    "idempotent": True, "server_time": now_utc()}
+        envelope_error("RACE_STATUS_CONFLICT", f"Giải hiện ở trạng thái {current.status}; hãy tải lại trước khi đổi trạng thái.", 409)
+    db.commit()
+    db.refresh(race)
+    return {"race_id": race.id, "status": race.status, "start_at": race.start_at,
+            "actual_start_at": race.actual_start_at, "server_time": now, "idempotent": False}
+
+
 @app.get("/api/v1/races", dependencies=[Depends(admin)])
 def list_races(db: Session = Depends(db_session)):
     rows = db.scalars(select(Race).order_by(Race.start_at.desc().nullslast(), Race.id.desc())).all()
     return {"items": [{"race_id": r.id, "name": r.name, "status": r.status,
-        "start_at": r.start_at, "end_at": r.end_at, "location": r.route_name or "NEU",
+        "start_at": r.start_at, "actual_start_at": r.actual_start_at,
+        "end_at": r.end_at, "location": r.route_name or "NEU",
         "total_laps": r.total_laps,
         "participant_count": db.scalar(select(func.count(RaceParticipant.id)).where(
             RaceParticipant.race_id == r.id)) or 0} for r in rows]}
@@ -1520,12 +1667,15 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
     validation_now = now_utc()
     if recorded < aware(run.started_at):
         envelope_error("GPS_BEFORE_RUN_START", "GPS recorded_at không được trước thời điểm bắt đầu phiên chạy.", 422)
-    if recorded < validation_now - timedelta(seconds=race.max_event_age_seconds):
-        envelope_error("GPS_TOO_OLD", f"GPS cũ hơn giới hạn {race.max_event_age_seconds} giây.", 422)
+    freshness_limit = (settings.max_mobile_offline_age_seconds if auth_source == "MOBILE"
+                       else race.max_event_age_seconds)
+    if recorded < validation_now - timedelta(seconds=freshness_limit):
+        envelope_error("GPS_TOO_OLD", f"GPS cũ hơn giới hạn {freshness_limit} giây của nguồn {auth_source}.", 422)
     if recorded > validation_now + timedelta(seconds=race.max_future_skew_seconds):
         envelope_error("GPS_IN_FUTURE", f"GPS vượt quá độ lệch tương lai {race.max_future_skew_seconds} giây.", 422)
     if run.last_gps_recorded_at and recorded <= aware(run.last_gps_recorded_at): envelope_error("GPS_OUT_OF_ORDER", "Thời điểm GPS phải tăng dần.", 422)
     if data.total_steps < run.total_steps: envelope_error("STEPS_DECREASED", "Snapshot bước chân không được nhỏ hơn giá trị đã lưu.", 422)
+    first_gps_sample = run.last_gps_recorded_at is None
     previous_latitude, previous_longitude = run.last_latitude, run.last_longitude
     current_segment_id = run.segment_id
     sample_gap_seconds = ((recorded - aware(run.last_gps_recorded_at)).total_seconds()
@@ -1542,7 +1692,7 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
             if delta / sample_gap_seconds > max_speed: envelope_error("GPS_JUMP_REJECTED", f"Điểm GPS vượt ngưỡng {max_speed:g} m/s của nguồn {auth_source}.", 422)
     received = validation_now
     telemetry_source = "SIMULATED_GPS" if auth_source == "SIMULATOR" else "MOBILE_GPS" if auth_source == "MOBILE" else "WEARABLE_GPS"
-    point = GpsPoint(run_id=run.id, wearable_device_id=wearable.id if wearable else data.wearable_device_id, latitude=data.latitude, longitude=data.longitude, recorded_at=recorded, received_at=received, accuracy_m=data.accuracy_m, speed_mps=data.speed_mps, total_steps=data.total_steps, source=telemetry_source, idempotency_key=data.idempotency_key, payload_hash=request_hash, sample_id=data.sample_id, sequence=data.sequence, batch_id=data.batch_id, segment_id=current_segment_id)
+    point = GpsPoint(run_id=run.id, wearable_device_id=wearable.id if wearable else data.wearable_device_id, latitude=data.latitude, longitude=data.longitude, recorded_at=recorded, received_at=received, accuracy_m=data.accuracy_m, speed_mps=data.speed_mps, total_steps=data.total_steps, source=telemetry_source, idempotency_key=data.idempotency_key, payload_hash=request_hash, mobile_sample_hash=getattr(data, "_mobile_sample_hash", None), sample_id=data.sample_id, sequence=data.sequence, batch_id=data.batch_id, segment_id=current_segment_id)
     db.add(point); run.distance_total_m += delta; run.total_steps = data.total_steps; run.last_latitude = data.latitude; run.last_longitude = data.longitude; run.last_seen_at = received; run.last_gps_recorded_at = recorded
     if data.sequence is not None:
         run.last_sequence = data.sequence
@@ -1555,20 +1705,19 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
     # A checkpoint pass is inferred from an outside-to-inside GPS geofence transition.
     # The telemetry already belongs to a student through the registered wearable/run.
     crossings: list[dict[str, Any]] = []
-    if race.checkpoint_mode == "GPS_ONLY" and previous_latitude is not None and previous_longitude is not None:
-        route_checkpoints = db.scalars(
-            select(Checkpoint)
-            .where(
-                Checkpoint.race_id == run.race_id,
-                Checkpoint.latitude.is_not(None),
-                Checkpoint.longitude.is_not(None),
-            )
-            .order_by(Checkpoint.sequence_no)
-        ).all()
+    if race.checkpoint_mode == "GPS_ONLY":
+        route_checkpoints = [cp for cp in _ordered_checkpoints(db, run.race_id)
+                             if cp.latitude is not None and cp.longitude is not None]
         for checkpoint in route_checkpoints:
             current_distance = haversine_m(data.latitude, data.longitude, checkpoint.latitude, checkpoint.longitude)
-            previous_distance = haversine_m(previous_latitude, previous_longitude, checkpoint.latitude, checkpoint.longitude)
-            if previous_distance <= checkpoint.radius_m or current_distance > checkpoint.radius_m:
+            initial_start_marker = (first_gps_sample and route_checkpoints
+                                    and checkpoint.id == route_checkpoints[0].id
+                                    and current_distance <= checkpoint.radius_m)
+            crossed_into = False
+            if previous_latitude is not None and previous_longitude is not None:
+                previous_distance = haversine_m(previous_latitude, previous_longitude, checkpoint.latitude, checkpoint.longitude)
+                crossed_into = previous_distance > checkpoint.radius_m and current_distance <= checkpoint.radius_m
+            if not initial_start_marker and not crossed_into:
                 continue
             passage = GPSPassage(
                 race_id=race.id, checkpoint_id=checkpoint.id, run_id=run.id, student_id=run.student_id,
@@ -1585,12 +1734,13 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
                 "passage_id": passage.id, "lap_updated": False, "lap_no": None,
                 "lap_duration_s": None,
             }
-            if checkpoint.kind == "LAP":
+            if _is_lap_checkpoint(db, run.race_id, checkpoint) and not initial_start_marker:
                 source_event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{data.idempotency_key}:{checkpoint.id}"))
                 counted, lap_duration = record_lap(db, run, checkpoint, recorded, telemetry_source, source_event_id)
                 crossing.update({"lap_updated": counted, "lap_no": run.lap_count if counted else None, "lap_duration_s": lap_duration})
                 if not counted:
-                    crossing["rejection_reason"] = "MIN_LAP_INTERVAL_NOT_MET" if lap_duration is not None and lap_duration >= 0 else "NON_MONOTONIC_CROSSING_TIME"
+                    crossing["rejection_reason"] = ("CHECKPOINT_SEQUENCE_INCOMPLETE" if lap_duration == -2 else
+                        "MIN_LAP_INTERVAL_NOT_MET" if lap_duration is not None and lap_duration >= 0 else "NON_MONOTONIC_CROSSING_TIME")
                 else:
                     crossing["is_done"] = run.status == "COMPLETED"
             crossings.append(crossing)
@@ -1616,6 +1766,18 @@ async def receive_gps(data: GpsIn, auth_source: str = Depends(gps_ingest_auth), 
                     state.region = "OUTSIDE"
                 elif distance <= race.inner_radius_m:
                     state.region = "INSIDE"
+                    route_checkpoints = _ordered_checkpoints(db, run.race_id)
+                    if first_gps_sample and route_checkpoints and checkpoint.id == route_checkpoints[0].id:
+                        passage = GPSPassage(race_id=race.id, checkpoint_id=checkpoint.id, run_id=run.id,
+                            student_id=run.student_id, wearable_device_id=wearable.id if wearable else data.wearable_device_id,
+                            entry_gps_point_id=point.id, entry_at=recorded, received_at=received,
+                            entry_distance_m=distance, telemetry_source=telemetry_source,
+                            config_version=race.config_version)
+                        db.add(passage); db.flush()
+                        crossings.append({"checkpoint_id": checkpoint.id, "checkpoint_code": checkpoint.code,
+                            "student_id": run.student_id, "run_id": run.id,
+                            "identity_status": "GPS_PASSAGE_PENDING_ARDUINO", "passage_id": passage.id,
+                            "entry_distance_m": round(distance, 2), "lap_updated": False})
             elif previous_region == "OUTSIDE" and distance <= race.inner_radius_m:
                 state.region = "INSIDE"
                 passage = GPSPassage(race_id=race.id, checkpoint_id=checkpoint.id, run_id=run.id, student_id=run.student_id,
@@ -1792,6 +1954,8 @@ async def create_lap(data: LapIn, db: Session = Depends(db_session)):
             envelope_error("RUN_PAUSED", "Không thể xác nhận vòng trong khoảng tạm dừng.")
     counted, duration = record_lap(db, run, checkpoint, occurred, data.source, data.source_event_id)
     if not counted:
+        if duration == -2:
+            envelope_error("CHECKPOINT_SEQUENCE_INCOMPLETE", "Chưa đi qua đủ checkpoint theo đúng thứ tự của vòng.", 422)
         envelope_error("LAP_TOO_SOON" if duration is not None and duration >= 0 else "NON_MONOTONIC_CROSSING_TIME", "Thời điểm vòng không hợp lệ hoặc chưa đủ thời gian tối thiểu.", 422)
     db.commit()
     event = db.scalar(select(LapEvent).where(LapEvent.source_event_id == data.source_event_id))
@@ -1804,18 +1968,41 @@ async def create_lap(data: LapIn, db: Session = Depends(db_session)):
 @app.post("/api/v1/runs/{run_id}/finish", dependencies=[Depends(admin)])
 async def finish_run(run_id: str, data: FinishIn, db: Session = Depends(db_session)):
     run = get_or_404(db, RunSession, run_id, "phiên chạy")
-    if run.status == "COMPLETED": return {"run_id": run.id, "status": run.status, "display_status": "DONE", "is_done": True, "started_at": run.started_at, "ended_at": run.ended_at, "duration_total_s": run.duration_total_s, "distance_total_m": run.distance_total_m, "lap_count": run.lap_count, "total_steps": run.total_steps}
+    race = get_or_404(db, Race, run.race_id, "giải chạy")
+    if run.status in {"COMPLETED", "ABANDONED"}:
+        is_done = run.status == "COMPLETED"
+        return {"run_id": run.id, "status": run.status,
+            "display_status": "DONE" if is_done else "ENDED",
+            "result_state": "COMPLETED" if is_done else "INCOMPLETE",
+            "is_done": is_done, "idempotent": True, "started_at": run.started_at,
+            "ended_at": run.ended_at, "duration_total_s": run.duration_total_s,
+            "distance_total_m": round(run.distance_total_m, 2), "lap_count": run.lap_count,
+            "total_laps": race.total_laps, "total_steps": run.total_steps}
     if run.status != "ACTIVE": envelope_error("RUN_NOT_ACTIVE", "Chỉ phiên ACTIVE mới kết thúc được.")
     run.ended_at = now_utc()
     if run.source == "MOBILE_GPS":
         from .student_api import close_open_pause
         close_open_pause(db, run.id, run.ended_at)
     run.finalized_at = run.ended_at; run.revision += 1
-    run.duration_total_s = max(0, int((run.ended_at - aware(run.started_at)).total_seconds())); run.status = "COMPLETED"
-    maybe_complete_race(db, db.get(Race, run.race_id), run.ended_at)
+    run.duration_total_s = max(0, int((run.ended_at - aware(run.started_at)).total_seconds()))
+    # Admin finish is an early stop. Only the lap engine may award COMPLETED.
+    completed_by_rules = run.lap_count >= race.total_laps
+    run.status = "COMPLETED" if completed_by_rules else "ABANDONED"
+    if completed_by_rules:
+        maybe_complete_race(db, race, run.ended_at)
     db.commit()
-    await hub.publish(run.race_id, {"type": "runner.completed", "data": {"student_id": run.student_id, "run_id": run.id, "duration_total_s": run.duration_total_s}})
-    return {"run_id": run.id, "status": run.status, "display_status": "DONE", "is_done": True, "started_at": run.started_at, "ended_at": run.ended_at, "duration_total_s": run.duration_total_s, "distance_total_m": round(run.distance_total_m, 2), "lap_count": run.lap_count, "total_steps": run.total_steps}
+    event_type = "runner.completed" if completed_by_rules else "runner.ended"
+    await hub.publish(run.race_id, {"type": event_type, "race_id": run.race_id,
+        "data": {"student_id": run.student_id, "run_id": run.id, "status": run.status,
+                 "duration_total_s": run.duration_total_s, "lap_count": run.lap_count,
+                 "total_laps": race.total_laps, "is_done": completed_by_rules}})
+    return {"run_id": run.id, "status": run.status,
+            "display_status": "DONE" if completed_by_rules else "ENDED",
+            "result_state": "COMPLETED" if completed_by_rules else "INCOMPLETE",
+            "is_done": completed_by_rules, "idempotent": False,
+            "started_at": run.started_at, "ended_at": run.ended_at,
+            "duration_total_s": run.duration_total_s, "distance_total_m": round(run.distance_total_m, 2),
+            "lap_count": run.lap_count, "total_laps": race.total_laps, "total_steps": run.total_steps}
 
 
 # 6. [FE LINK] Read APIs: Admin Web uses these to render KPIs, tables, detail and map snapshot.
@@ -1998,10 +2185,12 @@ def migrate_demo_schema() -> None:
             "segment_id": "INTEGER NOT NULL DEFAULT 1", "consent_version": "VARCHAR(40) NULL",
             "consent_granted_at": "DATETIME NULL", "finalized_at": "DATETIME NULL"},
         "gps_points": {"wearable_device_id": "VARCHAR(80) NULL", "payload_hash": "VARCHAR(64) NULL",
+            "mobile_sample_hash": "VARCHAR(64) NULL",
             "sample_id": "VARCHAR(36) NULL", "sequence": "INTEGER NULL", "batch_id": "VARCHAR(36) NULL",
             "segment_id": "INTEGER NULL"},
         "idempotency_records": {"request_hash": "VARCHAR(64) NULL"},
         "races": {
+            "actual_start_at": "DATETIME NULL",
             "route_profile": "VARCHAR(30) NOT NULL DEFAULT 'CUSTOM'",
             "route_length_min_m": "FLOAT NULL",
             "route_length_max_m": "FLOAT NULL",

@@ -185,14 +185,15 @@ Gửi GPS theo batch:
 }
 ```
 
-`sequence` tăng dần trong suốt phiên; `sample_id` và `batch_id` là UUID ổn định khi retry. Không gửi GPS khi chưa có phiên ACTIVE. Backend lọc dữ liệu, cập nhật bước/quãng đường và xác nhận lap theo engine hiện tại; app không tự đặt lap hoặc trạng thái hoàn thành.
+`sequence` tăng dần trong suốt phiên; `sample_id` và `batch_id` là UUID ổn định khi retry. Không gửi GPS khi chưa có phiên ACTIVE. Backend lọc dữ liệu, cập nhật bước/quãng đường và xác nhận lap theo engine; app không tự đặt lap hoặc trạng thái hoàn thành. Cùng một `sample_id` với nội dung giống hệt được ACK `DUPLICATE` kể cả khi gửi lại trong `batch_id` mới; cùng ID nhưng nội dung khác nhận `SAMPLE_ID_CONFLICT`.
 
 ## Thời gian, pause/resume, GPS muộn và giới hạn hiện tại
 
 - Gọi pause/resume với `Idempotency-Key` và `expected_revision` lấy từ snapshot. Resume bắt buộc `steps_since_start` để backend thiết lập lại baseline bước chân của thiết bị.
 - `elapsed_seconds`/`duration_total_s` là thời gian từ bắt đầu tới hiện tại/kết thúc, gồm thời gian nghỉ. `paused_seconds` là tổng thời gian nghỉ đã xác nhận; `active_seconds = elapsed_seconds - paused_seconds`. Sau khi phiên kết thúc, elapsed time đóng băng tại `ended_at`.
-- GPS samples được xác thực theo chủ phiên, thiết bị/cài đặt, thứ tự sequence, timestamp, tọa độ, tốc độ, bước chân và quy tắc checkpoint. Batch/sample retry cùng ID không cộng lại dữ liệu; cùng ID với payload khác bị từ chối.
-- Nếu khoảng mất mẫu vượt `max_sample_gap_seconds`, backend bắt đầu `segment_id` mới, không nối quãng đường qua khoảng trống và không suy diễn đã qua checkpoint trong khoảng đó.
+- GPS samples được xác thực theo chủ phiên, thiết bị/cài đặt, thứ tự sequence, timestamp, tọa độ, tốc độ, bước chân và quy tắc checkpoint. Batch/sample retry cùng ID không cộng lại dữ liệu; cùng ID với payload khác bị từ chối. Mỗi phần tử response có `status`, `accepted`, `retryable` và `reason_code` (nếu bị loại); lỗi xác thực nghiệp vụ là `retryable=false`, lỗi mạng/transport có thể gửi lại cùng batch.
+- App được tải hàng đợi GPS ngoại tuyến tối đa **300 giây** tính từ `recorded_at` trong khi phiên vẫn `ACTIVE`; giới hạn này chỉ áp dụng nguồn MOBILE, không nới cửa sổ sự kiện Arduino/Gateway hoặc thiết bị đeo. Mẫu cũ hơn bị trả `GPS_TOO_OLD` và không nên retry. Mẫu phải sau lúc bắt đầu, không thuộc khoảng nghỉ, có timestamp/sequence tăng dần và không được sửa kết quả phiên đã kết thúc.
+- Nếu khoảng mất mẫu vượt `max_sample_gap_seconds`, backend bắt đầu `segment_id` mới, không nối quãng đường qua khoảng trống và không suy diễn đã qua checkpoint trong khoảng đó. Điểm đầu ở segment mới chỉ làm mốc định vị; mẫu GPS muộn không được dùng để bù một passage bị thiếu.
 - Dashboard cá nhân chỉ tính lượt check-in, phiên hoàn thành chính thức và phiên kết thúc sớm; run ngoài luồng app được đếm riêng ở `excluded_non_mobile_runs`. Pace trung bình là tổng thời gian hoàn thành chia tổng quãng đường rồi quy đổi sang giây/km; khi không có quãng đường trả `null`.
 - WebSocket dùng vé ngắn hạn một lần; event có `event_id`, aggregate/revision. Fan-out trong bộ nhớ một tiến trình, vì vậy app cần refetch snapshot sau reconnect. Nhiều worker cần pub/sub dùng chung trước triển khai thật.
 - CORS của API REST không ảnh hưởng app native; với app chạy trong WebView/trình duyệt, thêm origin thật vào `CORS_ORIGINS`.

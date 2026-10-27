@@ -171,7 +171,7 @@ def main() -> None:
     start_offset_m = 0.0  # All five runners start together at C01 and finish each lap at C01.
 
     race = request_json(args.base_url, "/api/v1/races", "POST", {
-        "name": f"NEU - Vòng quanh tòa Thế Kỷ ({run_tag})", "status": "LIVE",
+        "name": f"NEU - Vòng quanh tòa Thế Kỷ ({run_tag})", "status": "SCHEDULED",
         "route_name": "Vòng mô phỏng quanh tòa nhà Thế Kỷ NEU",
         "route_profile": "NEU_DEMO",
         "total_laps": args.laps,
@@ -219,6 +219,11 @@ def main() -> None:
     if len(points) < 5:
         raise RuntimeError("Backend chưa trả tuyến đã lưu hợp lệ; không thể chạy mô phỏng.")
     points, segment_lengths, route_length = make_route(points)
+
+    # Use the public lifecycle API so the demo follows the same state transition
+    # as an admin opening a scheduled race for student check-in/run start.
+    request_json(args.base_url, f"/api/v1/races/{race_id}/status", "PATCH",
+                 {"expected_status": "SCHEDULED", "status": "LIVE"}, admin_key, admin_header)
 
     runners = []
     speed_rng = random.Random(args.seed)
