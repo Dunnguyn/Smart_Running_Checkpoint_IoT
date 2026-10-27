@@ -3,4 +3,7 @@ dist/
 *.tsbuildinfo
 .env
 test-results/
+playwright-report/
+*.log
 .npm-cache/
+.env.local

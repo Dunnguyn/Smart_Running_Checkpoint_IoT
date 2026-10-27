@@ -5,7 +5,7 @@ export function Badge({ status }: { status: RunStatus | RaceStatus }) {
   return (
     <span className={`badge badge-${status.toLowerCase()}`}>
       <span className="status-dot" />
-      {statusLabels[status]}
+      {statusLabels[status] ?? `Trạng thái khác (${status})`}
     </span>
   );
 }

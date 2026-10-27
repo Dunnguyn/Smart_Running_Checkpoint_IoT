@@ -110,29 +110,9 @@ describe("simulation consistency and lifecycle", () => {
     expect(sorted.total).toBe(128);
     expect(filterRunners(runners, { search: "no-such-student" }).total).toBe(0);
   });
-  it("fails explicitly for every unimplemented API method without network calls", async () => {
+  it("requires an in-memory admin key before API reads", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    await expect(apiAdapter.listRaces()).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-    });
-    await expect(apiAdapter.getRaceOverview("r")).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-    });
-    await expect(apiAdapter.listRunners("r", {})).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-    });
-    await expect(apiAdapter.getRaceLiveSnapshot("r")).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-    });
-    await expect(apiAdapter.getRunDetail("s", "r")).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-    });
-    await expect(apiAdapter.getRunEvents("s", "r")).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-    });
-    expect(() =>
-      apiAdapter.subscribeRaceLive("r", { onSnapshot: () => {} }),
-    ).toThrow();
+    await expect(apiAdapter.listRaces()).rejects.toMatchObject({ status: 401 });
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
   });

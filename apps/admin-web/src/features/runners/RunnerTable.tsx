@@ -1,14 +1,8 @@
-import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import {
-  Search,
-  ArrowDownUp,
-  ChevronLeft,
-  ChevronRight,
-  Users,
-} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
 import { raceService } from "../../services";
+import { reconcileRunner } from "../../services/reconcile";
 import type {
   PaginatedResponse,
   RunSession,
@@ -16,86 +10,126 @@ import type {
   RunnerFilters,
 } from "../../types/domain";
 import { Badge, Empty } from "../../components/ui";
+import { IconAction } from "../../components/IconAction";
+import { Eye } from "lucide-react";
+import { Modal } from "../../components/Modal";
+import { RunDetail } from "./RunDetail";
 import { distance, duration } from "../../utils/format";
-export function RunnerTable({
-  compact = false,
-  onSelect,
-}: {
-  compact?: boolean;
-  onSelect?: (id: string) => void;
-}) {
-  const { snapshot } = useLive();
+export function RunnerTable() {
+  const { snapshot, raceId, mergeRunners } = useLive();
   const [params, setParams] = useSearchParams();
   const query = params.get("q") ?? "",
     status = (params.get("status") ?? "") as RunStatus | "";
-  const [sort, setSort] = useState<RunnerFilters["sort"]>(),
-    [direction, setDirection] = useState<"asc" | "desc">("desc"),
-    [page, setPage] = useState(1),
-    [result, setResult] = useState<PaginatedResponse<RunSession> | null>(null),
-    [error, setError] = useState("");
-  const setFilter = (key: string, value: string) => {
-    const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setParams(next, { replace: true });
-    setPage(1);
-  };
+  const [page, setPage] = useState(1),
+    [size, setSize] = useState(10),
+    [sort, setSort] = useState<RunnerFilters["sort"]>(),
+    [direction, setDirection] = useState<"asc" | "desc">("desc");
+  const [result, setResult] = useState<PaginatedResponse<RunSession> | null>(
+      null,
+    ),
+    [error, setError] = useState(""),
+    [refresh, setRefresh] = useState(0),
+    [loading, setLoading] = useState(false);
+  const [detail, setDetail] = useState<RunSession | null>(null);
+  const loaded = useRef("");
+  const hasSnapshot = !!snapshot;
   useEffect(() => {
     setPage(1);
-  }, [query, status]);
+  }, [raceId, query, status, size]);
   useEffect(() => {
-    let disposed = false;
-    raceService
-      .listRunners("neu-2026", {
-        search: query,
-        status,
-        sort,
-        direction,
-        page,
-        page_size: compact ? 6 : 10,
-      })
-      .then((r) => {
-        if (!disposed) {
-          setResult(r);
-          setError("");
-        }
-      })
-      .catch(() => {
-        if (!disposed) setError("Không tải được danh sách sinh viên.");
-      });
+    const timer = setInterval(() => setRefresh((n) => n + 1), 5000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!raceId || !hasSnapshot) return;
+    const c = new AbortController();
+    const key = JSON.stringify([
+      raceId,
+      query,
+      status,
+      page,
+      size,
+      sort,
+      direction,
+    ]);
+    if (loaded.current !== key) setResult(null);
+    setLoading(true);
+    const timer = setTimeout(() => {
+      raceService
+        .listRunners(
+          raceId,
+          { search: query, status, page, page_size: size, sort, direction },
+          c.signal,
+        )
+        .then((data) => {
+          if (!c.signal.aborted) {
+            loaded.current = key;
+            setResult(data);
+            mergeRunners(data.items);
+            setError("");
+          }
+        })
+        .catch((e) => {
+          if (!c.signal.aborted) setError(e.message);
+        })
+        .finally(() => {
+          if (!c.signal.aborted) setLoading(false);
+        });
+    }, 250);
     return () => {
-      disposed = true;
+      c.abort();
+      clearTimeout(timer);
     };
-  }, [snapshot, query, status, sort, direction, page, compact]);
-  function sorting(field: RunnerFilters["sort"]) {
-    setDirection(sort === field && direction === "desc" ? "asc" : "desc");
-    setSort(field);
+  }, [
+    raceId,
+    hasSnapshot,
+    query,
+    status,
+    page,
+    size,
+    sort,
+    direction,
+    refresh,
+    mergeRunners,
+  ]);
+  function filter(k: string, v: string) {
+    const next = new URLSearchParams(params);
+    if (v) next.set(k, v);
+    else next.delete(k);
+    setParams(next, { replace: true });
+  }
+  function order(k: RunnerFilters["sort"]) {
+    setSort(k);
+    setDirection(sort === k && direction === "desc" ? "asc" : "desc");
     setPage(1);
   }
   return (
     <section className="panel runners-panel">
       <div className="panel-heading">
         <div>
-          <h2>
-            Theo dõi sinh viên{" "}
-            <span className="count-chip">{snapshot?.runners.length ?? 0}</span>
-          </h2>
-          <p>Thông tin và tiến độ tham gia giải chạy</p>
+          <h2>Danh sách sinh viên</h2>
+          <p>
+            {result
+              ? `${result.total} kết quả trong giải`
+              : "Đang tải danh sách"}
+            {loading && result ? " · Đang cập nhật…" : ""}
+          </p>
         </div>
-        <div className="table-filters">
-          <div className="table-search">
-            <Search size={16} />
-            <input
-              aria-label="Tìm theo họ tên hoặc mã sinh viên"
-              placeholder="Tìm tên hoặc mã sinh viên…"
-              value={query}
-              onChange={(e) => setFilter("q", e.target.value)}
-            />
-          </div>
+      </div>
+      <div className="filter-bar">
+        <label>
+          Tìm tên, mã sinh viên, số báo danh
+          <input
+            value={query}
+            onChange={(e) => filter("q", e.target.value)}
+            placeholder="Ví dụ: 01 hoặc tên sinh viên"
+          />
+        </label>
+        <label>
+          Trạng thái chạy
           <select
-            aria-label="Lọc trạng thái"
             value={status}
-            onChange={(e) => setFilter("status", e.target.value)}
+            onChange={(e) => filter("status", e.target.value)}
           >
             <option value="">Tất cả trạng thái</option>
             <option value="ACTIVE">Đang chạy</option>
@@ -103,12 +137,35 @@ export function RunnerTable({
             <option value="PENDING">Chưa bắt đầu</option>
             <option value="ABANDONED">Đã dừng</option>
           </select>
-        </div>
+        </label>
+        <label>
+          Số dòng
+          <select
+            value={size}
+            onChange={(e) => setSize(Number(e.target.value))}
+          >
+            {[10, 20, 50].map((n) => (
+              <option key={n}>{n}</option>
+            ))}
+          </select>
+        </label>
+
       </div>
-      {error ? (
-        <Empty title="Dữ liệu không khả dụng" description={error} />
-      ) : !result ? (
-        <div className="empty" role="status">
+      {query && (
+        <p className="map-note">
+          Tìm tên, mã và bib trên toàn bộ các trang dữ liệu của bộ lọc hiện tại.
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="editor-alert">
+          {error}{" "}
+          <button className="button" onClick={() => setRefresh((n) => n + 1)}>
+            Thử lại
+          </button>
+        </p>
+      )}
+      {!result ? (
+        <div className="skeleton" role="status">
           Đang tải sinh viên…
         </div>
       ) : (
@@ -117,164 +174,154 @@ export function RunnerTable({
             <table>
               <thead>
                 <tr>
-                  <th>BIB</th>
-                  <th>SINH VIÊN</th>
-                  <th>KHOA / VIỆN</th>
+                  <th>Số báo danh</th>
+                  <th>Sinh viên</th>
                   <th
                     aria-sort={
                       sort === "lap_count"
-                        ? direction === "desc"
-                          ? "descending"
-                          : "ascending"
+                        ? direction === "asc"
+                          ? "ascending"
+                          : "descending"
                         : "none"
                     }
                   >
-                    <button onClick={() => sorting("lap_count")}>
-                      SỐ VÒNG <ArrowDownUp size={12} />
+                    <button onClick={() => order("lap_count")}>
+                      Số vòng ↕
                     </button>
                   </th>
+                  <th>Thời gian</th>
                   <th
                     aria-sort={
                       sort === "distance_total_m"
-                        ? direction === "desc"
-                          ? "descending"
-                          : "ascending"
+                        ? direction === "asc"
+                          ? "ascending"
+                          : "descending"
                         : "none"
                     }
                   >
-                    <button onClick={() => sorting("distance_total_m")}>
-                      QUÃNG ĐƯỜNG <ArrowDownUp size={12} />
+                    <button onClick={() => order("distance_total_m")}>
+                      Quãng đường ↕
                     </button>
                   </th>
-                  <th
-                    aria-sort={
-                      sort === "duration_total_s"
-                        ? direction === "desc"
-                          ? "descending"
-                          : "ascending"
-                        : "none"
-                    }
-                  >
-                    <button onClick={() => sorting("duration_total_s")}>
-                      THỜI GIAN <ArrowDownUp size={12} />
-                    </button>
-                  </th>
-                  <th>VÒNG GẦN NHẤT</th>
-                  <th>BƯỚC CHÂN</th>
-                  <th>TRẠNG THÁI</th>
-                  <th />
+                  <th>Trạng thái chạy</th>
+                  <th>Chi tiết</th>
                 </tr>
               </thead>
               <tbody>
-                {result.items.map((r) => (
-                  <tr
-                    key={r.run_id}
-                    onClick={(e) => {
-                      if ((e.target as HTMLElement).closest("a,button")) return;
-                      const link =
-                        e.currentTarget.querySelector<HTMLAnchorElement>("a");
-                      link?.click();
-                    }}
-                  >
-                    <td>
-                      <span
-                        className="table-bib"
-                        style={{ color: r.color, background: r.color + "12" }}
-                      >
-                        #{r.bib}
-                      </span>
-                    </td>
-                    <td>
-                      <Link
-                        className="student-link"
-                        to={`/runners/${r.student_id}/runs/${r.run_id}`}
-                      >
-                        <strong>{r.full_name}</strong>
-                        <small>{r.student_code}</small>
-                      </Link>
-                    </td>
-                    <td className="faculty-cell">{r.faculty}</td>
-                    <td>
-                      <strong>{r.lap_count}</strong>
-                      <span className="muted"> / {r.total_laps}</span>
-                      <div className="mini-progress">
-                        <i
-                          style={{
-                            width: `${(r.lap_count / r.total_laps) * 100}%`,
-                            background: r.color,
-                          }}
-                        />
-                      </div>
-                    </td>
-                    <td className="number-cell">
-                      {distance(r.distance_total_m)}
-                    </td>
-                    <td className="number-cell">
-                      {duration(r.duration_total_s)}
-                    </td>
-                    <td className="number-cell">
-                      {duration(r.last_lap_duration_s)}
-                    </td>
-                    <td>{r.total_steps?.toLocaleString("vi-VN") ?? "—"}</td>
-                    <td>
-                      <Badge status={r.status} />
-                      {r.connection === "STALE" && (
-                        <small className="stale">Mất cập nhật</small>
-                      )}
-                    </td>
-                    <td>
-                      {onSelect && r.last_latitude != null ? (
+                {result.items.map((item) => {
+                  const live = snapshot?.runners.find(
+                    (r) =>
+                      r.student_id === item.student_id &&
+                      r.run_id === item.run_id,
+                  );
+                  const r = live ? reconcileRunner(live, item) : item;
+                  return (
+                    <tr
+                      key={r.student_id}
+                      onClick={(e) => {
+                        if (!(e.target as HTMLElement).closest("button"))
+                          setDetail(r);
+                      }}
+                    >
+                      <td>
+                        <span className="table-bib">{r.bib}</span>
+                      </td>
+                      <td>
                         <button
-                          className="icon-button"
-                          title={`Theo dõi ${r.full_name} trên bản đồ`}
-                          aria-label={`Theo dõi bib ${r.bib}`}
-                          onClick={() => onSelect(r.student_id)}
+                          className="student-link"
+                          onClick={() => setDetail(r)}
                         >
-                          <Users size={16} />
+                          <strong>{r.full_name}</strong>
+                          <small>{r.student_code}</small>
                         </button>
-                      ) : (
-                        <ChevronRight size={16} className="muted" />
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>
+                        {r.lap_count} / {r.total_laps || "—"}
+                      </td>
+                      <td className="number-cell">
+                        {duration(r.duration_total_s)}
+                      </td>
+                      <td>{distance(r.distance_total_m)}</td>
+                      <td>
+                        <Badge status={r.status} />
+                      </td>
+                      <td>
+                        <IconAction
+                          label={`Xem chi tiết ${r.full_name}`}
+                          onClick={() => setDetail(r)}
+                        >
+                          <Eye size={18} />
+                        </IconAction>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          {result.total === 0 && <Empty />}
+          {!result.items.length && (
+            <Empty
+              title={
+                query || status
+                  ? "Không có kết quả phù hợp"
+                  : "Chưa có người tham gia"
+              }
+              description={
+                query || status
+                  ? "Thử đổi từ khóa hoặc bộ lọc."
+                  : "Danh sách sẽ xuất hiện khi người tham gia được đăng ký."
+              }
+            />
+          )}
           <div className="pagination">
             <span>
-              Hiển thị{" "}
-              <strong>
-                {result.total ? (page - 1) * result.page_size + 1 : 0}–
-                {Math.min(page * result.page_size, result.total)}
-              </strong>{" "}
-              trên {result.total} sinh viên
+              {result.total ? (page - 1) * size + 1 : 0}–
+              {Math.min(page * size, result.total)} / {result.total}
             </span>
             <div>
               <button
-                className="icon-button"
-                aria-label="Trang trước"
+                className="button"
                 disabled={page === 1}
-                onClick={() => setPage((p) => p - 1)}
+                onClick={() => setPage((n) => n - 1)}
               >
-                <ChevronLeft size={16} />
+                Trang trước
               </button>
-              <span className="page-number">{page}</span>
-              <span>
-                / {Math.max(1, Math.ceil(result.total / result.page_size))}
-              </span>
+              <span>Trang {page}</span>
               <button
-                className="icon-button"
-                aria-label="Trang sau"
-                disabled={page * result.page_size >= result.total}
-                onClick={() => setPage((p) => p + 1)}
+                className="button"
+                disabled={page * size >= result.total}
+                onClick={() => setPage((n) => n + 1)}
               >
-                <ChevronRight size={16} />
+                Trang sau
               </button>
             </div>
           </div>
         </>
+      )}
+      {detail && detail.race_id === raceId && (
+        <Modal
+          variant="drawer"
+          title="Chi tiết sinh viên"
+          onClose={() => setDetail(null)}
+        >
+          {detail.run_id ? (
+            <RunDetail
+              key={detail.run_id}
+              studentId={detail.student_id}
+              runId={detail.run_id}
+              embedded
+            />
+          ) : (
+            <div className="empty">
+              <h2>{detail.full_name}</h2>
+              <p>
+                Bib {detail.bib} · {detail.student_code}
+              </p>
+              <Badge status={detail.status} />
+              <p>Chưa có phiên chạy.</p>
+            </div>
+          )}
+        </Modal>
       )}
     </section>
   );

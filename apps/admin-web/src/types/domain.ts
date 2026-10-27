@@ -1,14 +1,16 @@
+import type { DashboardDto } from "../services/matchingContract";
 export type RaceStatus =
   "DRAFT" | "SCHEDULED" | "LIVE" | "COMPLETED" | "CANCELLED";
 export type RunStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "ABANDONED";
 export interface Race {
   race_id: string;
   name: string;
-  started_at: string;
+  started_at: string | null;
   location: string;
   status: RaceStatus;
-  total_laps: number;
-  participant_count: number;
+  total_laps: number | null;
+  participant_count: number | null;
+  checkpoint_mode?: "GPS_ONLY" | "GPS_AND_ARDUINO";
 }
 export interface Student {
   student_id: string;
@@ -25,7 +27,7 @@ export interface RunnerLiveStatus {
   last_latitude: number | null;
   last_longitude: number | null;
   last_seen_at: string | null;
-  connection: "ONLINE" | "STALE" | "UNAVAILABLE";
+  connection: "ONLINE" | "STALE" | "UNAVAILABLE" | "FINISHED";
 }
 export interface RunSession extends RaceParticipant, RunnerLiveStatus {
   run_id: string;
@@ -38,7 +40,7 @@ export interface RunSession extends RaceParticipant, RunnerLiveStatus {
   total_steps: number | null;
   started_at: string | null;
   ended_at: string | null;
-  source: "SIMULATOR";
+  source: string;
 }
 export interface Checkpoint {
   checkpoint_id: string;
@@ -48,8 +50,9 @@ export interface Checkpoint {
   type: "START_FINISH" | "INTERMEDIATE";
   order: number;
   device: string;
-  latitude: number;
-  longitude: number;
+  latitude: number | null;
+  longitude: number | null;
+  radius_m?: number;
 }
 export interface LapEvent {
   event_id: string;
@@ -58,7 +61,7 @@ export interface LapEvent {
   lap: number;
   duration_s: number;
   occurred_at: string;
-  source: "SIMULATOR";
+  source: string;
 }
 export interface DeviceEvent {
   event_id: string;
@@ -66,7 +69,7 @@ export interface DeviceEvent {
   student_id: string | null;
   run_id: string | null;
   occurred_at: string;
-  source: "SIMULATOR";
+  source: string;
   status: "MATCHED" | "UNASSIGNED";
 }
 export interface PaginatedResponse<T> {
@@ -94,6 +97,16 @@ export interface RunDetail {
   run: RunSession;
   laps: LapEvent[];
   events: DeviceEvent[];
+  history?: {
+    id: string;
+    type: "GPS" | "LAP";
+    occurred_at: string;
+    latitude?: number;
+    longitude?: number;
+    total_steps?: number;
+    lap_no?: number;
+    duration_s?: number;
+  }[];
 }
 export interface RaceOverview {
   race: Race;
@@ -107,8 +120,14 @@ export interface LiveSnapshot {
   runners: RunSession[];
   checkpoints: Checkpoint[];
   route: [number, number][];
+  routeDistance_m?: number;
+  routeMessage?: string;
   events: DeviceEvent[];
   laps: LapEvent[];
   updated_at: string;
   running: boolean;
+  overview?: RaceOverview;
+  dashboard?: DashboardDto;
+  eventRevision?: number;
+  pendingPassages?: string[];
 }

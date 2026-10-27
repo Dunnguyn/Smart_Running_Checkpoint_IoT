@@ -4,14 +4,17 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host localhost",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview --host 127.0.0.1 --port 5174",
-    "test:ui": "node scripts/verify-ui.mjs",
-    "format": "prettier --write src scripts *.json *.ts *.js *.html *.md"
+    "preview": "vite preview --host localhost --port 5174",
+    "test:ui": "node scripts/verify-map-editor.mjs",
+    "test:backend:read": "node scripts/verify-backend-readonly.mjs",
+    "format": "prettier --write src scripts *.json *.ts *.js *.html *.md",
+    "test:ui:readonly": "node scripts/verify-ux-readonly.mjs",
+    "test:ui:editor": "node scripts/verify-map-editor.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

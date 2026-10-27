@@ -1,76 +1,140 @@
-# NEU RUN · Admin Web
+> **Runtime hiện tại 11/10/2026:** FE `http://localhost:5173` dùng REST `http://localhost:8000/api/v1` và WS `ws://localhost:8000`; source đối chiếu `ad6786c`. Backend 8001 cũ không còn được FE sử dụng. Trang Sinh viên có tab hồ sơ toàn hệ thống và đăng ký giải; khoảng cách xuất phát và xóa ACTIVE đã nối contract mới. Xem [báo cáo mới nhất](INTEGRATION_REPORT.md). Các cấu hình 8001 bên dưới là lịch sử. Test fixture mới: `node scripts/verify-enrollment.mjs`; test đọc thật: `node scripts/verify-people-readonly.mjs` với ADMIN_API_KEY trong môi trường tiến trình, không ghi nghiệp vụ.
 
-Frontend độc lập dùng React 19, Vite 7, TypeScript strict, React Router 7, React Leaflet 5 / Leaflet 1.9 và Lucide. CSS thống nhất, font Be Vietnam Pro hỗ trợ tiếng Việt. Node 22.12+ hoặc Node 24 được khuyến nghị; môi trường triển khai đã dùng Node 24.13 và npm 11. Không cần backend, URL API hay đăng nhập để chạy demo.
+> Cập nhật 11/10/2026: backend **cba5339** ở worktree `backend-current-main`, cổng **8001**; FE **1891dcc** + thay đổi local. Trang `/races` có tạo/dừng mô phỏng bằng Admin API và xóa giải có xác nhận. Xem [báo cáo hiện tại](INTEGRATION_REPORT.md) để vận hành đúng runtime; hướng dẫn/commit cũ bên dưới là lịch sử. Test mới cô lập: `node scripts/verify-admin-current.mjs` (không gửi ghi thật).
 
-## Chạy ứng dụng
+> Đã có form **Tạo giải chạy** tại `/races`. Xem [API_COVERAGE.md](API_COVERAGE.md) để biết các API đã nối/chưa nối. Kiểm thử form không ghi thật: `node scripts/verify-race-create.mjs` (cần frontend dev tại 5173).
 
-Mở terminal tại thư mục gốc repository:
+> UX/UI và editor bản đồ đã cập nhật ngày 10/10/2026. Xem [bàn giao và giới hạn kiểm thử](INTEGRATION_REPORT.md). `npm run test:ui:editor` kiểm thử editor bằng API fixture cô lập; `npm run test:ui:readonly` kiểm thử đọc backend đang chạy, cần ADMIN_API_KEY trong môi trường tiến trình. Không chạy thao tác ghi thật để kiểm thử. Các ví dụ port 8000 phía dưới là lịch sử; runtime hiện tại dùng 8001.
 
-```terminal
-cd apps/admin-web
-npm ci
-npm run dev
+# NEU Smart Running · Admin Web
+
+Frontend React/TypeScript/Vite hiện dùng FastAPI thật qua REST và WebSocket; giữ chế độ mock độc lập. Backend quyết định danh tính liên kết, số vòng, bước chân, quãng đường, thứ tự top runner và hoàn thành. Frontend không gửi GPS/Gateway event; Admin có thể yêu cầu backend quản lý mô phỏng qua API tại trang Giải chạy.
+
+## Chạy local
+
+**Tích hợp hiện tại (10/10/2026):** FE ở nhánh `fe`; backend `42e5478` chạy từ worktree riêng tại cổng **8001**. Xem [INTEGRATION_REPORT.md](INTEGRATION_REPORT.md) để lấy đúng đường dẫn, commit và cấu hình startup. FE `.env` hiện dùng REST `http://localhost:8001/api/v1`, WS `ws://localhost:8001`; chạy `npm.cmd run dev -- --host 127.0.0.1 --port 5173 --strictPort` rồi mở `http://localhost:5173`. Các lệnh 8000 bên dưới là ví dụ cho checkout có backend phù hợp, không dùng để khởi động thêm backend cũ trong workspace FE này.
+
+Backend (PowerShell tại `services/backend`, cấu hình `.env` riêng theo README backend):
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host localhost --port 8000 --reload --no-access-log
 ```
 
-Nếu terminal đã ở `apps/admin-web`, bỏ qua lệnh `Set-Location`. `npm.cmd ci` cài dependency theo `package-lock.json`; chỉ cần cài lại khi dependency thay đổi hoặc chưa có `node_modules`. Những lần chạy sau dùng `npm.cmd run dev`.
+Frontend (PowerShell tại `apps/admin-web`):
 
-Mở [http://127.0.0.1:5173](http://127.0.0.1:5173). Giữ terminal hoạt động; nhấn `Ctrl+C` để dừng. Nếu cổng bận, dùng địa chỉ Vite hiển thị trong terminal. Dùng `npm.cmd` trên Windows để tránh lỗi PowerShell chặn script `npm.ps1`; trên macOS/Linux thay bằng `npm`.
-
-Không cần tạo `.env`; mặc định là `mock`. Không cần backend, Arduino, gateway hoặc URL API. `.env.example` liệt kê các biến chuẩn bị tích hợp. Chỉ khi chủ động đổi `VITE_DATA_MODE` sang giá trị khác mock, adapter chưa triển khai sẽ báo `NOT_IMPLEMENTED`, không gọi mạng và không trả dữ liệu thành công giả.
-
-## Lệnh kiểm tra và xem bản production
-
-Chạy tại `apps/admin-web`:
-
-```terminal
-npm run typecheck
-npm run lint
-npm run test
-npm run build
-npm run preview
+```powershell
+npm.cmd ci
+# Chỉ sao chép nếu chưa có .env, tránh ghi đè cấu hình đang dùng:
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+npm.cmd run dev
 ```
 
-`build` tạo thư mục `dist`; `preview` phục vụ bản build tại [http://127.0.0.1:5174](http://127.0.0.1:5174). Khi sửa mã nguồn, dùng `dev` để thấy thay đổi tự động; muốn xem thay đổi qua `preview`, cần build lại.
+```env
+VITE_DATA_MODE=api
+VITE_API_BASE_URL=http://localhost:8000/api/v1
+VITE_WS_BASE_URL=ws://localhost:8000
+```
 
-Kiểm tra trình duyệt tự động: giữ `npm.cmd run preview` hoạt động ở cổng 5174, rồi chạy `npm.cmd run test:ui` trong terminal khác tại `apps/admin-web`. Script hiện dùng Microsoft Edge cài sẵn; sửa `channel` nếu chạy trên môi trường khác. Screenshot và báo cáo được ghi vào `test-results/` (gitignored). Dùng bản build để kiểm tra không có WebSocket ứng dụng; Vite dev có WebSocket HMR phục vụ phát triển.
+Mở http://localhost:5173. Dùng nhất quán localhost; backend CORS cần cho phép đúng origin này. Preview port 5174 cần thêm origin tương ứng. HTTP frontend không dùng `no-cors`. Với HTTPS, cấu hình REST HTTPS; WebSocket được chuyển sang WSS. Tắt/redact access log chứa query key ở backend/proxy.
 
-## Màn hình
+Nhập Admin key cấu hình tại backend. FE gọi `POST /auth/admin-key` bằng header `X-Admin-Key`, **không body**, và chỉ mở dữ liệu quản trị sau HTTP 200. 401 ở lại form; lỗi mạng/5xx thông báo kết nối, không coi là sai khóa. Không có lockout hay thời gian chờ. Key chỉ ở bộ nhớ, không nằm trong VITE env hoặc storage. Reload cần nhập lại. Đăng xuất/401 từ API bảo vệ xóa key, cache và đóng socket/request; không dùng Simulator/Gateway key trong bundle.
 
-- `/`: thông tin giải, 4 KPI, bản đồ và bảng theo dõi 128 sinh viên.
-- `/live`: bản đồ lớn, chọn runner, popup, zoom, về toàn tuyến, bật/tắt lớp.
-- `/runners`: tìm tên/mã sinh viên (không phân biệt dấu/hoa thường), lọc trạng thái, sắp xếp vòng/quãng đường/thời gian và phân trang.
-- `/runners/:studentId/runs/:runId`: trang chi tiết có URL trực tiếp, thông số, vòng và lịch sử checkpoint. Giá trị chưa ghi nhận hiển thị `—`.
-- `/races`, `/races/:raceId`: danh sách và chi tiết giải. Giải sắp diễn ra có 0 sinh viên đăng ký, chưa có tuyến/checkpoint.
-- `/checkpoints`, `/checkpoints/:checkpointId`: thông tin thiết bị, loại, thứ tự và sự kiện gần nhất. CP-02 có sự kiện chưa xác định sinh viên.
-- `/reports`, `/settings`: placeholder có giải thích và đường dẫn trở lại.
+Đặt `VITE_DATA_MODE=mock` và khởi động lại Vite nếu cần mock frontend. API lỗi không fallback sang mock.
 
-Các nút tạo/sửa giải và checkpoint bị vô hiệu hóa, kèm lý do chờ API contract. Header có tìm kiếm, thông báo và hồ sơ mẫu. Desktop dùng sidebar đầy đủ; tablet/mobile thu gọn và bảng cuộn ngang trong vùng riêng.
+## Contract và các màn hình
 
-## Mô phỏng
+Đã đối chiếu OpenAPI tại localhost:8000 với source `services/backend/app/main.py` trong ngày 04/10/2026. README backend giải thích nghiệp vụ; response và WebSocket được xác minh từ hàm xử lý/serializer/publish trong source (read endpoints chưa có response_model đầy đủ). Tài liệu `docs/ARDUINO_GPS_MATCHING.md` được README tham chiếu nhưng chưa có trong checkout này.
 
-Trạng thái ban đầu: 128 participant gồm 80 ACTIVE, 32 COMPLETED, 12 PENDING, 4 ABANDONED. Tất cả bản ghi nằm trong fixture; KPI tính từ cùng snapshot, số sự kiện checkpoint tính từ danh sách sự kiện, độc lập với 3 checkpoint trên tuyến.
+Các đường dẫn REST dưới đây tính từ `/api/v1`:
 
-Nhấn **Bắt đầu** để 8 runner ACTIVE trực tuyến di chuyển mỗi 2 giây; chọn runner trong danh sách để đưa bản đồ đến vị trí. Các ACTIVE còn lại có trạng thái kết nối **Mất cập nhật**, không đổi sang ABANDONED. Có thể chọn vị trí cuối của họ từ bảng. **Tạm dừng** giữ nguyên số liệu. **Đặt lại** dừng và trả về đúng dữ liệu, vị trí, tốc độ, mốc thời gian ban đầu. Mốc demo cố định 03/10/2026, timestamp UTC; UI hiển thị Asia/Ho_Chi_Minh. Refresh trình duyệt cũng khởi tạo lại demo; điều hướng trong ứng dụng giữ state.
+| Màn hình / luồng                  | API đã nối                                             | Hợp đồng                                                                                           |
+| --------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Xác thực demo                     | `POST /auth/admin-key`                                 | X-Admin-Key, không body                                                                            |
+| Chọn giải                         | `GET /races`                                           | `items`, `race_id`, `name`, `status`, `start_at`                                                   |
+| Dashboard / giải                  | `GET /races/{race_id}/dashboard`                       | `race`, `summary`, `runners`, `top_runners`, `recent_checkpoint_events`, `server_time`             |
+| Bản đồ                            | `GET /races/{race_id}/live`                            | `runners` gồm cả hoàn thành, `latitude/longitude`, identity/run data                               |
+| Bảng runner                       | `GET /races/{race_id}/runners`                         | keyword/status/page/page_size/sort_by/sort_order; REGISTERED hiển thị Chưa bắt đầu                 |
+| Chi tiết phiên                    | `GET /runners/{student_id}/runs/{run_id}` và `/events` | Kiểm tra student/run, lịch sử GPS/LAP phân trang                                                   |
+| Nhật ký checkpoint                | `GET /races/{race_id}/checkpoint-events`               | checkpoint_id, match_status, from, to, limit, cursor; response items/next_cursor                   |
+| Chi tiết sự kiện                  | `GET /checkpoint-events/{event_id}`                    | match_status/lap_status, candidates, candidates_final, version, reason_code, matched_runner, nguồn |
+| Xác nhận / loại bỏ                | `POST /checkpoint-events/{event_id}/resolve`           | action, passage_id, expected_version, idempotency_key, reason                                      |
+| Cấu hình ghép trong chi tiết giải | `PATCH /races/{race_id}/checkpoint-matching`           | Chỉ gửi trường admin thay đổi, ràng buộc theo OpenAPI                                              |
+| Đăng ký Gateway trong checkpoint  | `POST /checkpoints/{checkpoint_id}/devices`            | device_id, name tùy chọn; không có nút liệt kê/sửa/xóa giả                                         |
 
-`src/mocks/liveSimulator.ts` quản lý một timer cho các subscription; cleanup khi không còn listener, khi pause/reset, kể cả React StrictMode. Khi runner đạt 5 vòng / 5 km, simulator phát `runner.completed` và ngừng tăng số liệu. Vòng mô phỏng phát sự kiện đã gắn đúng student/run, nguồn SIMULATOR. Sự kiện `student_id=null` không tham gia cập nhật vòng của bất kỳ runner nào.
+Dashboard hiển thị mode, thống kê phiên/vòng/quãng đường/bước chân, các trạng thái ghép, top runner theo thứ tự backend, sự kiện gần nhất. Bib/display ID là chuỗi (giữ `01`), chỉ dùng UUID student/run cho API. Map không vẽ vị trí giả; COMPLETED có nhãn vị trí cuối phiên, không coi là mất kết nối. Chỉ số thời gian dùng backend; không có timer tự tăng kết quả.
 
-Tuyến là đa giác minh họa nội bộ, không phải đường chạy chính thức. Cự ly 1 km/vòng là số liệu response mô phỏng, không phải phép đo địa lý trên bản đồ. OpenStreetMap có attribution; font Google và tile bản đồ cần Internet. Nếu tile thất bại, cảnh báo hiện trên bản đồ; tuyến, marker, bảng và KPI vẫn hoạt động, font dùng system fallback.
+Nhật ký phân biệt PENDING_MATCH/MATCHED/AMBIGUOUS/UNASSIGNED/REJECTED và NOT_EVALUATED/COUNTED/NOT_COUNTED. MATCHED không đồng nghĩa COUNTED. Mã lý do có giải thích tiếng Việt và giữ mã gốc trong chi tiết. GPS_ONLY + Arduino UNASSIGNED là hành vi dự kiến. GPS_AND_ARDUINO chỉ có passage chờ đối chiếu; notification GPS_PASSAGE_PENDING_ARDUINO không làm tăng vòng.
 
-## Tích hợp backend sau
+Chỉ AMBIGUOUS + candidates_final mới hiện form xử lý. Admin chọn **passage_id** trong candidates và nhập lý do. Không tự chọn ứng viên. Disable khi gửi; không optimistic update. Thao tác giữ cùng payload và idempotency key nếu mất response/5xx. FE đọc lại sự kiện trước khi cho thử lại đúng thao tác đó. 409 đọc lại trạng thái, bỏ lựa chọn cũ và yêu cầu admin chọn lại; không thay version rồi tự gửi lại. Sau thành công đọc lại event/dashboard/runner. Pending operation chỉ trong bộ nhớ; nếu đóng màn hình hoặc reload, phải kiểm tra trạng thái backend trước khi làm thao tác mới.
 
-- `src/types/domain.ts`: DTO giữ snake_case, mét, giây, ISO UTC; kiểu trạng thái và các sự kiện live.
-- `src/services/interface.ts`: interface dùng chung cho mock/API.
-- `src/services/mockAdapter.ts`: truy vấn dữ liệu, tìm kiếm, phân trang và subscription mô phỏng.
-- `src/services/apiAdapter.ts`: đầy đủ chữ ký và TODO cho 6 GET `/api/v1/...` cùng WebSocket `/ws/v1/races/{race_id}/live`. Hiện trả lỗi có kiểm soát NOT_IMPLEMENTED, không dùng fetch/Axios/WebSocket.
-- `src/app/LiveProvider.tsx`: nguồn state live chung cho toàn bộ màn hình; thay adapter và control mô phỏng tại đây khi tích hợp.
-- `src/utils/format.ts`: đổi mét → km, giây → HH:mm:ss và UTC → giờ Việt Nam.
+## WebSocket, thứ tự dữ liệu và cleanup
 
-Các contract cần nhóm xác nhận: response/envelope API, query tìm kiếm/lọc/sort/phân trang, route và checkpoint (chưa có endpoint được chốt), thông tin khoa/viện và bib/màu, định danh thiết bị, danh sách vòng/sự kiện và trường nguồn/trạng thái, rule thời gian mất cập nhật, đồng bộ snapshot/delta, event ID để chống trùng, auth/reconnect WebSocket, trạng thái lỗi, và API tạo/sửa. Các endpoint được ghi chú theo yêu cầu người dùng, chưa được kiểm chứng bằng tài liệu backend trong repository. Backend sẽ là nguồn chuẩn của kết quả; không dùng thuật toán simulator để tính kết quả chính thức.
+Dùng `/ws/v1/races/{race_id}/live?key=…` tạo bằng URL/URLSearchParams, không ghép `/api/v1/ws` và không ghi URL vào log. Luồng snapshot trước, mở socket rồi resync. Xử lý các event đã xác minh: `runner.updated`, `runner.completed`, `checkpoint.passed`, `checkpoint.match.updated`; vẫn chấp nhận checkpoint.detected cũ chỉ để invalidate.
 
-## Kiểm tra và giới hạn
+- Buffer message trong lúc REST đang đọc; merge runner theo race/student/run. Tổng là snapshot thay thế, không cộng. Snapshot/delta cũ không mở lại COMPLETED hoặc làm lùi tổng đã nhận.
+- Event checkpoint có version: bỏ frame cũ/trùng và không để chi tiết version thấp ghi đè cao. Message không đủ dữ liệu kích hoạt refetch.
+- Gom refetch dashboard/live khoảng 5 giây khi có message; không reload theo từng GPS point. Initial/reconnect resync ngay. Khi socket mất, polling 15 giây; không poll dashboard khi socket connected, cleanup khi đổi giải/logout/unmount.
+- Bounded reconnect 1–30 giây, tối đa 6 lần/subscription; auth rejection dừng phiên. Có nút Thử lại / Làm mới. Bảng/chi tiết runner có refresh giới hạn 5 giây khi đang mở và hủy request khi rời màn hình.
+- Backend không có sequence/version tổng cho runner/dashboard và snapshot không cùng transaction. Buffer, timestamp, tổng đơn điệu và resync giúp hội tụ; không tuyên bố bảo đảm không mất event. Không suy ra trạng thái nghiệp vụ từ mất socket/GPS.
 
-Đã chạy thành công ngày 03/10/2026: build production, TypeScript, ESLint, 6 kiểm thử Vitest và kiểm tra UI Edge ở desktop 1440×1080, tablet 820×1180, mobile 390×844. Không có lỗi JavaScript hoặc request backend/WebSocket trên bản production. Bản đồ nền OpenStreetMap không tải được trong môi trường kiểm tra; đã kiểm tra cảnh báo và dữ liệu/marker vẫn hoạt động. Chưa xác minh giao diện tile tải thành công trong môi trường này.
+## Contract còn thiếu / giới hạn có chủ ý
 
-Vitest kiểm tra 128 participant, tìm kiếm/lọc/phân trang, runner hoàn thành ngừng cập nhật, reset tái lập, sự kiện không gắn sinh viên, một timer/cleanup và API adapter không gọi mạng. Script UI kiểm tra các luồng chính, popup/lớp bản đồ, mô phỏng, trạng thái không tìm thấy, URL chi tiết, responsive và fallback khi tile thất bại. Xem `test-results/ui-report.json` sau khi chạy để xác nhận kết quả thực tế.
+- Dashboard chỉ trả checkpoint_mode/config_version, **không trả các giá trị bán kính/cửa sổ/grace hoặc matching_locked_at**. FE hiển thị thông số chưa biết là “—”, gửi PATCH các trường được nhập; hiển thị giá trị PATCH trả về sau khi lưu. Không dùng PATCH rỗng làm API đọc. Không suy trạng thái khóa từ dashboard.started_runners: hiển thị chưa có dữ liệu khóa, chỉ khóa form sau 409 có code MATCHING_CONFIG_LOCKED. Cần endpoint GET cấu hình/flag khóa để hiển thị đầy đủ sau reload.
+- Backend `42e5478` trả route (`points`, `distance_m`) và metadata checkpoint trong dashboard, route trong live và GET `/races/{race_id}/route`. FE vẽ tuyến đã lưu, marker checkpoint/GPS đúng tọa độ, báo rõ race thiếu tuyến; không nối checkpoint thành tuyến. Có bảng checkpoint và lọc nhật ký theo checkpoint UUID. Đã có editor tuyến/checkpoint với draft riêng, cảnh báo rời trang, validation/khóa và đọc lại sau lưu; xem báo cáo hiện hành. Chưa có GET/sửa/xóa thiết bị.
+- Candidate.available trong source là snapshot lưu trong candidates_json, có thể cũ khi passage đã bị event khác dùng. UI ghi rõ và backend kiểm tra lại khi resolve; 409 không tự chọn người khác.
+- Response chỉ có checkpoint_source=ARDUINO_GATEWAY, không có cờ Gateway giả/thật hay online đáng tin cậy. Không ghi “Arduino online”. telemetry_source hiển thị đúng backend (ví dụ SIMULATED_GPS); kết quả ghép không xác minh danh tính người thật trước sensor.
+- Không có GET passage đang chờ: thông báo passage mới từ WS là tạm thời, không được coi là toàn bộ backlog sau reload. Nhật ký event vẫn đọc từ backend.
+- Read race không có location/route_name; runners không có faculty. Hiển thị “—” cho dữ liệu thiếu. Không tạo UI gán wearable hoặc form tạo giải lớn ngoài yêu cầu.
 
-Ảnh mockup và tài liệu backend bổ sung chưa có trong attachment/repository; thiết kế bám mô tả trong yêu cầu. Chưa thể đối chiếu pixel với ảnh tham chiếu. Không thay đổi backend, gateway, Arduino hay xây Runner App.
+## Demo do người vận hành chạy tại backend
+
+```powershell
+# GPS_ONLY, mặc định 20 sinh viên; backend tự hoàn thành khi đạt mục tiêu
+python -m app.simulator --base-url http://localhost:8000
+
+# Mô phỏng cả GPS và Gateway, không chứng minh kit Arduino thật đã kết nối
+python -m app.simulator --base-url http://localhost:8000 --mode GPS_AND_ARDUINO --students 20 --laps 1
+```
+
+Các giá trị demo (10/15 m, ±3 giây, grace 2 giây) thuộc backend, FE không tự ghi đè. Không thay ngưỡng để làm kiểm thử qua. Không chạy simulator từ frontend.
+
+## Kiểm tra
+
+```powershell
+npm.cmd run typecheck
+npm.cmd run lint
+npm.cmd run test
+npm.cmd run build
+```
+
+Kiểm thử backend thật riêng (từ gốc repo, cần backend .venv và Microsoft Edge, ports 8001/5175 trống):
+
+```powershell
+.\services\backend\.venv\Scripts\python.exe apps/admin-web/scripts/integration_matching.py
+```
+
+Harness tạo SQLite tạm với fixture deterministic AMBIGUOUS/passage bằng model backend, khởi động FastAPI riêng, gửi một Gateway HTTP event từ Python harness và kiểm thử UI/REST/WS với Edge. Không sửa backend hoặc DB server local đang chạy, không gọi CLI simulator. Browser chỉ nhận Admin key ngẫu nhiên trong bộ nhớ; báo cáo/ảnh trong `test-results/` gitignored. Đây là kiểm thử tích hợp có fixture, không phải kiểm thử sensor/GPS vật lý.
+
+`integration_api.py`/`integration-api.mjs` là harness cũ cho backend trước auto-completion (không dùng để xác nhận contract mới). `test:ui` kiểm tra mock: build với VITE_DATA_MODE=mock rồi mở preview port 5174. Không nhầm kết quả mock với backend thật.
+
+
+## Đối chiếu ngày 07/10/2026 — backend chỉ đọc
+
+Xem [báo cáo tích hợp](INTEGRATION_REPORT.md) để biết commit, bảng API, kết quả hiện tại và phần chưa xác minh runtime. Kết quả tích hợp của lần trước không thay thế kiểm tra phiên bản/môi trường hiện tại.
+
+Kiểm tra backend **đã được người vận hành khởi động** bằng dữ liệu hiện có:
+
+```powershell
+# ADMIN_API_KEY chỉ trong tiến trình kiểm tra; không đặt vào VITE_* hoặc commit key.
+# Thiết lập ADMIN_API_KEY bằng cơ chế quản lý biến môi trường local của bạn.
+npm.cmd run test:backend:read
+```
+
+Script dùng health/OpenAPI, POST xác thực (không ghi dữ liệu nghiệp vụ), GET các bản ghi có sẵn và mở/đóng WS. Không tự chạy backend, simulator, seed hoặc gọi resolve/PATCH/đăng ký. Mặc định local 8000, có thể đổi bằng VITE_API_BASE_URL/VITE_WS_BASE_URL trong môi trường tiến trình. Script không tự đọc file .env; Vite vẫn đọc .env cho frontend bình thường. Không có key hoặc backend không chạy sẽ báo bị chặn.
+
+**Không chạy `integration_matching.py` hoặc `integration_api.py` trong nhiệm vụ chỉ đọc backend**: chúng tạo DB/fixture và khởi động backend; cần cho phép riêng. Backend hiện có create_all/migrate_demo_schema khi import và matching worker khi startup, nên khởi động backend cũng có tác dụng phụ schema/dữ liệu.
+
+Đồng bộ FE hiện giữ version checkpoint mới hơn qua các lần REST resync, giữ thời gian COMPLETED và tổng đã nhận trong cùng run, chấp nhận completion có GPS cũ mà không lùi marker. GPS quá 30 giây được đánh dấu STALE bởi timer 15 giây ngay cả khi socket vẫn mở; timer này không gửi REST khi WS đang connected. Thứ hạng/tổng hợp dashboard vẫn do backend trả, không tự tính từ delta. Không có sequence toàn cục nên chưa thể bảo đảm tính nguyên tử giữa mọi panel.
+
+
+Cập nhật local 07/10: người dùng chuyển backend sang cổng 8001; `.env` FE hiện dùng REST `http://localhost:8001/api/v1` và WS `ws://localhost:8001`. Các giá trị 8000 trong ví dụ là mặc định. Xem phần đầu INTEGRATION_REPORT.md để biết điều tra dữ liệu legacy, tile và kế hoạch E2E chờ duyệt.

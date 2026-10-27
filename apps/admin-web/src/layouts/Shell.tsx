@@ -1,205 +1,248 @@
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useState, useRef } from "react";
 import {
-  Activity,
-  LayoutDashboard,
-  Map,
-  Users,
-  Flag,
-  ScanLine,
-  ChartNoAxesCombined,
-  Settings,
-  Bell,
-  Search,
-  ChevronDown,
-  ArrowUpRight,
-  X,
-} from "lucide-react";
+  NavLink,
+  Outlet,
+  ScrollRestoration,
+  useLocation,
+} from "react-router-dom";
+import { RefreshCw } from "lucide-react";
+import { useLive } from "../app/LiveProvider";
+import { IconAction } from "../components/IconAction";
+import { ReferenceIcon } from "../components/ReferenceIcon";
+import { Fragment } from "react";
+import { dataMode } from "../services";
 const navigation = [
-  { to: "/", label: "Tổng quan", icon: LayoutDashboard },
-  { to: "/live", label: "Bản đồ trực tiếp", icon: Map },
-  { to: "/runners", label: "Sinh viên", icon: Users },
-  { to: "/races", label: "Giải chạy", icon: Flag },
-  { to: "/checkpoints", label: "Checkpoint", icon: ScanLine },
-];
+  { to: "/races", label: "Giải chạy", icon: "flag", group: "QUẢN LÝ CHUNG" },
+  { to: "/runners", label: "Sinh viên", icon: "users" },
+  { to: "/simulation", label: "Mô phỏng", icon: "flask" },
+  { to: "/", label: "Tổng quan", icon: "grid", group: "VẬN HÀNH GIẢI" },
+  { to: "/live", label: "Bản đồ trực tiếp", icon: "map" },
+  { to: "/checkpoints", label: "Trạm kiểm soát", icon: "checkpoint" },
+  {
+    to: "/analytics",
+    label: "Phân tích",
+    icon: "chart",
+    group: "BÁO CÁO & CẤU HÌNH",
+  },
+] as const;
 export function Shell() {
-  const [notifications, setNotifications] = useState(false),
-    [profile, setProfile] = useState(false),
-    [query, setQuery] = useState("");
-  const navigate = useNavigate();
-  useEffect(() => {
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setNotifications(false);
-        setProfile(false);
-      }
-    };
-    window.addEventListener("keydown", onEscape);
-    return () => window.removeEventListener("keydown", onEscape);
-  }, []);
+  const location = useLocation();
+  const globalPage =
+    location.pathname === "/races" || location.pathname === "/simulation";
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshGuard = useRef(false);
+  const [refreshError, setRefreshError] = useState("");
+  const [collapsed, setCollapsed] = useState(false);
+  const {
+    races,
+    error,
+    reloadRaces,
+    raceId,
+    selectRace,
+    connection,
+    refreshData,
+    retry,
+    snapshot,
+    logout,
+  } = useLive();
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${collapsed ? "sidebar-collapsed" : ""}`}>
+      <a className="skip-link" href="#main-content">
+        Chuyển đến nội dung chính
+      </a>
       <aside className="sidebar">
-        <NavLink to="/" className="brand" aria-label="NEU RUN trang chủ">
-          <span className="brand-icon">
-            <Activity size={25} />
-          </span>
-          <span>
-            NEU RUN
-            <small>
-              <i /> LIVE
-            </small>
-          </span>
-        </NavLink>
-        <div className="nav-label">KHÔNG GIAN QUẢN TRỊ</div>
-        <nav>
-          {navigation.map(({ to, label, icon: Icon }) => (
+        <div className="sidebar-brand-row">
+          <NavLink to="/" className="brand" aria-label="NEU RUN trang chủ">
+            <span className="brand-icon">
+              <span>NR</span>
+            </span>
+            <span className="brand-name">
+              NEU RUN<small>TRUNG TÂM ĐIỀU HÀNH</small>
+            </span>
+          </NavLink>
+          <button
+            className="button collapse-control"
+            aria-label="Thu gọn hoặc mở sidebar"
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed(!collapsed)}
+          >
+            <ReferenceIcon name="menu" />
+            <span>Thu gọn</span>
+          </button>
+        </div>
+        <nav aria-label="Điều hướng chính">
+          {navigation.map((item) => {
+            const { to, label, icon } = item;
+            return (
+              <Fragment key={to}>
+                {"group" in item && (
+                  <div className="nav-caption">{item.group}</div>
+                )}
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === "/" || to === "/races"}
+                  title={label}
+                  aria-label={label}
+                  className={({ isActive }) =>
+                    `nav-item ${isActive ? "active" : ""}`
+                  }
+                >
+                  <ReferenceIcon name={icon} />
+                  <span>{label}</span>
+                  {to === "/checkpoints" &&
+                    snapshot?.dashboard &&
+                    snapshot.dashboard.summary.ambiguous_matches > 0 && (
+                      <span className="nav-count">
+                        {snapshot.dashboard.summary.ambiguous_matches}
+                      </span>
+                    )}
+                </NavLink>
+              </Fragment>
+            );
+          })}
+          {raceId && (
             <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              title={label}
-              aria-label={label}
+              to={`/races/${raceId}`}
               className={({ isActive }) =>
                 `nav-item ${isActive ? "active" : ""}`
               }
+              title="Thiết lập giải"
+              aria-label="Thiết lập giải"
             >
-              <Icon size={20} />
-              <span>{label}</span>
-              {to === "/live" && <i className="live-dot" />}
+              <ReferenceIcon name="settings" />
+              <span>Thiết lập giải</span>
             </NavLink>
-          ))}
+          )}
         </nav>
-        <div className="nav-label secondary">CÔNG CỤ</div>
-        <nav>
-          <NavLink
-            to="/reports"
-            className="nav-item"
-            title="Báo cáo"
-            aria-label="Báo cáo"
-          >
-            <ChartNoAxesCombined size={20} />
-            <span>Báo cáo</span>
-          </NavLink>
-          <NavLink
-            to="/settings"
-            className="nav-item"
-            title="Cài đặt"
-            aria-label="Cài đặt"
-          >
-            <Settings size={20} />
-            <span>Cài đặt</span>
-          </NavLink>
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="support-card">
-            <span className="support-icon">
-              <Activity size={22} />
+        {!collapsed && (
+          <div className="sidebar-footer">
+            <ReferenceIcon name="info" />
+            <span>
+              <strong>
+                {connection === "connected"
+                  ? "Kết nối máy chủ"
+                  : "Theo dõi kết nối"}
+              </strong>
+              <small>Nguồn GPS theo từng người chạy</small>
             </span>
-            <strong>
-              Mỗi bước chân,
-              <br />
-              một hành trình.
-            </strong>
-            <p>
-              Cùng NEU chinh phục
-              <br />
-              những giới hạn mới.
-            </p>
-            <NavLink to="/races">
-              Khám phá giải chạy <ArrowUpRight size={14} />
-            </NavLink>
           </div>
-          <div className="system">
-            <i /> Chế độ mô phỏng <span>v1.0</span>
-          </div>
-        </div>
+        )}
       </aside>
       <div className="main-shell">
-        <header className="topbar">
-          <div className="breadcrumb">
-            Không gian quản trị <span>/</span>
-            <strong>NEU RUN</strong>
-          </div>
-          <form
-            className="global-search"
-            onSubmit={(e) => {
-              e.preventDefault();
-              navigate(`/runners?q=${encodeURIComponent(query)}`);
+        <header className="topbar unified-header">
+          {!globalPage ? (
+            <label className="race-select">
+              Giải đang xem
+              <select
+                aria-label="Chọn giải chạy"
+                value={raceId}
+                onChange={(e) => selectRace(e.target.value)}
+              >
+                {races.map((r) => (
+                  <option key={r.race_id} value={r.race_id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <strong className="global-context">
+              {location.pathname === "/simulation"
+                ? "Mô phỏng"
+                : "Quản lý giải"}
+            </strong>
+          )}
+          {location.pathname === "/races" && (
+            <span className="muted global-scope">
+              Danh sách tất cả giải chạy
+            </span>
+          )}
+          <IconAction
+            label="Làm mới dữ liệu"
+            disabled={refreshing}
+            aria-busy={refreshing}
+            onClick={async () => {
+              if (refreshGuard.current) return;
+              refreshGuard.current = true;
+              setRefreshing(true);
+              setRefreshError("");
+              try {
+                if (globalPage) await reloadRaces();
+                else await refreshData();
+              } catch {
+                setRefreshError("Chưa thể tải dữ liệu mới. Vui lòng thử lại.");
+              } finally {
+                refreshGuard.current = false;
+                setRefreshing(false);
+              }
             }}
           >
-            <Search size={17} />
-            <input
-              aria-label="Tìm kiếm sinh viên toàn hệ thống"
-              placeholder="Tìm kiếm sinh viên…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+            <RefreshCw
+              size={19}
+              className={refreshing ? "refresh-spinning" : ""}
             />
-            <kbd>↵</kbd>
-          </form>
-          <div className="header-actions">
-            <button
-              className="icon-button notification-button"
-              aria-label="Thông báo"
-              aria-expanded={notifications}
-              title="Thông báo"
-              onClick={() => {
-                setNotifications(!notifications);
-                setProfile(false);
-              }}
-            >
-              <Bell size={20} />
-              <i />
-            </button>
-            <button
-              className="profile-button"
-              aria-label="Hồ sơ quản trị viên"
-              aria-expanded={profile}
-              onClick={() => {
-                setProfile(!profile);
-                setNotifications(false);
-              }}
-            >
-              <span className="avatar">QT</span>
-              <span>
-                <strong>Quản trị viên</strong>
-                <small>NEU Administrator</small>
+          </IconAction>
+          <details className="account-menu">
+            <summary>
+              <span className="account-avatar" aria-hidden="true">
+                <ReferenceIcon name="lock" size={15} />
               </span>
-              <ChevronDown size={15} />
-            </button>
-          </div>
-          {(notifications || profile) && (
-            <div className="header-popover">
+              Quản trị
+            </summary>
+            <div>
+              <p>
+                Nguồn GPS xem riêng ở từng người chạy; kết nối server không xác
+                nhận GPS mới.
+              </p>
+              <button className="button" onClick={logout}>
+                Đăng xuất
+              </button>
+              <details>
+                <summary>Chi tiết kỹ thuật</summary>
+                <p>WebSocket: {connection}</p>
+                <p>Chế độ dữ liệu: {dataMode}</p>
+              </details>
+            </div>
+          </details>
+        </header>
+        <main id="main-content" tabIndex={-1}>
+          {(error ||
+            refreshError ||
+            (!globalPage &&
+              raceId &&
+              dataMode === "api" &&
+              connection !== "connected")) && (
+            <div className="connection-notice" role="status">
+              <div>
+                <strong>
+                  {error || refreshError
+                    ? "Chưa thể tải dữ liệu mới. Vui lòng thử lại."
+                    : "Đang kết nối lại để nhận cập nhật trực tiếp…"}
+                </strong>
+                {snapshot && <p>Đang hiển thị dữ liệu đã tải trước đó.</p>}
+              </div>
               <button
-                className="icon-button popover-close"
-                aria-label="Đóng"
+                className="button"
                 onClick={() => {
-                  setNotifications(false);
-                  setProfile(false);
+                  setRefreshError("");
+                  if (globalPage)
+                    void reloadRaces().catch(() =>
+                      setRefreshError(
+                        "Chưa thể tải dữ liệu mới. Vui lòng thử lại.",
+                      ),
+                    );
+                  else if (snapshot) void refreshData();
+                  else retry();
                 }}
               >
-                <X size={16} />
+                Thử lại
               </button>
-              <strong>
-                {notifications ? "Thông báo mô phỏng" : "Hồ sơ mẫu"}
-              </strong>
-              <p>
-                {notifications
-                  ? "Hệ thống sẵn sàng. Nhấn Bắt đầu để theo dõi 8 sinh viên di chuyển trên tuyến minh họa."
-                  : "Quản trị viên · Đại học Kinh tế Quốc dân. Đây là thông tin mẫu cho bản demo."}
-              </p>
             </div>
           )}
-        </header>
-        <main>
           <Outlet />
+          <ScrollRestoration getKey={(location) => location.pathname} />
         </main>
-        <footer>
-          <span>© 2026 NEU RUN · Đại học Kinh tế Quốc dân</span>
-          <span>
-            <i /> Dữ liệu mô phỏng · Không kết nối backend
-          </span>
-        </footer>
       </div>
     </div>
   );
