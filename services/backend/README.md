@@ -93,6 +93,9 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 - Màn hình nhập khóa gọi `POST /api/v1/auth/admin-key` kèm `X-Admin-Key`; `200` cho phép mở Admin Web, `401` giữ người dùng ở màn hình nhập. API không khóa tài khoản/key sau số lần sai, theo yêu cầu demo.
 - Số `01`–`05` là bib/display ID của participant trong demo; UUID `student_id` vẫn là khóa liên kết ổn định trong API.
 - Dashboard tổng hợp dùng `GET /api/v1/races/{race_id}/dashboard`; trả summary, bảng runners, top runners và checkpoint events mới nhất.
+- Vòng được chốt tại checkpoint duy nhất có `kind=LAP` (nếu cấu hình cũ không có đúng một điểm `LAP`, dùng checkpoint cuối theo `sequence_no`). Mỗi vòng phải có passage qua đủ checkpoint theo thứ tự xoay từ điểm sau checkpoint đích trở lại đích. Tuyến một checkpoint cần hai lần vào vùng tách biệt cho start/finish. Ở `GPS_AND_ARDUINO`, từng passage phải được ghép với sự kiện gateway trước khi dùng làm bằng chứng.
+- Admin chuyển trạng thái giải tuần tự bằng `PATCH /api/v1/races/{race_id}/status`, ví dụ `{"expected_status":"SCHEDULED","status":"LIVE"}`. API dùng trạng thái kỳ vọng để chống ghi đè đồng thời; thời điểm mở thực tế trả ở `actual_start_at`. Giải mới chỉ tạo ở `DRAFT` hoặc `SCHEDULED`.
+- `POST /api/v1/runs/{run_id}/finish` là kết thúc sớm: nếu chưa đạt `total_laps`, phiên thành `ABANDONED`, `result_state=INCOMPLETE`, `is_done=false`. Chỉ engine vòng chạy mới đánh dấu `COMPLETED`.
 - Admin bắt đầu demo bằng `POST /api/v1/simulations`; poll `GET /api/v1/simulations/{simulation_id}`, dừng bằng `POST /api/v1/simulations/{simulation_id}/stop`. `DELETE /api/v1/races/{race_id}` dừng simulator backend quản lý, chốt timer các phiên ACTIVE còn lại rồi xóa dữ liệu thuộc giải. Hồ sơ sinh viên và wearable vẫn được giữ. Simulator/thiết bị bên ngoài phải dừng gửi sau khi xóa, nếu không sẽ nhận 404 do race/run không còn tồn tại.
 - Để thêm sinh viên: `POST /api/v1/students` tạo hồ sơ dùng chung, sau đó `POST /api/v1/races/{race_id}/participants` đăng ký với `student_id`; nếu bỏ `bib_number`, backend cấp số tiếp theo (`01`, `02`, ...); frontend lấy danh sách lựa chọn từ `GET /api/v1/students?q=...` và roster giải từ `GET /api/v1/races/{race_id}/participants`.
 - Dashboard/live trả cả polyline route có thứ tự, tọa độ checkpoint và vị trí GPS mới nhất để frontend vẽ bản đồ/tiến độ.
@@ -106,7 +109,7 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 
 Với sketch HC-SR04 đang in `LAP: n` qua Serial, chạy demo hỗn hợp ngay từ Admin API: gửi `checkpoint_mode=GPS_AND_ARDUINO`, `kit_serial_port=COM03`, `kit_checkpoint_code=NEU-C01` tới `POST /api/v1/simulations`. Backend tạo 5 sinh viên và GPS/bước chân chuyển động, mở COM03 và chuyển riêng các dòng Serial thật thành checkpoint event; không tạo event Arduino giả. Xem hướng dẫn tại [`docs/ARDUINO_GATEWAY.md`](../../docs/ARDUINO_GATEWAY.md). Đóng Arduino Serial Monitor trước; cổng COM chỉ một tiến trình được mở.
 
-Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Ở `GPS_ONLY`, GPS passage tại checkpoint loại `LAP` tính lap. Ở `GPS_AND_ARDUINO`, GPS chỉ tạo passage chờ đối chiếu.
+Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị thật gửi `X-Wearable-Key`, cùng GPS, `total_steps` và device ID tới `POST /api/v1/telemetry/gps` (giới hạn 12 m/s). Wearable key hiện dùng chung theo vai trò, không phải khóa riêng/crypto identity của từng thiết bị; backend vẫn đối chiếu device ID đã ghép với student và run. Simulator dùng `X-Simulator-Key` với ngưỡng tốc độ riêng cho demo; source GPS được xác định theo key xác thực, không theo trường `source` client gửi. Lap chỉ được chốt tại checkpoint đánh dấu `LAP`; tuyến nhiều điểm cần passage theo thứ tự vòng từ checkpoint kế tiếp đến checkpoint `LAP`. Ở `GPS_AND_ARDUINO`, từng passage cần được ghép với event Gateway trước khi đủ điều kiện chốt vòng.
 
 Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Serial rồi gọi `POST /api/v1/checkpoint-events` với `X-Gateway-Key`, `device_event_id` ổn định và `student_id=null`. Admin đăng ký mapping thiết bị qua `POST /api/v1/checkpoints/{checkpoint_id}/devices`. Chỉ trong chế độ kết hợp, backend ghép event và passage; trường hợp mơ hồ cần `POST /api/v1/checkpoint-events/{event_id}/resolve`. Các API tra cứu là `GET /api/v1/checkpoint-events/{event_id}` và `GET /api/v1/races/{race_id}/checkpoint-events`.
 ## API app sinh viên
@@ -120,6 +123,10 @@ Luồng app sinh viên tách khỏi Admin key và dùng access/refresh token ri�
 - [Quy tắc ghép Arduino/GPS và các điểm nối API](docs/ARDUINO_GPS_MATCHING.md)
 - Đặc tả nghiệp vụ/API: `Dac_ta_nghiep_vu_va_API_Backend_IoT_NEU_RUN.docx`
 - Hướng dẫn phần cứng: `Smart_Running_Checkpoint_Station_Huong_Dan_Chi_Tiet.docx`
+
+## Kiểm tra hồi quy
+
+Từ thư mục `services/backend`, kích hoạt môi trường Python của backend rồi chạy `python -m unittest discover -s tests -v`. Bộ kiểm tra dùng SQLite in-memory và bao phủ các lỗi F01–F07 trong báo cáo; không đọc hoặc sửa database demo của người dùng.
 
 ## Lưu ý vận hành
 
