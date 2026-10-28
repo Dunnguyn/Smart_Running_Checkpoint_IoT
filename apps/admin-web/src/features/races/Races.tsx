@@ -1,4 +1,6 @@
+import { RaceLifecycle } from "./RaceLifecycle";
 import { StudentPolicy } from "./StudentPolicy";
+import { AttendanceSettings } from "./AttendanceSettings";
 import { Roster } from "../runners/People";
 import { LiveMap } from "../live-map/LiveMap";
 import { Search, FlaskConical, Plus } from "lucide-react";
@@ -119,6 +121,9 @@ export function Races() {
           <Link className="text-link" to="/races">
             ← Tất cả giải chạy
           </Link>
+          {dataMode === "api" && (
+            <RaceLifecycle key={selected.race_id} race={selected} />
+          )}
           <nav className="tabs" aria-label="Thiết lập giải">
             {[
               ["participants", "Người tham gia"],
@@ -153,7 +158,13 @@ export function Races() {
           )}
           {setupTab === "matching" && <MatchingSettings />}
           {setupTab === "student" && dataMode === "api" && (
-            <StudentPolicy key={selected.race_id} raceId={selected.race_id} />
+            <>
+              <StudentPolicy key={selected.race_id} raceId={selected.race_id} />
+              <AttendanceSettings
+                key={`attendance-${selected.race_id}`}
+                raceId={selected.race_id}
+              />
+            </>
           )}
           {setupTab === "general" && (
             <Panel title="Thông tin giải">
@@ -163,6 +174,12 @@ export function Races() {
                   {selected.started_at
                     ? datetime(selected.started_at)
                     : "Chưa có lịch"}
+                </dd>
+                <dt>Mở giải thực tế</dt>
+                <dd>
+                  {selected.actual_start_at
+                    ? datetime(selected.actual_start_at)
+                    : "Chưa mở giải"}
                 </dd>
                 <dt>Địa điểm</dt>
                 <dd>

@@ -138,3 +138,21 @@ Script dùng health/OpenAPI, POST xác thực (không ghi dữ liệu nghiệp v
 
 
 Cập nhật local 07/10: người dùng chuyển backend sang cổng 8001; `.env` FE hiện dùng REST `http://localhost:8001/api/v1` và WS `ws://localhost:8001`. Các giá trị 8000 trong ví dụ là mặc định. Xem phần đầu INTEGRATION_REPORT.md để biết điều tra dữ liệu legacy, tile và kế hoạch E2E chờ duyệt.
+
+## Mở giải từ web (backend a5665f4)
+
+Vào **Giải chạy → chọn giải**. Giải DRAFT có nút **Chuyển sang Sắp diễn ra**; giải SCHEDULED có nút **Mở giải sang LIVE**. Sau khi sinh viên đăng ký xong, xác nhận mở giải để sinh viên đã check-in có thể bắt đầu. Đăng ký mới đóng khi chuyển LIVE. Mục Thông tin giải hiển thị lịch dự kiến và thời điểm mở thực tế riêng biệt.
+
+Yêu cầu dùng `PATCH /api/v1/races/{id}/status` với `expected_status`. Khi xung đột hoặc mất phản hồi, chọn **Kiểm tra trạng thái**; không báo thành công chỉ dựa trên việc bấm nút. Trạng thái LIVE/CANCELLED/COMPLETED không có nút mở lại. Web chưa cung cấp hủy/đóng giải LIVE vì backend chưa có luồng này.
+
+Bài kiểm thử giao diện dùng phản hồi giả lập, không gửi thao tác đến backend thật:
+
+```powershell
+# Terminal 1, trong apps/admin-web
+$env:VITE_DATA_MODE='api'
+npm run dev -- --host 127.0.0.1 --port 5187 --strictPort
+# Terminal 2, trong cùng thư mục
+node scripts/verify-race-lifecycle.mjs
+```
+
+Bài kiểm thử yêu cầu Microsoft Edge và Playwright đã có trong dependencies; kiểm tra chuyển DRAFT→SCHEDULED, LIVE với phản hồi bị mất, xung đột 409, PATCH thành công nhưng GET sau đó lỗi. Ảnh kiểm tra nằm trong `test-results/lifecycle/`.

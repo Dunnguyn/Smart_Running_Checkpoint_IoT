@@ -15,7 +15,8 @@ export function reconcileRunner(
     Date.parse(incoming.last_seen_at ?? "") <
       Date.parse(current.last_seen_at ?? "") ||
     (!incoming.last_seen_at && !!current.last_seen_at);
-  const keepCompletion = current.status === "COMPLETED";
+  const keepCompletion =
+    current.status === "COMPLETED" || current.status === "ABANDONED";
   return {
     ...incoming,
     lap_count: Math.max(current.lap_count, incoming.lap_count),
@@ -39,10 +40,12 @@ export function reconcileRunner(
       ? {
           status: current.status,
           duration_total_s: current.duration_total_s,
-          ended_at: current.ended_at,
+          ended_at: current.ended_at ?? incoming.ended_at,
         }
       : {}),
-    ...(keepCompletion || incoming.status === "COMPLETED"
+    ...(keepCompletion ||
+    incoming.status === "COMPLETED" ||
+    incoming.status === "ABANDONED"
       ? { connection: "FINISHED" as const }
       : {}),
   };

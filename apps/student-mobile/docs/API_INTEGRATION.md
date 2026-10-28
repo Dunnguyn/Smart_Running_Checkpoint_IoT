@@ -1,6 +1,6 @@
 # Kết nối frontend với backend sinh viên
 
-Cập nhật: 28/10/2026. Hợp đồng đối chiếu: backend `67927c1` (nội dung student API tương ứng `f158a57`). Chỉ sửa frontend, không sửa hoặc chuyển nhánh backend.
+Cập nhật: 28/10/2026. Hợp đồng đối chiếu: backend `a5665f4` (bản sửa backend `5ff5e49`). Chỉ sửa frontend, không sửa hoặc chuyển nhánh backend.
 
 ## Đã nối
 
@@ -32,14 +32,14 @@ Backend cần bản có student API, migrations tương ứng, tài khoản đã
 
 App native gửi platform IOS/ANDROID. React Native Web chỉ là preview; dùng platform ANDROID cho hợp đồng hiện tại, không phải một nền tảng WEB được backend hỗ trợ riêng.
 
-## Cách xử lý các lỗi còn chờ backend
+## Đồng bộ và giới hạn còn lại
 
-- Lỗi datetime ở participation/check-in: app giữ thông báo lỗi, không chuyển sang dữ liệu mẫu. Lỗi này vẫn có thể chặn tải danh sách/đăng ký/điểm danh.
-- GPS cũ: lô được giữ nguyên khi mất phản hồi; mẫu bị server trả REJECTED được ghi lý do và không coi là đã chấp nhận. Chưa thể cam kết GPS offline được công nhận khi backend còn giới hạn 10 giây.
+- Backend đã sửa datetime, hash sample khi đổi batch, finish thiếu vòng và WebSocket datetime. Các lỗi HTTP vẫn hiển thị rõ, không chuyển sang dữ liệu mẫu.
+- GPS cũ: lô được giữ nguyên khi mất phản hồi; mẫu bị server trả REJECTED được ghi lý do và không coi là đã chấp nhận. Backend mặc định nhận GPS mobile trễ tối đa 300 giây khi run còn ACTIVE; thời hạn có thể cấu hình ở máy chủ. App không tự xóa mẫu chỉ dựa trên tuổi mẫu mà chờ ACK. Giới hạn 10 giây của nguồn khác không áp cho mobile.
 - Pause/resume/withdraw yêu cầu mạng; không áp thời điểm pause offline của mock lên API thật. Resume gửi baseline bước 0 vì app chưa thu cảm biến đếm bước; GPS không gửi số bước giả.
 - Phiên thiết bị khác: app hiển thị thông báo và chặn khởi động thu GPS; backend tiếp tục là nơi kiểm tra quyền sở hữu.
 - Dùng polling 5 giây; chưa nối WebSocket student. Mỗi lượt đồng bộ gửi GPS trước khi tải lại toàn bộ dữ liệu để giảm nguy cơ mẫu hết hạn. Tuyến cache tối đa 30 giây, track/laps cache theo revision. Danh sách lịch sử tải đủ các trang backend cung cấp; cần bổ sung tải theo màn hình nếu dữ liệu lớn.
-- Chưa thêm UI chỉnh cửa sổ/vùng điểm danh do contract hiện tại thiếu luồng đọc cấu hình đầy đủ an toàn; chưa thêm lifecycle SCHEDULED → LIVE; không dùng admin finish để vượt qua lỗi backend.
+- Chưa thêm UI chỉnh cửa sổ/vùng điểm danh do contract hiện tại thiếu luồng đọc cấu hình đầy đủ an toàn; web đã nối DRAFT → SCHEDULED → LIVE. Không dùng admin finish để thay thế việc chạy đủ vòng.
 - Thống kê hiện tính từ các phiên đã tải theo logic màn hình hiện có; chưa đổi sang `/student/dashboard` (định nghĩa check-in/participation khác nhau).
 
 ## Kiểm tra
@@ -48,9 +48,23 @@ Có kiểm thử adapter bằng phản hồi HTTP giả lập theo contract: log
 
 Nghiệm thu sau backend sửa: cấp tài khoản → đổi mật khẩu → công bố và mở đăng ký → đăng ký → check-in → LIVE → start → GPS → pause/resume → đủ vòng hoặc withdraw → check-out → lịch sử; thử mất mạng, khởi động lại và đăng nhập thiết bị khác. Không dùng tài khoản/mock GPS demo để kết luận đã nghiệm thu API thật.
 
-Kết quả kiểm tra lần này:
+Kết quả kiểm tra của lượt tích hợp API trước (trước bổ sung lifecycle UI):
 
 - App: 47/47 tests; typecheck và lint đạt; xuất bundle Android, iOS và web thành công.
 - Web quản trị: 47/47 tests; typecheck và lint đạt; build Vite thành công (còn cảnh báo kích thước bundle trên 500 kB).
 - Tổng cộng 94/94 tests. Không thay đổi mã backend, không tạo tài khoản hoặc ghi dữ liệu trên backend thật trong lượt này.
 - Bundle export không tương đương kiểm thử APK/IPA hay nghiệm thu API trên thiết bị. Chưa chạy trọn luồng với backend thật sau các bản sửa đang chờ.
+
+## Lifecycle trên web và bảo vệ tạm thời (28/10/2026)
+
+Vào Giải chạy → chọn giải. Bản nháp có nút **Chuyển sang Sắp diễn ra**; giải SCHEDULED có nút **Mở giải sang LIVE**. Gửi PATCH `/api/v1/races/{id}/status` với `expected_status` đã đọc và trạng thái đích. Sinh viên cần đăng ký trước khi mở LIVE vì backend chỉ cho tự đăng ký lúc SCHEDULED. Thời điểm mở thực tế (`actual_start_at`) hiển thị riêng với lịch dự kiến.
+
+Web chỉ báo xác nhận sau phản hồi backend hoặc sau khi đọc lại đúng trạng thái đích. Khi mất phản hồi/xung đột, nút gửi bị khóa cho đến khi kiểm tra lại trạng thái. Sau PATCH đã thành công nhưng tải lại lỗi, chỉ thử tải lại, không gửi lại PATCH. Nút không xuất hiện cho LIVE/CANCELLED/COMPLETED; chưa thêm thao tác hủy/đóng LIVE vì backend chưa cung cấp.
+
+App ghi đè quyền check-in sai của giải CANCELLED, chặn đăng ký/check-in/start theo trạng thái đã tải, và đọc lại trạng thái trước khi POST check-in/start. Đây chỉ là bảo vệ phía client: không giải quyết được trường hợp backend hủy giải giữa GET và POST hoặc client khác gọi trực tiếp API. Hai lỗi R01/R02 trong báo cáo audit vẫn cần backend sửa; web không thêm thao tác tạo run qua API quản trị cũ. Check-out của lượt đã tham gia giữ nguyên quy tắc server.
+
+Web nhận sự kiện `runner.ended` mới, hiển thị ABANDONED thay vì hoàn thành; cập nhật cũ không được làm phiên kết thúc sớm quay về ACTIVE. App giải thích các mã từ chối GPS và hiển thị chính sách mặc định 5 phút khi mất mạng.
+
+Kiểm tra bổ sung cho lifecycle và backend mới: **51/51 test app + 52/52 test web** đạt; typecheck/lint đạt. Kiểm thử giao diện Playwright với API giả lập đã qua chuyển DRAFT→SCHEDULED, mở LIVE mất phản hồi, xung đột 409 và ghi thành công nhưng tải lại lỗi; không có PATCH trùng hay lỗi trang. Đây không phải nghiệm thu UI với backend thật. Không tạo hoặc mở giải thật trong lượt cập nhật này.
+
+Build sau cập nhật: web Vite thành công (còn cảnh báo bundle trên 500 kB); Expo xuất bundle Android, iOS và web thành công. Chưa kiểm thử APK/IPA trên thiết bị thật.

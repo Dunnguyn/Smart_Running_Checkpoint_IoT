@@ -20,8 +20,8 @@ export default function Login() {
     [show, setShow] = useState(false),
     [validation, setValidation] = useState("");
   const submit = () => {
-    if (!/^\d{8,12}$/.test(code.trim()) || !password) {
-      setValidation("Nhập mã sinh viên từ 8–12 chữ số và mật khẩu.");
+    if (!code.trim() || code.trim().length > 50 || !password) {
+      setValidation("Nhập mã sinh viên tối đa 50 ký tự và mật khẩu.");
       return;
     }
     setValidation("");
@@ -62,7 +62,8 @@ export default function Login() {
                   placeholderTextColor={c.muted}
                   value={code}
                   onChangeText={setCode}
-                  keyboardType="number-pad"
+                  keyboardType="default"
+                  autoCorrect={false}
                   autoCapitalize="none"
                   autoComplete="username"
                   returnKeyType="next"

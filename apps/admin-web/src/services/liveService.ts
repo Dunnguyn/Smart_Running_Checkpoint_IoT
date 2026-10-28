@@ -70,7 +70,11 @@ export function applyLive(
     typeof data.student_id !== "string"
   )
     return snapshot;
-  if (event.type !== "runner.updated" && event.type !== "runner.completed")
+  if (
+    event.type !== "runner.updated" &&
+    event.type !== "runner.completed" &&
+    event.type !== "runner.ended"
+  )
     return snapshot;
   const runners = snapshot.runners.map((r) => {
     if (
@@ -127,7 +131,9 @@ export function applyLive(
     if (typeof data.ended_at === "string") next.ended_at = utc(data.ended_at);
     if (typeof data.bib_number === "string") next.bib = data.bib_number;
     if (event.type === "runner.completed") next.status = "COMPLETED";
-    if (next.status === "COMPLETED") next.connection = "FINISHED";
+    if (event.type === "runner.ended") next.status = "ABANDONED";
+    if (["COMPLETED", "ABANDONED"].includes(next.status))
+      next.connection = "FINISHED";
     return reconcileRunner(r, next);
   });
   return {
@@ -250,6 +256,7 @@ export function subscribeLive(
           ![
             "runner.updated",
             "runner.completed",
+            "runner.ended",
             "checkpoint.detected",
             "checkpoint.match.updated",
             "checkpoint.passed",

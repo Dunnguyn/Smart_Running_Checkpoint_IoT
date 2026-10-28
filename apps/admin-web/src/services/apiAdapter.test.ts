@@ -237,27 +237,25 @@ it("maps backend race metadata without discarding zero counts", async () => {
   setAdminKey("test");
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            items: [
-              {
-                race_id: "race",
-                name: "Race",
-                status: "SCHEDULED",
-                start_at: null,
-                end_at: null,
-                location: "NEU",
-                total_laps: 4,
-                participant_count: 0,
-              },
-            ],
-          }),
-          { status: 200 },
-        ),
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [
+            {
+              race_id: "race",
+              name: "Race",
+              status: "SCHEDULED",
+              start_at: null,
+              end_at: null,
+              location: "NEU",
+              total_laps: 4,
+              participant_count: 0,
+            },
+          ],
+        }),
+        { status: 200 },
       ),
+    ),
   );
   const { apiAdapter } = await import("./apiAdapter");
   expect((await apiAdapter.listRaces())[0]).toMatchObject({
@@ -270,21 +268,19 @@ it("preserves student admin error code and message", async () => {
   setAdminKey("test");
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            detail: {
-              error: {
-                code: "VERSION_CONFLICT",
-                message: "Cấu hình đã thay đổi",
-              },
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: {
+            error: {
+              code: "VERSION_CONFLICT",
+              message: "Cấu hình đã thay đổi",
             },
-          }),
-          { status: 409 },
-        ),
+          },
+        }),
+        { status: 409 },
       ),
+    ),
   );
   await expect(
     request("/admin/races/race/student-policy"),
@@ -292,4 +288,38 @@ it("preserves student admin error code and message", async () => {
     code: "VERSION_CONFLICT",
     message: "Cấu hình đã thay đổi",
   });
+});
+
+it("handles runner.ended as incomplete and does not resurrect it from a delayed ACTIVE update", () => {
+  const ended = applyLive(
+    snapshot(),
+    {
+      type: "runner.ended",
+      race_id: "race",
+      data: {
+        run_id: "run",
+        student_id: "student",
+        status: "ABANDONED",
+        duration_total_s: 25,
+        lap_count: 1,
+        is_done: false,
+      },
+    },
+    "race",
+  );
+  expect(ended.runners[0]).toMatchObject({
+    status: "ABANDONED",
+    connection: "FINISHED",
+    duration_total_s: 25,
+  });
+  const delayed = applyLive(
+    ended,
+    {
+      type: "runner.updated",
+      race_id: "race",
+      data: { run_id: "run", student_id: "student", status: "ACTIVE" },
+    },
+    "race",
+  );
+  expect(delayed.runners[0].status).toBe("ABANDONED");
 });
