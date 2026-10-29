@@ -39,6 +39,7 @@ type RunDto = {
   revision: number;
   segment_id: number;
   last_processed_sequence: number;
+  segment_steps_current?: number;
   bound_to_current_installation: boolean;
 };
 type RaceDto = {
@@ -53,6 +54,7 @@ type RaceDto = {
   capacity: number | null;
   registered_count: number;
   target_laps: number;
+  target_distance_m?: number | null;
   route_length_m: number | null;
   can_register: boolean;
   blocked_reason: string | null;
@@ -345,6 +347,7 @@ export class ApiService implements StudentService {
         capacity: r.capacity ?? 0,
         registered: r.registered_count,
         targetLaps: r.target_laps,
+        targetDistanceMeters: r.target_distance_m ?? null,
         lapMeters: r.route_length_m ?? 0,
         registrationAllowed: r.can_register,
         registrationMessage: r.can_register
@@ -404,6 +407,7 @@ export class ApiService implements StudentService {
         revision: r.revision,
         lastSegment: r.segment_id,
         lastSequence: r.last_processed_sequence,
+        segmentStepsCurrent: r.segment_steps_current,
         boundToInstallation: r.bound_to_current_installation,
         outsideLapZone: false,
         laps: detail.laps.map((l) => ({

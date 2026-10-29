@@ -138,3 +138,7 @@ Script dùng health/OpenAPI, POST xác thực (không ghi dữ liệu nghiệp v
 
 
 Cập nhật local 07/10: người dùng chuyển backend sang cổng 8001; `.env` FE hiện dùng REST `http://localhost:8001/api/v1` và WS `ws://localhost:8001`. Các giá trị 8000 trong ví dụ là mặc định. Xem phần đầu INTEGRATION_REPORT.md để biết điều tra dữ liệu legacy, tile và kế hoạch E2E chờ duyệt.
+
+### Challenge display regression (mock API)
+
+Run `node scripts/verify-challenge-ui.mjs` from this directory. Requires installed Microsoft Edge. The script starts an isolated Vite server on port 5194, intercepts API/WebSocket traffic, and checks list/detail at five viewports. Screenshots are written to ignored `test-results/challenge/`; this does not verify the backend challenge contract or full WCAG compliance.

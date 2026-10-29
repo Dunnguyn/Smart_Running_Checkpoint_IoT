@@ -1,7 +1,8 @@
 import { chromium, expect } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-const out = "test-results/ui";
+const gpsGranted = process.env.QA_GPS === "granted";
+const out = `test-results/ui-${gpsGranted ? "gps-simulated" : "denied"}`;
 await mkdir(out, { recursive: true });
 const server = spawn(process.execPath, ["scripts/serve.cjs", "dist", "8085"], {
   windowsHide: true,
@@ -13,7 +14,26 @@ await new Promise((resolve, reject) => {
   server.once("exit", (code) => reject(new Error(`Server exited ${code}`)));
 });
 const browser = await chromium.launch({ channel: "msedge", headless: true });
-const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+const context = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+  permissions: gpsGranted ? ["geolocation"] : [],
+  geolocation: { latitude: 21.000389, longitude: 105.842583, accuracy: 5 },
+});
+const page = await context.newPage();
+// Refresh simulated timestamps even while stationary; never connected to a real API.
+const gpsTimer = gpsGranted
+  ? setInterval(
+      () =>
+        context
+          .setGeolocation({
+            latitude: 21.000389,
+            longitude: 105.842583,
+            accuracy: 5,
+          })
+          .catch(() => {}),
+      1000,
+    )
+  : undefined;
 const errors = [],
   shots = [];
 page.on("pageerror", (error) => errors.push(error.message));
@@ -91,6 +111,23 @@ try {
   await button("Xem bản đồ chi tiết");
   await shot("map");
   await button("Lấy vị trí hiện tại");
+  if (gpsGranted)
+    await expect(
+      page.getByRole("button", { name: "Về vị trí", exact: true }),
+    ).toBeEnabled();
+  if (
+    await page
+      .getByRole("button", { name: "Về vị trí", exact: true })
+      .isDisabled()
+  ) {
+    await expect(
+      page.getByText("Chưa có quyền vị trí.", { exact: false }),
+    ).toBeVisible();
+    await shot("location-denied");
+    throw new Error(
+      "BLOCKED: quyền vị trí bị từ chối; đã xác minh thông báo và nút khóa. Luồng GPS còn lại NOT RUN. Chạy nhánh cấp quyền trong môi trường geolocation mô phỏng riêng hoặc trên thiết bị thật.",
+    );
+  }
   await button("Về vị trí");
   await shot("map-location");
   await button("Quay lại");
@@ -195,6 +232,7 @@ try {
     JSON.stringify(
       {
         status: "passed",
+        gps: "Browser geolocation simulation at mock checkpoint; no real GPS or backend",
         platform:
           "React Native Web / Edge desktop headless; not a native device",
         shots,
@@ -213,6 +251,7 @@ try {
   );
   throw error;
 } finally {
+  clearInterval(gpsTimer);
   await browser.close();
   server.kill();
 }

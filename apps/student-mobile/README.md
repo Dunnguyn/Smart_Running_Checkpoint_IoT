@@ -114,3 +114,19 @@ node scripts/compare-ui.mjs
 Xem [kiểm kê và đối chiếu thiết kế](docs/DESIGN_AUDIT.md), [hợp đồng BE còn thiếu](docs/API_GAPS.md), [báo cáo kiểm thử](docs/TEST_REPORT.md).
 
 Ảnh native và snapshot kiểm chứng nằm trong `test-results/android/`; bộ đối chiếu 14 màn hình là `test-results/ANDROID_UI_COMPARISON.html`. Tạo lại đối chiếu bằng `node scripts/compare-android-ui.mjs`; kiểm tra các bằng chứng đã chụp bằng `node scripts/verify-android-evidence.mjs`. Các script này không thay thế thao tác kiểm thử trực tiếp trên Emulator.
+
+### Challenge UI and simulated GPS regression
+
+Run from this directory with Microsoft Edge installed. Build the mock preview without editing local environment files:
+
+```powershell
+$env:EXPO_PUBLIC_SERVICE_MODE = 'mock'
+$env:EXPO_PUBLIC_GPS_MODE = 'device'
+$env:EXPO_PUBLIC_BACKGROUND_GPS = 'false'
+npm run build
+node scripts/verify-challenge-ui.mjs
+$env:QA_GPS = 'granted'
+node scripts/verify-ui.mjs
+```
+
+Run these scripts sequentially: both use preview port 8085. `QA_GPS=granted` grants browser geolocation and refreshes a stationary synthetic position at the mock checkpoint. It does not prove native GPS/background tracking or real API integration. Without this flag, missing permission is reported as BLOCKED, not a successful full journey. Output screenshots stay in ignored `test-results/`.

@@ -297,6 +297,7 @@ it("reads cursor pages, authoritative gates, paused state, laps and track", asyn
     can_register: true,
     registered_count: 0,
     target_laps: 4,
+    target_distance_m: 50000,
     actions: { can_check_in: true, can_start: false },
     participation: {
       bib_number: "001",
@@ -316,6 +317,7 @@ it("reads cursor pages, authoritative gates, paused state, laps and track", asyn
     active_seconds: 30,
     distance_total_m: 50,
     last_processed_sequence: 7,
+    segment_steps_current: 12,
     bound_to_current_installation: false,
   };
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
@@ -345,6 +347,7 @@ it("reads cursor pages, authoritative gates, paused state, laps and track", asyn
     "ANDROID",
     fetcher,
   ).snapshot(auth);
+  expect(snapshot.races[0].targetDistanceMeters).toBe(50000);
   expect(snapshot.races[0].registrationAllowed).toBe(true);
   expect(snapshot.races[0].registrationMessage).toBe("Đang mở đăng ký");
   expect(snapshot.enrollments[0].checkedInAt).toBe(
@@ -354,6 +357,7 @@ it("reads cursor pages, authoritative gates, paused state, laps and track", asyn
     status: "PAUSED",
     activeMs: 30000,
     lastSequence: 7,
+    segmentStepsCurrent: 12,
     boundToInstallation: false,
   });
   expect(snapshot.runs[0].laps).toHaveLength(1);

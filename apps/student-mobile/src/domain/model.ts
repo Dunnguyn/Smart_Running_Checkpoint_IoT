@@ -41,6 +41,7 @@ export type Race = {
   capacity: number;
   registered: number;
   targetLaps: number;
+  targetDistanceMeters?: number | null;
   lapMeters: number;
   route: Point[];
   checkpoints: {
@@ -76,6 +77,7 @@ export type Run = {
   outsideLapZone: boolean;
   lastSegment?: number;
   lastSequence?: number;
+  segmentStepsCurrent?: number;
   boundToInstallation?: boolean;
 };
 export type Snapshot = {
