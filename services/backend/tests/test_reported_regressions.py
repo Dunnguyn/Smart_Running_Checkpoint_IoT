@@ -9,11 +9,13 @@ import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from sqlalchemy import select
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from app import main as core  # noqa: E402
 from app import student_api  # noqa: E402
+from app import demos  # noqa: E402
 
 
 def run_coroutine_without_io(coroutine):
@@ -248,6 +250,93 @@ class RegressionTests(unittest.TestCase):
         replay = core.change_race_status(race.id,
             core.RaceStatusPatch(expected_status="SCHEDULED", status="LIVE"), self.db)
         self.assertTrue(replay["idempotent"])
+
+    def test_health_month_demo_is_ready_for_mobile_start_and_finish_contract(self):
+        demo, _runners, _accounts, route_length = demos._create_month_demo(self.db, 60)
+        race = self.db.get(core.Race, demo.race_id)
+        attendance = self.db.get(student_api.StudentAttendanceConfig, race.id)
+        challenge = self.db.get(demos.StudentRaceChallenge, race.id)
+        participants = self.db.query(core.RaceParticipant).filter_by(race_id=race.id).all()
+        self.assertEqual(race.target_distance_m, 50_000)
+        self.assertEqual(challenge.target_distance_m, 50_000)
+        self.assertIsNotNone(attendance)
+        self.assertEqual(attendance.check_in_checkpoint_id, challenge.start_checkpoint_id)
+        self.assertEqual(attendance.check_out_checkpoint_id, challenge.end_checkpoint_id)
+        self.assertEqual(len(participants), 3)
+        self.assertGreaterEqual(route_length, 400)
+        self.assertLessEqual(route_length, 450)
+        student = core.Student(student_code="T999", full_name="Test Challenge",
+                               faculty="NEU")
+        self.db.add(student)
+        self.db.commit()
+        allowed, reason, _, _ = student_api._registration_gate(
+            self.db, race, student.id)
+        self.assertTrue(allowed, reason)
+
+    def test_kit_single_checkpoint_start_and_finish_events_complete_one_lap(self):
+        race = self.race(mode="GPS_AND_ARDUINO", laps=1)
+        student = core.Student(id=core.new_id(), student_code="11235723",
+            full_name="Lê Phương Linh", faculty="NEU")
+        self.db.add(student)
+        self.db.flush()
+        checkpoint = core.Checkpoint(id=core.new_id(), race_id=race.id,
+            code="NEU-C04", name="C04", sequence_no=1, kind="LAP",
+            latitude=20.9999722222, longitude=105.8418888889, radius_m=12)
+        device = core.Device(id="KIT-TEST", name="Kit test", checkpoint_id=checkpoint.id)
+        wearable = core.RunnerWearable(id="WEARABLE-TEST", student_id=student.id,
+            name="Simulated GPS")
+        self.db.add_all([checkpoint, device, wearable])
+        self.db.flush()
+        started = core.now_utc() - timedelta(seconds=12)
+        run = core.RunSession(id=core.new_id(), race_id=race.id, student_id=student.id,
+            wearable_device_id=wearable.id, source="KIT_DEMO", status="ACTIVE", started_at=started)
+        self.db.add(run)
+        self.db.flush()
+        passages = []
+        for label, when in (("start", started + timedelta(seconds=1)),
+                            ("finish", core.now_utc())):
+            point = core.GpsPoint(run_id=run.id, wearable_device_id=wearable.id,
+                latitude=checkpoint.latitude, longitude=checkpoint.longitude,
+                recorded_at=when, received_at=when, accuracy_m=4, speed_mps=0,
+                total_steps=0, source="SIMULATED_GPS", idempotency_key=f"kit:{label}")
+            self.db.add(point)
+            self.db.flush()
+            passage = core.GPSPassage(race_id=race.id, checkpoint_id=checkpoint.id,
+                run_id=run.id, student_id=student.id, wearable_device_id=wearable.id,
+                entry_gps_point_id=point.id, entry_at=when, received_at=when,
+                entry_distance_m=0, telemetry_source="SIMULATED_GPS")
+            event = core.DeviceEvent(device_id=device.id, checkpoint_id=checkpoint.id,
+                occurred_at=when, received_at=when, event_type="PASSAGE_DETECTED",
+                source_event_id=f"kit-test:{label}", status="MATCHED", student_id=student.id,
+                matched_run_id=run.id, lap_status="NOT_COUNTED" if label == "start" else "NOT_EVALUATED",
+                reason_code="KIT_DEMO_START_TRIGGER" if label == "start" else None,
+                candidates_final=True)
+            self.db.add_all([passage, event])
+            self.db.flush()
+            event.passage_id = passage.id
+            passage.consumed_by_event_id = event.id
+            passages.append(passage)
+        self.db.commit()
+        self.assertEqual(len(passages), 2)
+        self.assertTrue(all(item.consumed_by_event_id for item in passages))
+        counted, _duration = core.record_lap(self.db, run, checkpoint,
+            passages[1].entry_at, "ARDUINO_KIT_DEMO", "kit-test:finish")
+        self.db.commit()
+        self.assertTrue(counted)
+        self.assertEqual(run.lap_count, 1)
+        self.assertEqual(run.status, "COMPLETED")
+
+    def test_student_app_routes_are_in_the_openapi_contract(self):
+        paths = core.app.openapi()["paths"]
+        expected = {
+            "/api/v1/student/auth/login", "/api/v1/student/races",
+            "/api/v1/student/races/{race_id}/registrations",
+            "/api/v1/student/races/{race_id}/runs",
+            "/api/v1/student/runs/{run_id}/gps-batches",
+            "/api/v1/student/runs/{run_id}/finish",
+            "/api/v1/student/races/{race_id}/progress",
+        }
+        self.assertTrue(expected.issubset(paths), expected - set(paths))
 
 
 if __name__ == "__main__":

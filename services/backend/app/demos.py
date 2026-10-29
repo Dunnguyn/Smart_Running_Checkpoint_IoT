@@ -294,14 +294,28 @@ async def _process_kit_passage(demo_id: str, lap_number: int) -> None:
                 accuracy_m=4.0, speed_mps=0.0, total_steps=0, source="SIMULATED_GPS",
                 idempotency_key=f"kit-demo:{demo_id}:1", sample_id=core.new_id(), sequence=1, segment_id=1)
             db.add(point)
+            db.flush()
+            # The first Arduino hit is the start marker at the single C04
+            # checkpoint. Persist it as a GPS passage so the second, separate
+            # hit can satisfy the one-checkpoint start/finish lap rule.
+            passage = core.GPSPassage(race_id=demo.race_id,
+                checkpoint_id=demo.checkpoint_id, run_id=run.id,
+                student_id=run.student_id, wearable_device_id=demo.wearable_id,
+                entry_gps_point_id=point.id, entry_at=now, received_at=now,
+                entry_distance_m=0.0, telemetry_source="SIMULATED_GPS")
+            db.add(passage)
+            db.flush()
             run.last_latitude, run.last_longitude = cp.latitude, cp.longitude
             run.last_seen_at = run.last_gps_recorded_at = now
             event = core.DeviceEvent(device_id=demo.device_id, checkpoint_id=demo.checkpoint_id,
                 occurred_at=now, received_at=now, event_type="PASSAGE_DETECTED",
                 source_event_id=f"kit-demo:{demo_id}:start", status="MATCHED",
                 raw_payload=f"LAP: {lap_number}", lap_status="NOT_COUNTED",
-                reason_code="KIT_DEMO_START_TRIGGER", matched_run_id=run.id, candidates_final=True)
+                reason_code="KIT_DEMO_START_TRIGGER", matched_run_id=run.id,
+                passage_id=passage.id, candidates_final=True)
             db.add(event)
+            db.flush()
+            passage.consumed_by_event_id = event.id
             db.commit()
             snapshot = core.run_dict(db, run)
             race_id = demo.race_id
@@ -492,6 +506,13 @@ def _challenge_progress(db: Session, race_id: str, student_id: str) -> dict[str,
     days = db.scalars(select(HealthChallengeDemoDay).where(
         HealthChallengeDemoDay.race_id == race_id, HealthChallengeDemoDay.student_id == student_id)).all()
     run_ids = {row.run_id for row in app_sessions} | {row.run_id for row in days}
+    # The standard Student API creates MOBILE_GPS runs directly instead of
+    # creating ChallengeAppSession rows. Include those sessions so the Admin
+    # challenge dashboard stays in sync with app check-ins and finishes.
+    run_ids.update(db.scalars(select(core.RunSession.id).where(
+        core.RunSession.race_id == race_id,
+        core.RunSession.student_id == student_id,
+        core.RunSession.source == "MOBILE_GPS")).all())
     runs = [db.get(core.RunSession, ident) for ident in run_ids]
     runs = [row for row in runs if row]
     completed = [row for row in runs if row.status == "COMPLETED"]
@@ -726,7 +747,8 @@ def _create_month_demo(db: Session, duration_seconds: int):
     race = core.Race(name="NEU Health Month · 50 km challenge demo", start_at=virtual_start_at,
         end_at=virtual_end_at, status="LIVE", route_name="Quanh giảng đường A1/A2",
         route_profile="NEU_DEMO", route_length_min_m=400, route_length_max_m=450,
-        total_laps=125, min_lap_interval_seconds=60, checkpoint_mode="GPS_ONLY")
+        target_distance_m=50_000, total_laps=125, min_lap_interval_seconds=60,
+        checkpoint_mode="GPS_ONLY")
     db.add(race)
     db.flush()
     by_code = {}
@@ -747,6 +769,15 @@ def _create_month_demo(db: Session, duration_seconds: int):
     db.add(StudentRaceChallenge(race_id=race.id, target_distance_m=50_000,
         duration_days=30, start_checkpoint_id=cp_ids["NEU-C04"],
         end_checkpoint_id=cp_ids["NEU-C04"]))
+    # The student app's standard run start/finish APIs use this shared
+    # geofence policy. Keep it aligned with the challenge-specific C04 policy
+    # so the mobile demo can start and finish through the same contract.
+    db.add(mobile.StudentAttendanceConfig(race_id=race.id,
+        check_in_checkpoint_id=cp_ids["NEU-C04"],
+        check_out_checkpoint_id=cp_ids["NEU-C04"],
+        check_in_open_at=virtual_start_at, check_in_close_at=virtual_end_at,
+        check_out_open_at=virtual_start_at, check_out_close_at=virtual_end_at,
+        max_position_age_seconds=30, max_accuracy_m=30))
     db.add(core.Device(id=f"HEALTH-DEMO-{race.id[:8]}",
         name="Challenge GPS checkpoint demo", checkpoint_id=cp_ids["NEU-C04"], status="ACTIVE"))
     demo = HealthChallengeDemo(race_id=race.id, status="RUNNING", duration_seconds=duration_seconds,

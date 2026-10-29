@@ -1,0 +1,131 @@
+@startuml UC01_Student_App
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam usecase {
+  BackgroundColor #F4F8FF
+  BorderColor #315A8A
+}
+
+actor "Sinh viên" as Student
+rectangle "NEU RUN Student API" {
+  usecase "Đăng nhập bằng mã SV" as Login
+  usecase "Xem hồ sơ" as Profile
+  usecase "Khám phá và xem giải" as Discover
+  usecase "Tự đăng ký giải" as Register
+  usecase "Nhận số báo danh" as Bib
+  usecase "Check-in bằng GPS" as CheckIn
+  usecase "Bắt đầu buổi chạy" as StartRun
+  usecase "Gửi GPS và bước chân" as Telemetry
+  usecase "Tạm dừng / tiếp tục" as PauseResume
+  usecase "Dừng buổi tại checkpoint" as FinishRun
+  usecase "Check-out" as CheckOut
+  usecase "Xem lịch sử và tiến độ" as History
+  usecase "Xem dashboard cá nhân" as Dashboard
+  usecase "Làm mới token" as Refresh
+}
+
+Student --> Login
+Student --> Profile
+Student --> Discover
+Student --> Register
+Student --> CheckIn
+Student --> StartRun
+Student --> Telemetry
+Student --> PauseResume
+Student --> FinishRun
+Student --> CheckOut
+Student --> History
+Student --> Dashboard
+Login ..> Refresh : <<extend>>
+Register ..> Bib : <<include>>
+StartRun ..> CheckIn : <<extend>>
+FinishRun ..> Telemetry : <<include>>
+@enduml
+
+@startuml UC02_Admin_Web
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+
+actor "Quản trị viên" as Admin
+actor "Admin Web" as Web
+rectangle "NEU RUN Backend Admin API" {
+  usecase "Xác thực Admin key" as AuthAdmin
+  usecase "Tạo / sửa / xóa giải" as ManageRace
+  usecase "Cấu hình mở đăng ký và sức chứa" as Policy
+  usecase "Tạo hồ sơ sinh viên" as ManageStudent
+  usecase "Cấp tài khoản app" as Account
+  usecase "Quản lý đăng ký và bib" as Enrollment
+  usecase "Sửa tuyến chạy và checkpoint" as Route
+  usecase "Gán Gateway cho checkpoint" as GatewayMap
+  usecase "Theo dõi live và dashboard giải" as Live
+  usecase "Xem GPS, vòng và lịch sử" as History
+  usecase "Xác nhận sự kiện mơ hồ" as Resolve
+  usecase "Khởi chạy demo kit C04" as KitDemo
+  usecase "Khởi chạy demo challenge 50 km" as MonthDemo
+  usecase "Khởi chạy demo runner GPS" as RunDemo
+}
+
+Admin --> Web
+Web --> AuthAdmin
+Web --> ManageRace
+Web --> Policy
+Web --> ManageStudent
+Web --> Account
+Web --> Enrollment
+Web --> Route
+Web --> GatewayMap
+Web --> Live
+Web --> History
+Web --> Resolve
+Web --> KitDemo
+Web --> MonthDemo
+Web --> RunDemo
+ManageRace ..> AuthAdmin : <<include>>
+Route ..> AuthAdmin : <<include>>
+Resolve ..> AuthAdmin : <<include>>
+KitDemo ..> GatewayMap : <<include>>
+@enduml
+
+@startuml UC03_Arduino_GPS_Backend
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+
+actor "Sinh viên chạy" as Runner
+actor "Wearable / GPS" as Wearable
+actor "Arduino HC-SR04" as Kit
+actor "Gateway Serial COM03" as Gateway
+actor "Quản trị viên" as Admin
+rectangle "NEU RUN Backend and Matching" {
+  usecase "Gửi mẫu GPS / bước chân" as SendGps
+  usecase "Phát hiện người qua cảm biến" as Detect
+  usecase "Chuyển dòng LAP qua API" as Forward
+  usecase "Lưu checkpoint event ẩn danh" as SaveEvent
+  usecase "Tạo GPS passage" as Passage
+  usecase "Đối chiếu sự kiện với GPS" as Match
+  usecase "Ghi nhận lap hợp lệ" as Lap
+  usecase "Đưa vào hàng chờ xác nhận" as Ambiguous
+  usecase "Admin xác nhận / loại event" as ResolveEvent
+  usecase "Phát cập nhật live sau commit" as Publish
+  usecase "Xem run và kết quả" as ReadResults
+}
+
+Runner --> SendGps
+Wearable --> SendGps
+Kit --> Detect
+Gateway --> Forward
+Admin --> ResolveEvent
+Admin --> ReadResults
+SendGps ..> Passage : <<include>>
+Detect ..> Forward : <<include>>
+Forward ..> SaveEvent : <<include>>
+SaveEvent ..> Match : <<include>>
+Passage ..> Match : <<include>>
+Match ..> Lap : <<extend>>
+Match ..> Ambiguous : <<extend>>
+ResolveEvent ..> Ambiguous : <<include>>
+Lap ..> Publish : <<include>>
+ResolveEvent ..> Publish : <<include>>
+@enduml

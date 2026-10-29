@@ -458,7 +458,8 @@ def _registration_gate(db: Session, race: core.Race, student_id: str) -> tuple[b
         return False, "RACE_NOT_PUBLISHED", registered_count, policy.capacity if policy else None
     if race.status == "CANCELLED":
         return False, "RACE_CANCELLED", registered_count, policy.capacity
-    if race.status != "SCHEDULED" or not policy.registration_enabled:
+    challenge_registration_live = bool(race.target_distance_m and race.status == "LIVE")
+    if (race.status != "SCHEDULED" and not challenge_registration_live) or not policy.registration_enabled:
         return False, "REGISTRATION_NOT_OPEN", registered_count, policy.capacity
     now = core.now_utc()
     if not policy.registration_opens_at or not policy.registration_closes_at:
@@ -496,6 +497,11 @@ def _run_snapshot(db: Session, run: core.RunSession, installation_id: str | None
     now = core.now_utc()
     elapsed = run.duration_total_s if run.duration_total_s is not None else max(0, int((now - _utc(run.started_at)).total_seconds()))
     paused_seconds, open_pause = _pause_totals(db, run, now)
+    last_resume = db.scalar(select(StudentRunPause).where(
+        StudentRunPause.run_id == run.id, StudentRunPause.resumed_at.is_not(None),
+        StudentRunPause.resumed_at <= now
+    ).order_by(StudentRunPause.resumed_at.desc()).limit(1))
+    segment_steps_offset = last_resume.steps_offset_after if last_resume else 0
     tracking_state = "PAUSED" if open_pause and run.status == "ACTIVE" else "RUNNING" if run.status == "ACTIVE" else "TERMINAL"
     return {"run_id": run.id, "race_id": run.race_id,
             "registration_id": participant.id if participant else None,
@@ -519,6 +525,7 @@ def _run_snapshot(db: Session, run: core.RunSession, installation_id: str | None
             "result_state": ("PENDING" if run.status == "ACTIVE" else
                              "VOID" if run.status == "CANCELLED" else "FINAL"),
             "last_processed_sequence": getattr(run, "last_sequence", 0),
+            "segment_steps_current": max(0, run.total_steps - segment_steps_offset),
             "actions": {"can_pause": run.status == "ACTIVE" and open_pause is None,
                         "can_resume": run.status == "ACTIVE" and open_pause is not None,
                         "can_withdraw": run.status == "ACTIVE"},
@@ -667,6 +674,7 @@ def _race_view(db: Session, race: core.Race, student_id: str, installation_id: s
             "location": race.route_name, "status": race.status,
             "start_at": race.start_at, "end_at": race.end_at,
             "matching_mode": race.checkpoint_mode, "target_laps": race.total_laps,
+            "target_distance_m": race.target_distance_m,
             "route_length_m": route.get("distance_m"),
             "registration_opens_at": policy.registration_opens_at if policy else None,
             "registration_closes_at": policy.registration_closes_at if policy else None,
@@ -1071,7 +1079,10 @@ async def student_start_run(race_id: str, data: StartRunIn,
                 db.commit()
                 return response
             _fail(409, "DEVICE_BINDING_MISMATCH", "Phiên chạy đang gắn với một cài đặt app khác.")
-        _fail(409, "RUN_ALREADY_EXISTS", "Đăng ký này đã có phiên chạy.")
+        # Health-month registrations may create a new daily session after the
+        # previous one was explicitly finished. Ordinary races remain one-run.
+        if not race.target_distance_m or existing.status not in {"COMPLETED", "ABANDONED"}:
+            _fail(409, "RUN_ALREADY_EXISTS", "Đăng ký này đã có phiên chạy.")
     if participant.registration_status != "REGISTERED":
         _fail(409, "REGISTRATION_CANCELLED", "Đăng ký giải của bạn đã bị hủy.")
     if not data.consent_granted:
@@ -1080,12 +1091,23 @@ async def student_start_run(race_id: str, data: StartRunIn,
         _fail(409, "RACE_NOT_STARTED" if race.status in {"DRAFT", "SCHEDULED"} else "RACE_CLOSED",
               "Giải chưa mở lượt chạy." if race.status in {"DRAFT", "SCHEDULED"} else "Giải đã đóng.")
     config = db.get(StudentAttendanceConfig, race_id)
-    if not config:
-        _fail(409, "ATTENDANCE_NOT_CONFIGURED", "Giải chưa cấu hình vùng điểm danh.")
-    attendance = _attendance(db, participant.id)
-    if not attendance or attendance.status != "CHECKED_IN":
-        _fail(409, "CHECK_IN_REQUIRED", "Bạn cần check-in trước khi bắt đầu.")
-    _validate_position(db, race_id, data.position, config.check_in_checkpoint_id, config)
+    if race.target_distance_m:
+        if not config:
+            _fail(409, "ATTENDANCE_NOT_CONFIGURED", "Giải thử thách chưa cấu hình checkpoint xuất phát.")
+        # For a multi-day challenge, each workout starts by checking the
+        # student's current GPS at the configured start/finish checkpoint.
+        _validate_position(db, race_id, data.position, config.check_in_checkpoint_id, config)
+        if race.start_at and core.now_utc() < _utc(race.start_at):
+            _fail(409, "RACE_NOT_STARTED", "Chưa đến thời gian mở thử thách.")
+        if race.end_at and core.now_utc() > _utc(race.end_at):
+            _fail(409, "RACE_CLOSED", "Thời gian thử thách đã kết thúc.")
+    else:
+        if not config:
+            _fail(409, "ATTENDANCE_NOT_CONFIGURED", "Giải chưa cấu hình vùng điểm danh.")
+        attendance = _attendance(db, participant.id)
+        if not attendance or attendance.status != "CHECKED_IN":
+            _fail(409, "CHECK_IN_REQUIRED", "Bạn cần check-in trước khi bắt đầu.")
+        _validate_position(db, race_id, data.position, config.check_in_checkpoint_id, config)
     any_active = db.scalar(select(core.RunSession.id).where(
         core.RunSession.student_id == principal.student.id, core.RunSession.status == "ACTIVE").limit(1))
     if any_active:
@@ -1368,6 +1390,105 @@ async def student_withdraw(run_id: str, data: WithdrawIn,
     await core.hub.publish(run.race_id, {"type": "runner.updated", "race_id": run.race_id, "data": core.run_dict(db, run)})
     await publish_student_event(principal.student.id, "run.abandoned", "RUN", run.id, getattr(run, "revision", 2), result)
     return response
+
+
+class FinishChallengeRunIn(StrictInput):
+    """Student confirms the end of one daily challenge workout at its GPS gate."""
+    position: PositionEvidence
+    expected_revision: int = Field(ge=1)
+
+
+@router.post("/api/v1/student/runs/{run_id}/finish")
+async def student_finish_challenge_run(run_id: str, data: FinishChallengeRunIn,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        principal: StudentPrincipal = Depends(require_student), db: Session = Depends(core.db_session)):
+    key = _idempotency_key(idempotency_key)
+    path = f"POST:/api/v1/student/runs/{run_id}/finish"
+    payload = data.model_dump(mode="json")
+    replay = _receipt_replay(db, principal, key, path, payload)
+    if replay:
+        return replay
+    run = _lock_owned_run(db, run_id, principal.student.id)
+    race = db.get(core.Race, run.race_id)
+    if not race or not race.target_distance_m:
+        _fail(409, "NOT_A_DISTANCE_CHALLENGE", "API này chỉ dùng để kết thúc một buổi trong thử thách quãng đường.")
+    if run.status != "ACTIVE":
+        _fail(409, "RUN_NOT_ACTIVE", "Buổi chạy không ở trạng thái đang chạy.")
+    if data.expected_revision != getattr(run, "revision", 1):
+        _fail(409, "VERSION_CONFLICT", "Phiên chạy đã thay đổi; hãy tải lại trạng thái.")
+    config = db.get(StudentAttendanceConfig, run.race_id)
+    if not config:
+        _fail(409, "ATTENDANCE_NOT_CONFIGURED", "Giải chưa cấu hình checkpoint kết thúc.")
+    _validate_position(db, run.race_id, data.position, config.check_out_checkpoint_id, config)
+    # Persist the button-confirmed stop GPS sample through the same ingest
+    # validator as every ordinary app sample; its outside-to-inside evidence
+    # can therefore create the final checkpoint passage in the run history.
+    finish_sample = core.GpsIn(idempotency_key=f"mobile:finish:{run.id}:{key}",
+        sample_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"finish:{run.id}:{key}")),
+        sequence=getattr(run, "last_sequence", 0) + 1, segment_id=getattr(run, "segment_id", 1),
+        race_id=run.race_id, run_id=run.id, student_id=run.student_id,
+        wearable_device_id=run.wearable_device_id, latitude=data.position.latitude,
+        longitude=data.position.longitude, recorded_at=_utc(data.position.captured_at),
+        accuracy_m=data.position.accuracy_m, total_steps=run.total_steps, source="MOBILE_GPS")
+    finish_gps = await core.receive_gps(finish_sample, auth_source="MOBILE", db=db)
+    db.refresh(run)
+    now = core.now_utc()
+    close_open_pause(db, run.id, now)
+    run.status = "COMPLETED"
+    run.ended_at = now
+    run.finalized_at = now
+    run.duration_total_s = max(0, int((now - _utc(run.started_at)).total_seconds()))
+    run.revision = getattr(run, "revision", 1) + 1
+    result = _run_snapshot(db, run, principal.session.installation_id)
+    result["finish_gps"] = {"gps_point_id": finish_gps["gps_point_id"],
+        "checkpoint_crossings": finish_gps.get("checkpoint_crossings", [])}
+    response = _save_receipt(db, principal, key, path, payload, result, 200)
+    db.commit()
+    await core.hub.publish(run.race_id, {"type": "runner.updated", "race_id": run.race_id, "data": core.run_dict(db, run)})
+    await publish_student_event(principal.student.id, "run.finished", "RUN", run.id, run.revision, result)
+    return response
+
+
+@router.get("/api/v1/student/races/{race_id}/progress")
+def student_challenge_progress(race_id: str, principal: StudentPrincipal = Depends(require_student),
+                               db: Session = Depends(core.db_session)):
+    race, _participant = _race_for_registered(db, race_id, principal.student.id)
+    if not race.target_distance_m:
+        _fail(409, "NOT_A_DISTANCE_CHALLENGE", "Giải này không phải thử thách tích lũy quãng đường.")
+    zone = timezone(timedelta(hours=7))
+    runs = db.scalars(select(core.RunSession).where(
+        core.RunSession.race_id == race.id, core.RunSession.student_id == principal.student.id,
+        core.RunSession.source == "MOBILE_GPS").order_by(core.RunSession.started_at)).all()
+    days: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        local_day = _utc(run.started_at).astimezone(zone).date().isoformat()
+        item = days.setdefault(local_day, {"date": local_day, "sessions": 0, "distance_m": 0.0,
+            "steps": 0, "elapsed_seconds": 0, "active_seconds": 0, "paused_seconds": 0,
+            "active_sessions": 0})
+        item["sessions"] += 1
+        item["distance_m"] += run.distance_total_m
+        item["steps"] += run.total_steps
+        elapsed = (run.duration_total_s if run.duration_total_s is not None else
+            max(0, int((core.now_utc() - _utc(run.started_at)).total_seconds())))
+        paused, _open = _pause_totals(db, run, core.now_utc())
+        item["elapsed_seconds"] += elapsed
+        item["paused_seconds"] += paused
+        item["active_seconds"] += max(0, elapsed - paused)
+        item["active_sessions"] += int(run.status == "ACTIVE")
+    distance_total = sum(row["distance_m"] for row in days.values())
+    elapsed_total = sum(row["elapsed_seconds"] for row in days.values())
+    active_total = sum(row["active_seconds"] for row in days.values())
+    paused_total = sum(row["paused_seconds"] for row in days.values())
+    steps_total = sum(row["steps"] for row in days.values())
+    return {"race_id": race.id, "target_distance_m": race.target_distance_m,
+        "distance_total_m": round(distance_total, 2), "remaining_distance_m": round(max(0, race.target_distance_m - distance_total), 2),
+        "target_reached": distance_total >= race.target_distance_m,
+        "elapsed_total_seconds": elapsed_total, "active_total_seconds": active_total,
+        "paused_total_seconds": paused_total, "steps_total": steps_total,
+        "race_start_at": race.start_at, "race_end_at": race.end_at, "race_status": race.status,
+        "can_continue_after_target": bool(race.end_at and core.now_utc() <= _utc(race.end_at)),
+        "days": [{**row, "distance_m": round(row["distance_m"], 2)} for row in sorted(days.values(), key=lambda x: x["date"])],
+        "server_time": core.now_utc()}
 
 
 @router.post("/api/v1/student/races/{race_id}/check-out")
