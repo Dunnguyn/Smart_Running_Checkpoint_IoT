@@ -1,6 +1,6 @@
 # NEU Smart Running — Backend
 
-**Phạm vi: backend web và API cho app sinh viên.** Dự án cung cấp REST API và WebSocket cho Admin Web, wearable/Arduino gateway, cùng API Bearer riêng cho app sinh viên trên điện thoại. Dùng **FastAPI**, **SQLAlchemy** và **SQLite** làm cơ sở dữ liệu mặc định. Không xây frontend Admin hoặc giao diện/app mobile trong repository. Thư mục Python `app/` là package backend và trình mô phỏng.
+**Phạm vi thay đổi của lần bàn giao này: backend web và API app sinh viên.** Dự án cung cấp REST API và WebSocket cho Admin Web, wearable/Arduino gateway, cùng API Bearer riêng cho app sinh viên trên điện thoại. Dùng **FastAPI**, **SQLAlchemy** và **SQLite** làm cơ sở dữ liệu mặc định. Các thay đổi lần này chỉ gồm backend và tài liệu; không sửa hoặc đưa thay đổi frontend vào commit. Thư mục Python `app/` là package backend.
 
 ## Những gì đã có
 
@@ -80,10 +80,10 @@ Admin/Gateway/Simulator keys chỉ đọc từ `.env` hoặc biến môi trườ
 ## Demo kit COM03 và challenge app sinh viên
 
 - Admin Web chạy từ `apps/admin-web`; cấu hình `.env` tại thư mục này với `VITE_DATA_MODE=api`, `VITE_API_BASE_URL=http://127.0.0.1:8000`, `VITE_WS_BASE_URL=ws://127.0.0.1:8000` và `VITE_ADMIN_API_KEY` phải trùng `ADMIN_API_KEY` của backend. Chạy `npm ci`, `npm run dev` rồi mở `http://127.0.0.1:5173/demos`.
-- Trang **Demo tích hợp** gọi API kit để backend mở trực tiếp cổng Serial COM03 ở 9600 baud. Sketch hiện tại phát `START!` từ nút START và `LAP: n` từ cảm biến; lần qua đầu mở phiên cho MSSV `11235723`, GPS/bước chân mô phỏng chạy một vòng 31 m quanh C04, lần qua thứ hai sau tối thiểu 8 giây chốt phiên. Đóng Arduino Serial Monitor trước khi kết nối vì chỉ một tiến trình có thể giữ COM.
-- API quản trị kit: `GET /api/v1/demos/kit/ports`, `POST /api/v1/demos/kit/sessions` với `{"serial_port":"COM03"}`, `GET /api/v1/demos/kit/sessions/{demo_id}` và `POST /api/v1/demos/kit/sessions/{demo_id}/stop`. Đây là demo; chuyển động và bước chân được gắn nhãn mô phỏng, còn HC-SR04 chỉ xác nhận người qua.
-- API app challenge dùng Bearer token sinh viên: `GET /api/v1/student/races/{race_id}/challenge`, `POST /api/v1/student/races/{race_id}/challenge/sessions` để bắt đầu tại checkpoint GPS, gửi các batch bằng `POST /api/v1/student/runs/{run_id}/gps-batches`, rồi kết thúc tại checkpoint bằng `POST /api/v1/student/challenge-runs/{run_id}/finish`. Mỗi lần chạy là một run riêng; tổng thời gian, GPS, bước và quãng đường được cộng từ các run đã hoàn tất. Tạm dừng/tiếp tục dùng API app hiện có cho run; khi tạm dừng FE dừng thu GPS và khi tiếp tục phải mở segment mới.
-- Admin tạo demo 30 ngày/60 giây bằng `POST /api/v1/demos/health-month` với `{"duration_seconds":60,"seed":42}`. Backend tạo giải 50 km, ba tài khoản thử nghiệm và 30 ngày virtual; response đầu tiên trả MSSV/mật khẩu tạm. Theo dõi bằng `GET /api/v1/demos/health-month/{demo_id}`, dashboard bằng `GET /api/v1/races/{race_id}/challenge/dashboard`, xóa toàn bộ dữ liệu riêng của demo bằng `DELETE /api/v1/demos/health-month/{demo_id}`. Ba kết quả mô phỏng lần lượt khoảng 30 km, 50 km, 64.8 km; dữ liệu mô phỏng được lưu chung schema và có source riêng.
+- API kit mở trực tiếp cổng Serial COM03 ở 9600 baud. Sketch hiện tại phát `START!` từ nút START và `LAP: n` từ cảm biến; lần qua đầu mở phiên cho MSSV `11235723` và được lưu làm passage xuất phát tại C04. GPS/bước chân mô phỏng chạy trên vòng ngắn khoảng 31 m quanh C04; lần qua thứ hai sau tối thiểu 8 giây tạo passage đích và chốt phiên. Đóng Arduino Serial Monitor trước khi kết nối vì chỉ một tiến trình có thể giữ COM.
+- API quản trị kit: `GET /api/v1/demos/kit/ports`, `POST /api/v1/demos/kit/sessions` với `{"serial_port":"COM03","student_code":"11235723","full_name":"Lê Phương Linh"}`, `GET /api/v1/demos/kit/sessions/{demo_id}` và `POST /api/v1/demos/kit/sessions/{demo_id}/stop`. Đây là demo; chuyển động và bước chân được gắn nhãn mô phỏng, còn HC-SR04 chỉ xác nhận người qua.
+- App sinh viên dùng Bearer token riêng; danh mục đầy đủ ở [`docs/STUDENT_APP_API.md`](../../docs/STUDENT_APP_API.md), gồm đăng nhập/refresh, khám phá giải, tự đăng ký, check-in, start, GPS batch, pause/resume/finish, lịch sử, dashboard và progress. Challenge có thêm `GET /api/v1/student/races/{race_id}/challenge`, `POST /api/v1/student/races/{race_id}/challenge/sessions` và `POST /api/v1/student/challenge-runs/{run_id}/finish`. Các API được hiển thị trong cùng OpenAPI tại `/docs`.
+- Admin tạo demo 30 ngày/60 giây bằng `POST /api/v1/demos/health-month` với `{"duration_seconds":60}`. Backend tạo giải 50 km, ba tài khoản thử nghiệm và 30 ngày virtual; response đầu tiên trả MSSV/mật khẩu tạm. Theo dõi bằng `GET /api/v1/demos/health-month/{demo_id}`, dashboard bằng `GET /api/v1/races/{race_id}/challenge/dashboard`, xóa toàn bộ dữ liệu riêng của demo bằng `DELETE /api/v1/demos/health-month/{demo_id}`. Ba kết quả mô phỏng lần lượt khoảng 30 km, 50 km, 64.8 km; dữ liệu mô phỏng được lưu chung schema và có source riêng.
 - Nếu `/api/v1/demos/kit/ports` không liệt kê COM03, kiểm tra Device Manager và cáp USB; không thể xác minh tương tác phần cứng cho đến khi máy nhận đúng cổng.
 
 ## Liên kết frontend
@@ -114,11 +114,12 @@ Admin gán wearable cho runner qua `POST /api/v1/runner-devices`; thiết bị t
 Arduino không gọi HTTP trực tiếp: Gateway trên máy tính đọc USB Serial rồi gọi `POST /api/v1/checkpoint-events` với `X-Gateway-Key`, `device_event_id` ổn định và `student_id=null`. Admin đăng ký mapping thiết bị qua `POST /api/v1/checkpoints/{checkpoint_id}/devices`. Chỉ trong chế độ kết hợp, backend ghép event và passage; trường hợp mơ hồ cần `POST /api/v1/checkpoint-events/{event_id}/resolve`. Các API tra cứu là `GET /api/v1/checkpoint-events/{event_id}` và `GET /api/v1/races/{race_id}/checkpoint-events`.
 ## API app sinh viên
 
-Luồng app sinh viên tách khỏi Admin key và dùng access/refresh token riêng. Admin tạo hồ sơ gồm mã sinh viên, họ tên, khoa/viện và cấp tài khoản app; sinh viên khám phá giải đã công bố, tự đăng ký khi được mở, nhận bib backend cấp, check-in GPS, bắt đầu chạy, gửi batch GPS, pause/resume, xem lịch sử và dashboard cá nhân. Tự đăng ký và pause/resume là phần mở rộng theo yêu cầu bổ sung so với tài liệu app v1.1. Hướng dẫn endpoint, ví dụ request, cấu hình Android/iOS và giới hạn đã biết: [docs/STUDENT_MOBILE_API.md](../../docs/STUDENT_MOBILE_API.md).
+Luồng app sinh viên tách khỏi Admin key và dùng access/refresh token riêng. Admin tạo hồ sơ gồm mã sinh viên, họ tên, khoa/viện và cấp tài khoản app; sinh viên khám phá giải đã công bố, tự đăng ký khi được mở, nhận bib backend cấp, check-in GPS, bắt đầu chạy, gửi batch GPS, pause/resume, xem lịch sử và dashboard cá nhân. Tự đăng ký và pause/resume là phần mở rộng theo yêu cầu bổ sung. Bảng endpoint và ví dụ request: [docs/STUDENT_APP_API.md](../../docs/STUDENT_APP_API.md). OpenAPI hiển thị đầy đủ endpoint tại `/docs`.
 
 ## Tài liệu nhóm
 
 - [Mã sơ đồ PlantUML](docs/PLANTUML_DIAGRAMS.puml)
+- [Sơ đồ Use Case PlantUML riêng](docs/USE_CASE_DIAGRAMS.puml)
 - [Sơ đồ UML và ER](docs/UML_DIAGRAMS.md)
 - [Quy tắc ghép Arduino/GPS và các điểm nối API](docs/ARDUINO_GPS_MATCHING.md)
 - Đặc tả nghiệp vụ/API: `Dac_ta_nghiep_vu_va_API_Backend_IoT_NEU_RUN.docx`

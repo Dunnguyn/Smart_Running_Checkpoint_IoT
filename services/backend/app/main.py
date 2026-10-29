@@ -116,6 +116,8 @@ class Race(Base):
     route_profile: Mapped[str] = mapped_column(String(30), default="CUSTOM")
     route_length_min_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     route_length_max_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Optional cumulative goal for multi-day distance challenges, in metres.
+    target_distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     total_laps: Mapped[int] = mapped_column(Integer, default=4)
     min_lap_interval_seconds: Mapped[int] = mapped_column(Integer, default=30)
     checkpoint_mode: Mapped[str] = mapped_column(String(30), default="GPS_ONLY")
@@ -359,6 +361,7 @@ class RaceIn(BaseModel):
     route_profile: str = "CUSTOM"
     route_length_min_m: float | None = Field(default=None, gt=0, le=100000)
     route_length_max_m: float | None = Field(default=None, gt=0, le=100000)
+    target_distance_m: float | None = Field(default=None, gt=0, le=10000000)
     total_laps: int = Field(default=4, ge=1, le=100)
     min_lap_interval_seconds: int | None = Field(default=None, ge=1, le=3600)
     checkpoint_mode: str = "GPS_ONLY"
@@ -1085,7 +1088,11 @@ def create_race(data: RaceIn, db: Session = Depends(db_session)):
     race_values["min_lap_interval_seconds"] = data.min_lap_interval_seconds or settings.min_lap_interval_seconds
     race = Race(**race_values)
     db.add(race); db.commit(); db.refresh(race)
-    return {"race_id": race.id, "name": race.name, "status": race.status, "total_laps": race.total_laps, "min_lap_interval_seconds": race.min_lap_interval_seconds, "route_profile": race.route_profile, "route_length_min_m": race.route_length_min_m, "route_length_max_m": race.route_length_max_m, **race_matching_config(race)}
+    return {"race_id": race.id, "name": race.name, "status": race.status,
+        "total_laps": race.total_laps, "target_distance_m": race.target_distance_m,
+        "min_lap_interval_seconds": race.min_lap_interval_seconds,
+        "route_profile": race.route_profile, "route_length_min_m": race.route_length_min_m,
+        "route_length_max_m": race.route_length_max_m, **race_matching_config(race)}
 
 
 @app.patch("/api/v1/races/{race_id}/status", dependencies=[Depends(admin)])
@@ -1133,6 +1140,7 @@ def list_races(db: Session = Depends(db_session)):
     return {"items": [{"race_id": r.id, "name": r.name, "status": r.status,
         "start_at": r.start_at, "actual_start_at": r.actual_start_at,
         "end_at": r.end_at, "location": r.route_name or "NEU",
+        "target_distance_m": r.target_distance_m,
         "total_laps": r.total_laps,
         "participant_count": db.scalar(select(func.count(RaceParticipant.id)).where(
             RaceParticipant.race_id == r.id)) or 0} for r in rows]}
@@ -2042,7 +2050,8 @@ def race_dashboard(race_id: str, db: Session = Depends(db_session)):
     active = [r for r in runner_rows if r["status"] == "ACTIVE"]
     ranked = sorted(runner_rows, key=lambda r: (-r["lap_count"], -r["distance_total_m"], r["duration_total_s"], r["display_id"]))
     return {
-        "race": {"race_id": race.id, "name": race.name, "status": race.status, "checkpoint_mode": race.checkpoint_mode,
+        "race": {"race_id": race.id, "name": race.name, "status": race.status,
+            "target_distance_m": race.target_distance_m, "checkpoint_mode": race.checkpoint_mode,
             "route_profile": race.route_profile,
             "route_length_min_m": race.route_length_min_m,
             "route_length_max_m": race.route_length_max_m,
@@ -2194,6 +2203,7 @@ def migrate_demo_schema() -> None:
             "route_profile": "VARCHAR(30) NOT NULL DEFAULT 'CUSTOM'",
             "route_length_min_m": "FLOAT NULL",
             "route_length_max_m": "FLOAT NULL",
+            "target_distance_m": "FLOAT NULL",
             "checkpoint_mode": "VARCHAR(30) NOT NULL DEFAULT 'GPS_ONLY'",
             "min_lap_interval_seconds": "INTEGER NOT NULL DEFAULT 30",
             "inner_radius_m": "FLOAT NOT NULL DEFAULT 10",
