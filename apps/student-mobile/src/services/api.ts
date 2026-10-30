@@ -117,7 +117,7 @@ export class ApiService implements StudentService {
     private store: Store,
     private authStore: AuthStore,
     private platform: "ANDROID" | "IOS",
-    private fetcher: typeof fetch = fetch,
+    private fetcher: typeof fetch = (...args) => fetch(...args),
   ) {
     this.base = base.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
   }

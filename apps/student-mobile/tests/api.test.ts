@@ -378,3 +378,36 @@ it("does not silently return a partial list when the cursor is broken", async ()
     code: "PAGINATION",
   });
 });
+
+it("calls browser fetch without binding it to the service instance", async () => {
+  const fetcher = vi.fn(function (this: unknown) {
+    if (this instanceof ApiService) throw new TypeError("Illegal invocation");
+    return Promise.resolve(
+      json({
+        access_token: "a",
+        refresh_token: "r",
+        expires_in: 900,
+        profile: {
+          student_id: "student",
+          student_code: "QA",
+          full_name: "Synthetic",
+        },
+      }),
+    );
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    const service = new ApiService(
+      "http://backend",
+      store,
+      credentials,
+      "ANDROID",
+    );
+    expect((await service.login("QA", "synthetic-password")).student.id).toBe(
+      "student",
+    );
+    expect(fetcher).toHaveBeenCalledOnce();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
