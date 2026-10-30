@@ -58,13 +58,13 @@ export default function RaceDetail() {
       <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
         <ImageBackground
           source={require("../../assets/neu-run-brand.jpg")}
-          style={{ height: 240 }}
+          style={{ minHeight: 240, overflow: "hidden" }}
           resizeMode="cover"
         >
           <LinearGradient
             colors={["rgba(8,27,58,.22)", "rgba(8,27,58,.9)"]}
             style={{
-              flex: 1,
+              minHeight: 240,
               justifyContent: "flex-end",
               padding: 20,
               gap: 10,
@@ -73,7 +73,10 @@ export default function RaceDetail() {
             <Badge>
               {race.phase === "LIVE" ? "Đang diễn ra" : registrationLabel(race)}
             </Badge>
-            <Text style={[s.title, { color: c.white, fontSize: 35 }]}>
+            <Text
+              accessibilityRole="header"
+              style={[s.title, { color: c.white, fontSize: 35 }]}
+            >
               {race.name.replace(" Run ", "\nRun ")}
             </Text>
             <Text style={[s.text, { color: "#ffffffcc" }]}>
@@ -136,7 +139,9 @@ export default function RaceDetail() {
               >
                 <Text style={s.small}>Mục tiêu</Text>
                 <Text style={s.strong}>
-                  {race.targetLaps} vòng được công nhận
+                  {race.targetDistanceMeters
+                    ? `Tích lũy ${race.targetDistanceMeters / 1000} km`
+                    : `${race.targetLaps} vòng được công nhận`}
                 </Text>
               </View>
             </View>

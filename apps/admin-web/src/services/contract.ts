@@ -17,6 +17,7 @@ export interface BackendRace {
   end_at?: string | null;
   location?: string | null;
   total_laps?: number | null;
+  target_distance_m?: number | null;
   participant_count?: number | null;
 }
 export interface BackendRoute extends RouteMetadata {

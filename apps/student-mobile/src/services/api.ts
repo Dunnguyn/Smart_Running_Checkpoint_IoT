@@ -40,6 +40,7 @@ type RunDto = {
   revision: number;
   segment_id: number;
   last_processed_sequence: number;
+  segment_steps_current?: number;
   bound_to_current_installation: boolean;
 };
 type RaceDto = {
@@ -54,6 +55,7 @@ type RaceDto = {
   capacity: number | null;
   registered_count: number;
   target_laps: number;
+  target_distance_m?: number | null;
   route_length_m: number | null;
   can_register: boolean;
   blocked_reason: string | null;
@@ -118,7 +120,7 @@ export class ApiService implements StudentService {
     private store: Store,
     private authStore: AuthStore,
     private platform: "ANDROID" | "IOS",
-    private fetcher: typeof fetch = fetch,
+    private fetcher: typeof fetch = (...args) => fetch(...args),
   ) {
     this.base = base.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
   }
@@ -348,6 +350,7 @@ export class ApiService implements StudentService {
         capacity: r.capacity ?? 0,
         registered: r.registered_count,
         targetLaps: r.target_laps,
+        targetDistanceMeters: r.target_distance_m ?? null,
         lapMeters: r.route_length_m ?? 0,
         registrationAllowed: r.status === "SCHEDULED" && r.can_register,
         attendanceConfigured: r.attendance_configured,
@@ -420,6 +423,7 @@ export class ApiService implements StudentService {
         revision: r.revision,
         lastSegment: r.segment_id,
         lastSequence: r.last_processed_sequence,
+        segmentStepsCurrent: r.segment_steps_current,
         boundToInstallation: r.bound_to_current_installation,
         outsideLapZone: false,
         laps: detail.laps.map((l) => ({

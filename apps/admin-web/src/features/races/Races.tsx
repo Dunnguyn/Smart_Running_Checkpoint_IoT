@@ -187,8 +187,14 @@ export function Races() {
                     ? "Chưa có địa điểm"
                     : selected.location}
                 </dd>
-                <dt>Số vòng</dt>
-                <dd>{selected.total_laps ?? "Chưa có thông tin"}</dd>
+                <dt>
+                  {selected.target_distance_m ? "Mục tiêu tích lũy" : "Số vòng"}
+                </dt>
+                <dd>
+                  {selected.target_distance_m
+                    ? `${selected.target_distance_m / 1000} km`
+                    : (selected.total_laps ?? "Chưa có thông tin")}
+                </dd>
                 <dt>Người tham gia</dt>
                 <dd>{selected.participant_count ?? "Đang tải"}</dd>
                 <dt>Checkpoint</dt>
@@ -297,8 +303,15 @@ export function Races() {
                         {r.participant_count != null && (
                           <span>{r.participant_count} người tham gia</span>
                         )}
-                        {r.total_laps != null && (
-                          <span>{r.total_laps} vòng</span>
+                        {r.target_distance_m ? (
+                          <span>
+                            Tích lũy quãng đường · {r.target_distance_m / 1000}{" "}
+                            km
+                          </span>
+                        ) : (
+                          r.total_laps != null && (
+                            <span>{r.total_laps} vòng</span>
+                          )
                         )}
                       </div>
                       {r.location && r.location !== "—" && (

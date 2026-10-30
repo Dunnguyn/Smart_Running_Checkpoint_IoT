@@ -290,6 +290,40 @@ it("preserves student admin error code and message", async () => {
   });
 });
 
+it("maps backend race metadata without discarding zero counts", async () => {
+  setAdminKey("test");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [
+            {
+              race_id: "race",
+              name: "Race",
+              status: "SCHEDULED",
+              start_at: null,
+              end_at: null,
+              location: "NEU",
+              total_laps: 4,
+              target_distance_m: 50000,
+              participant_count: 0,
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    ),
+  );
+  const { apiAdapter } = await import("./apiAdapter");
+  expect((await apiAdapter.listRaces())[0]).toMatchObject({
+    location: "NEU",
+    total_laps: 4,
+    target_distance_m: 50000,
+    participant_count: 0,
+  });
+});
+
 it("handles runner.ended as incomplete and does not resurrect it from a delayed ACTIVE update", () => {
   const ended = applyLive(
     snapshot(),

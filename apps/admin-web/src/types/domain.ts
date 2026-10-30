@@ -10,6 +10,7 @@ export interface Race {
   location: string;
   status: RaceStatus;
   total_laps: number | null;
+  target_distance_m?: number | null;
   participant_count: number | null;
   checkpoint_mode?: "GPS_ONLY" | "GPS_AND_ARDUINO";
 }

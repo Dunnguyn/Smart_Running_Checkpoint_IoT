@@ -234,7 +234,10 @@ function RaceCard({
         <View style={s.divider} />
         <View style={s.between}>
           <Text style={[s.strong, { color: c.blue }]}>
-            {race.targetLaps} vòng ·{" "}
+            {race.targetDistanceMeters
+              ? `Tích lũy ${race.targetDistanceMeters / 1000} km`
+              : `${race.targetLaps} vòng`}{" "}
+            ·{" "}
             {race.lapMeters > 0
               ? `${race.lapMeters} m/vòng`
               : "Chưa có độ dài tuyến"}
