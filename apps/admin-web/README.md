@@ -142,3 +142,22 @@ Cập nhật local 07/10: người dùng chuyển backend sang cổng 8001; `.en
 ### Challenge display regression (mock API)
 
 Run `node scripts/verify-challenge-ui.mjs` from this directory. Requires installed Microsoft Edge. The script starts an isolated Vite server on port 5194, intercepts API/WebSocket traffic, and checks list/detail at five viewports. Screenshots are written to ignored `test-results/challenge/`; this does not verify the backend challenge contract or full WCAG compliance.
+
+## Mở giải từ web (backend a5665f4)
+
+Vào **Giải chạy → chọn giải**. Giải DRAFT có nút **Chuyển sang Sắp diễn ra**; giải SCHEDULED có nút **Mở giải sang LIVE**. Sau khi sinh viên đăng ký xong, xác nhận mở giải để sinh viên đã check-in có thể bắt đầu. Đăng ký mới đóng khi chuyển LIVE. Mục Thông tin giải hiển thị lịch dự kiến và thời điểm mở thực tế riêng biệt.
+
+Yêu cầu dùng `PATCH /api/v1/races/{id}/status` với `expected_status`. Khi xung đột hoặc mất phản hồi, chọn **Kiểm tra trạng thái**; không báo thành công chỉ dựa trên việc bấm nút. Trạng thái LIVE/CANCELLED/COMPLETED không có nút mở lại. Web chưa cung cấp hủy/đóng giải LIVE vì backend chưa có luồng này.
+
+Bài kiểm thử giao diện dùng phản hồi giả lập, không gửi thao tác đến backend thật:
+
+```powershell
+# Terminal 1, trong apps/admin-web
+$env:VITE_DATA_MODE='api'
+npm run dev -- --host 127.0.0.1 --port 5187 --strictPort
+# Terminal 2, trong cùng thư mục
+node scripts/verify-race-lifecycle.mjs
+```
+
+Bài kiểm thử yêu cầu Microsoft Edge và Playwright đã có trong dependencies; kiểm tra chuyển DRAFT→SCHEDULED, LIVE với phản hồi bị mất, xung đột 409, PATCH thành công nhưng GET sau đó lỗi. Ảnh kiểm tra nằm trong `test-results/lifecycle/`.
+

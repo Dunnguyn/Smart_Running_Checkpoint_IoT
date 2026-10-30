@@ -11,6 +11,7 @@ import type { Store } from "../storage/port";
 import type { AuthStore } from "../state/engine";
 import { ServiceError, type StudentService } from "./contract";
 import { uuid } from "./ids";
+import { attendanceErrorHelp } from "./attendanceMessages";
 
 type Profile = {
   student_id: string;
@@ -58,6 +59,8 @@ type RaceDto = {
   route_length_m: number | null;
   can_register: boolean;
   blocked_reason: string | null;
+  attendance_configured?: boolean;
+  registration_status?: string | null;
   actions: Record<string, boolean>;
   participation: {
     bib_number: string;
@@ -169,7 +172,7 @@ export class ApiService implements StudentService {
         const code = error?.code ?? `HTTP_${response.status}`;
         throw new ServiceError(
           auth && response.status === 401 ? "UNAUTHORIZED" : code,
-          `${error?.message ?? (response.status === 422 ? "Backend từ chối dữ liệu yêu cầu." : "Không thể xử lý yêu cầu.")} [${code}]`,
+          `${attendanceErrorHelp(code) ?? error?.message ?? (response.status === 422 ? "Backend từ chối dữ liệu yêu cầu." : "Không thể xử lý yêu cầu.")} [${code}]`,
           response.status >= 500 || response.status === 429,
         );
       }
@@ -349,13 +352,26 @@ export class ApiService implements StudentService {
         targetLaps: r.target_laps,
         targetDistanceMeters: r.target_distance_m ?? null,
         lapMeters: r.route_length_m ?? 0,
-        registrationAllowed: r.can_register,
+        registrationAllowed: r.status === "SCHEDULED" && r.can_register,
+        attendanceConfigured: r.attendance_configured,
+        registrationStatus: r.registration_status ?? null,
         registrationMessage: r.can_register
           ? r.capacity === null
             ? "Đang mở đăng ký"
             : `Còn ${Math.max(0, r.capacity - r.registered_count)} chỗ`
           : `Không thể đăng ký${r.blocked_reason ? ` (${r.blocked_reason})` : ""}`,
-        actions: r.actions,
+        actions: {
+          ...r.actions,
+          can_check_in:
+            ["SCHEDULED", "LIVE"].includes(r.status) &&
+            r.registration_status === "REGISTERED" &&
+            r.attendance_configured !== false &&
+            !!r.participation &&
+            !r.participation.attendance.checked_in_at &&
+            !r.participation.attendance.checked_out_at &&
+            r.actions.can_check_in === true,
+          can_start: r.status === "LIVE" && r.actions.can_start,
+        },
         route: cached.data.route_points,
         checkpoints: cached.data.checkpoints
           .filter((p) => p.latitude != null && p.longitude != null)
@@ -503,6 +519,20 @@ export class ApiService implements StudentService {
       this.store.write(key, mutation);
     }
     if (!mutation.done) {
+      // Temporary client protection for cancelled-race check-in. Server must
+      // still enforce this atomically: cancellation may race the POST.
+      if (op.kind === "checkin" || op.kind === "start") {
+        const latest = await this.request<RaceDto>(
+          `/races/${segment(op.raceId)}`,
+          undefined,
+          auth,
+        );
+        if (latest.status === "CANCELLED" || latest.status === "COMPLETED")
+          throw new ServiceError(
+            "RACE_CLOSED",
+            "Giải đã hủy hoặc kết thúc; không thể điểm danh hay bắt đầu phiên mới.",
+          );
+      }
       await this.request(mutation.path, mutation.body, auth, op.id);
       mutation.done = true;
       this.store.write(key, mutation);

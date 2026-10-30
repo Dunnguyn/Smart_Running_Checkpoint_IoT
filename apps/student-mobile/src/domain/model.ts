@@ -34,6 +34,8 @@ export type Race = {
   actions?: Record<string, boolean>;
   registrationAllowed?: boolean;
   registrationMessage?: string;
+  attendanceConfigured?: boolean;
+  registrationStatus?: string | null;
   startsAt: number;
   opensAt: number;
   closesAt: number;
@@ -140,12 +142,35 @@ export function meters(a: Point, b: Point) {
   return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 export function registrationLabel(r: Race, now = Date.now()) {
-  if (r.registrationMessage) return r.registrationMessage;
   if (r.phase === "CANCELLED") return "Giải đã hủy";
+  if (r.registrationMessage) return r.registrationMessage;
   if (now < r.opensAt) return "Chưa mở đăng ký";
   if (now > r.closesAt || r.phase === "ENDED") return "Hết hạn đăng ký";
   if (r.registered >= r.capacity) return "Hết chỗ";
   return `Còn ${r.capacity - r.registered} chỗ`;
 }
 export const canRegister = (r: Race, now = Date.now()) =>
-  r.registrationAllowed ?? registrationLabel(r, now).startsWith("Còn");
+  r.phase !== "CANCELLED" &&
+  r.phase !== "ENDED" &&
+  (r.registrationAllowed ?? registrationLabel(r, now).startsWith("Còn"));
+export const canCheckIn = (r: Race) =>
+  (r.phase === "UPCOMING" || r.phase === "LIVE") &&
+  r.attendanceConfigured !== false &&
+  (r.registrationStatus === undefined ||
+    r.registrationStatus === "REGISTERED") &&
+  (r.actions?.can_check_in ?? r.phase === "LIVE");
+export function checkInLabel(r: Race) {
+  if (r.phase === "CANCELLED") return "Giải đã hủy";
+  if (r.phase === "ENDED") return "Giải đã kết thúc";
+  if (
+    r.registrationStatus !== undefined &&
+    r.registrationStatus !== "REGISTERED"
+  )
+    return "Cần đăng ký hợp lệ để check-in";
+  if (r.attendanceConfigured === false) return "Chưa cấu hình điểm danh";
+  if (canCheckIn(r)) return "Check-in bằng GPS";
+  // Current read API uses CHECK_IN_NOT_OPEN both before and after the window.
+  return "Check-in chưa khả dụng";
+}
+export const canStart = (r: Race) =>
+  r.phase === "LIVE" && (r.actions?.can_start ?? true);

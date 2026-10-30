@@ -6,6 +6,7 @@ export interface Race {
   race_id: string;
   name: string;
   started_at: string | null;
+  actual_start_at?: string | null;
   location: string;
   status: RaceStatus;
   total_laps: number | null;

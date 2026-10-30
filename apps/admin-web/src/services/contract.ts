@@ -13,6 +13,7 @@ export interface BackendRace {
   name: string;
   status: RaceStatus;
   start_at: string | null;
+  actual_start_at?: string | null;
   end_at?: string | null;
   location?: string | null;
   total_laps?: number | null;
@@ -108,7 +109,8 @@ export function runnerConnection(
     "status" | "last_latitude" | "last_longitude" | "last_seen_at"
   >,
 ): RunSession["connection"] {
-  if (row.status === "COMPLETED") return "FINISHED";
+  if (row.status === "COMPLETED" || row.status === "ABANDONED")
+    return "FINISHED";
   if (
     !validPosition(row.last_latitude, row.last_longitude) ||
     !row.last_seen_at ||

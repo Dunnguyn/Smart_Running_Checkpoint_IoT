@@ -130,6 +130,7 @@ export const apiAdapter: RaceService = {
     const mapped = result.items.map((r) => ({
       ...r,
       started_at: utc(r.start_at),
+      actual_start_at: utc(r.actual_start_at),
       ended_at: utc(r.end_at),
       location: r.location ?? "—",
       total_laps: r.total_laps ?? null,

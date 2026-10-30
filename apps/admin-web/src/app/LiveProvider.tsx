@@ -210,9 +210,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       s
         ? {
             ...s,
-            races: items.map(
-              (r) => s.races.find((old) => old.race_id === r.race_id) ?? r,
-            ),
+            races: items.map((r) => ({
+              ...s.races.find((old) => old.race_id === r.race_id),
+              ...r,
+            })),
           }
         : s,
     );

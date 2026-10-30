@@ -16,8 +16,15 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
 const tiles = [],
   consoleErrors = [];
+const isTileOpenStreetMapUrl = (url) => {
+  try {
+    return new URL(url).hostname === "tile.openstreetmap.org";
+  } catch {
+    return false;
+  }
+};
 page.on("response", (r) => {
-  if (r.url().includes("tile.openstreetmap.org") && tiles.length < 8)
+  if (isTileOpenStreetMapUrl(r.url()) && tiles.length < 8)
     tiles.push({ url: r.url(), status: r.status() });
 });
 page.on("console", (m) => {

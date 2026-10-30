@@ -264,6 +264,15 @@ export class Engine {
       const auth = this.view.auth;
       if (this.mode === "api" && !this.view.online)
         throw new Error("Cần kết nối mạng để xác nhận thao tác với backend.");
+      const race = this.view.snapshot?.races.find((r) => r.id === raceId);
+      if (
+        ["register", "checkin", "start"].includes(kind) &&
+        race &&
+        ["CANCELLED", "ENDED"].includes(race.phase)
+      )
+        throw new Error(
+          "Giải đã hủy hoặc kết thúc; không thể đăng ký, điểm danh hay bắt đầu phiên mới.",
+        );
       let tracking = this.view.tracking ?? this.emptyTracking(auth.student.id);
       if (kind === "pause" || kind === "finish") {
         // Synchronous gate first: ignore callbacks already in the native bridge.

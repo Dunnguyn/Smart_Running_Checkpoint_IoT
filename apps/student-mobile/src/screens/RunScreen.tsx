@@ -1,3 +1,5 @@
+import { config } from "../config";
+import { gpsRejectionMessage } from "../services/gpsMessages";
 import { useEffect, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import {
@@ -189,10 +191,18 @@ export default function RunScreen() {
           </View>
         )}
         {!!tracking?.error && <Notice error>{tracking.error}</Notice>}
+        {config.mode === "api" && !view.online && !isTerminal && (
+          <Notice>
+            GPS được lưu chờ trên thiết bị. Máy chủ mặc định nhận mẫu trễ tối đa
+            5 phút khi phiên còn hoạt động; mẫu vượt giới hạn có thể bị từ chối.
+            Tạm dừng, tiếp tục và kết thúc cần kết nối mạng.
+          </Notice>
+        )}
         {!!tracking?.rejected.length && (
           <Notice error>
             {tracking.rejected.length} mẫu bị từ chối vĩnh viễn; không gửi lại.
-            Lý do mới nhất: {tracking.rejected.at(-1)?.reason}
+            Lý do mới nhất:{" "}
+            {gpsRejectionMessage(tracking.rejected.at(-1)?.reason)}
           </Notice>
         )}
         {isTerminal || verifying ? (

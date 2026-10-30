@@ -12,7 +12,14 @@ import {
 } from "../components/ui";
 import { c, s } from "../components/theme";
 import Icon from "../components/Icon";
-import { canRegister, registrationLabel, terminal } from "../domain/model";
+import {
+  canRegister,
+  canCheckIn,
+  checkInLabel,
+  canStart,
+  registrationLabel,
+  terminal,
+} from "../domain/model";
 import { useApp } from "../state/context";
 import RouteMap from "../map/RouteMap";
 import { config } from "../config";
@@ -203,14 +210,32 @@ export default function RaceDetail() {
                 <Button
                   icon="gps"
                   disabled={
-                    !(race.actions?.can_check_in ?? race.phase === "LIVE")
+                    !canCheckIn(race) ||
+                    !view.online ||
+                    view.busy ||
+                    !!enrollment.checkedOutAt
                   }
                   onPress={() => setDialog("checkin")}
                 >
-                  {(race.actions?.can_check_in ?? race.phase === "LIVE")
-                    ? "Check-in bằng GPS"
-                    : "Chưa mở check-in"}
+                  {checkInLabel(race)}
                 </Button>
+              )}
+              {!enrollment.checkedInAt && (
+                <>
+                  <Text style={s.small}>
+                    Quyền điểm danh được cập nhật từ máy chủ mỗi 5 giây khi ứng
+                    dụng đang mở. Nếu chưa khả dụng, kiểm tra lịch với ban tổ
+                    chức. LIVE không tự mở check-in.
+                  </Text>
+                  <Button
+                    variant="ghost"
+                    loading={view.syncing}
+                    disabled={!view.online || view.busy}
+                    onPress={() => void engine.sync()}
+                  >
+                    Làm mới quyền điểm danh
+                  </Button>
+                </>
               )}
             </View>
           )}
@@ -246,7 +271,7 @@ export default function RaceDetail() {
             <Button
               icon="flag"
               onPress={() => setDialog("start")}
-              disabled={!(race.actions?.can_start ?? race.phase === "LIVE")}
+              disabled={!canStart(race)}
             >
               Bắt đầu chạy
             </Button>

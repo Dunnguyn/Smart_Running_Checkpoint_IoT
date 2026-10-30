@@ -1,0 +1,56 @@
+.attendance-settings {
+  margin-top: 20px;
+}
+.student-policy-form .student-policy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.student-policy-form .student-policy-toggle input {
+  width: auto;
+}
+.student-policy-form textarea {
+  font: inherit;
+  min-height: 90px;
+}
+.attendance-settings > .attendance-notice,
+.attendance-settings > p,
+.attendance-settings > form {
+  margin: 0 20px 20px;
+}
+.attendance-settings > p,
+.attendance-settings .editor-fields > p {
+  line-height: 1.6;
+}
+.attendance-notice {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg, #f8fafc);
+  overflow-wrap: anywhere;
+}
+.attendance-notice p {
+  margin: 8px 0;
+}
+.attendance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.attendance-settings fieldset {
+  min-width: 0;
+}
+.attendance-settings input,
+.attendance-settings select {
+  width: 100%;
+  min-width: 0;
+}
+.attendance-settings small {
+  font-weight: 400;
+  line-height: 1.5;
+}
+@media (max-width: 640px) {
+  .attendance-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

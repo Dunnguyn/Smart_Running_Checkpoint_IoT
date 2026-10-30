@@ -57,20 +57,23 @@ const messages = [],
   errors = [],
   tiles = [],
   writes = [];
+const isTileOpenStreetMapUrl = (url) => {
+  try {
+    return new URL(url).hostname === "tile.openstreetmap.org";
+  } catch {
+    return false;
+  }
+};
 let paused = false,
   pausedReads = 0,
   current = null;
 page.on("pageerror", (e) => errors.push(e.message));
 page.on("requestfailed", (r) => {
-  if (r.url().includes("tile.openstreetmap.org") && tiles.length < 12)
+  if (isTileOpenStreetMapUrl(r.url()) && tiles.length < 12)
     tiles.push({ url: r.url(), error: r.failure()?.errorText });
 });
 page.on("response", (r) => {
-  if (
-    r.url().includes("tile.openstreetmap.org") &&
-    r.status() >= 400 &&
-    tiles.length < 12
-  )
+  if (isTileOpenStreetMapUrl(r.url()) && r.status() >= 400 && tiles.length < 12)
     tiles.push({ url: r.url(), status: r.status() });
 });
 page.on("websocket", (ws) => {

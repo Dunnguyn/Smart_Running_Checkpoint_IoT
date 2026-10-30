@@ -60,6 +60,7 @@ export function StudentPolicy({ raceId }: { raceId: string }) {
       {!policy && !error && <p role="status">Đang tải…</p>}
       {policy && (
         <form
+          className="editor-fields student-policy-form"
           onSubmit={async (e) => {
             e.preventDefault();
             setError("");
@@ -104,7 +105,7 @@ export function StudentPolicy({ raceId }: { raceId: string }) {
           }}
         >
           <fieldset disabled={busy}>
-            <label>
+            <label className="student-policy-toggle">
               <input
                 type="checkbox"
                 checked={policy.published}
@@ -114,7 +115,7 @@ export function StudentPolicy({ raceId }: { raceId: string }) {
               />{" "}
               Công bố giải
             </label>
-            <label>
+            <label className="student-policy-toggle">
               <input
                 type="checkbox"
                 checked={policy.registration_enabled}

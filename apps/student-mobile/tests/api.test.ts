@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { ApiService } from "../src/services/api";
+import { canCheckIn, checkInLabel } from "../src/domain/model";
 import { MemoryStore } from "../src/storage/port";
 import type { Auth, Sample } from "../src/domain/model";
 import type { AuthStore } from "../src/state/engine";
@@ -36,21 +37,19 @@ beforeEach(() => {
   credentials = { read: vi.fn(), write: vi.fn(), clear: vi.fn() };
 });
 it("logs in with student credentials and a stable installation UUID", async () => {
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValue(
-      json({
-        access_token: "a",
-        refresh_token: "r",
-        expires_in: 900,
-        profile: {
-          student_id: "student",
-          student_code: "11223344",
-          full_name: "A",
-          must_change_password: true,
-        },
-      }),
-    );
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+    json({
+      access_token: "a",
+      refresh_token: "r",
+      expires_in: 900,
+      profile: {
+        student_id: "student",
+        student_code: "11223344",
+        full_name: "A",
+        must_change_password: true,
+      },
+    }),
+  );
   const api = new ApiService(
     "http://backend/api/v1/",
     store,
@@ -138,20 +137,18 @@ it("records explicit stale GPS rejection without turning it into success", async
     store,
     credentials,
     "ANDROID",
-    vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(
-        json({
-          items: [
-            {
-              sample_id: sample.id,
-              accepted: false,
-              status: "REJECTED",
-              reason_code: "GPS_TOO_OLD",
-            },
-          ],
-        }),
-      ),
+    vi.fn<typeof fetch>().mockResolvedValue(
+      json({
+        items: [
+          {
+            sample_id: sample.id,
+            accepted: false,
+            status: "REJECTED",
+            reason_code: "GPS_TOO_OLD",
+          },
+        ],
+      }),
+    ),
   );
   expect(await api.upload(auth, [sample])).toEqual({
     accepted: [],
@@ -177,17 +174,15 @@ it("blocks simulated GPS and another student's queue before network access", asy
 });
 it("rotates refresh token once for concurrent requests and persists it", async () => {
   const session = { ...auth, expiresAt: 0 };
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockImplementation(async (input) =>
-      String(input).endsWith("/auth/refresh")
-        ? json({
-            access_token: "new",
-            refresh_token: "rotated",
-            expires_in: 900,
-          })
-        : new Response(null, { status: 204 }),
-    );
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) =>
+    String(input).endsWith("/auth/refresh")
+      ? json({
+          access_token: "new",
+          refresh_token: "rotated",
+          expires_in: 900,
+        })
+      : new Response(null, { status: 204 }),
+  );
   const api = new ApiService(
     "http://backend",
     store,
@@ -410,4 +405,84 @@ it("calls browser fetch without binding it to the service instance", async () =>
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("blocks cancelled-race check-in before posting even if a stale screen enabled it", async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(json({ race_id: "race", status: "CANCELLED" }));
+  const api = new ApiService(
+    "http://backend",
+    store,
+    credentials,
+    "ANDROID",
+    fetcher,
+  );
+  await expect(
+    api.execute(auth, {
+      id: "cancelled-op",
+      owner: auth.student.id,
+      kind: "checkin",
+      raceId: "race",
+      fix: {
+        latitude: 21,
+        longitude: 105,
+        accuracy: 5,
+        timestamp: Date.now(),
+        simulated: false,
+      },
+      createdAt: Date.now(),
+    }),
+  ).rejects.toMatchObject({ code: "RACE_CLOSED", retryable: false });
+  expect(fetcher.mock.calls.every((c) => c[1]?.method === "GET")).toBe(true);
+});
+
+it("refreshes attendance configuration and permissions without using device time", async () => {
+  const race = {
+    race_id: "race",
+    name: "Fixture",
+    status: "LIVE",
+    registration_status: "REGISTERED",
+    attendance_configured: false,
+    actions: { can_check_in: false },
+    participation: {
+      bib_number: "001",
+      attendance: {
+        checked_in_at: null as string | null,
+        checked_out_at: null,
+      },
+    },
+  };
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+    const url = String(input);
+    if (url.includes("/races?"))
+      return json({ items: [race], has_more: false });
+    if (url.includes("/runs?")) return json({ items: [], has_more: false });
+    if (url.endsWith("/current-run")) return json({ run: null });
+    if (url.endsWith("/map"))
+      return json({ route_points: [], checkpoints: [] });
+    throw new Error(url);
+  });
+  const api = new ApiService(
+    "http://backend",
+    store,
+    credentials,
+    "ANDROID",
+    fetcher,
+  );
+  const read = async () => (await api.snapshot(auth)).races[0];
+  expect(checkInLabel(await read())).toBe("Chưa cấu hình điểm danh");
+  race.attendance_configured = true;
+  expect(canCheckIn(await read())).toBe(false);
+  race.actions.can_check_in = true;
+  expect(canCheckIn(await read())).toBe(true);
+  race.actions.can_check_in = false;
+  expect(canCheckIn(await read())).toBe(false);
+  race.actions.can_check_in = true;
+  race.registration_status = "CANCELLED";
+  expect(canCheckIn(await read())).toBe(false);
+  race.registration_status = "REGISTERED";
+  race.participation.attendance.checked_in_at = "2026-10-28T01:00:00Z";
+  expect(canCheckIn(await read())).toBe(false);
+  expect(fetcher.mock.calls.every((c) => c[1]?.method === "GET")).toBe(true);
 });
