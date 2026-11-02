@@ -20,6 +20,8 @@ export const engine = new Engine(
         store,
         authStorage,
         Platform.OS === "ios" ? "IOS" : "ANDROID",
+        undefined,
+        Platform.OS === "android" && config.androidEmulator,
       ),
   store,
   authStorage,

@@ -109,6 +109,7 @@ const time = (value: string | null) =>
 
 export class ApiService implements StudentService {
   private base: string;
+  private transportBase: string;
   private renewal?: Promise<void>;
   private maps = new Map<string, { at: number; data: MapDto }>();
   private details = new Map<
@@ -121,8 +122,13 @@ export class ApiService implements StudentService {
     private authStore: AuthStore,
     private platform: "ANDROID" | "IOS",
     private fetcher: typeof fetch = (...args) => fetch(...args),
+    useAndroidEmulatorHost = false,
   ) {
     this.base = base.replace(/\/+$/, "").replace(/\/api\/v1$/, "");
+    // Preserve storage identity when only the emulator network address changes.
+    this.transportBase = useAndroidEmulatorHost && platform === "ANDROID"
+      ? this.base.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)(?=[:/]|$)/, (_match, scheme: string) => `${scheme}10.0.2.2`)
+      : this.base.replace(/^(https?:\/\/)localhost(?=[:/]|$)/, (_match, scheme: string) => `${scheme}127.0.0.1`);
   }
   private key(owner: string, suffix: string) {
     return `student-api:${this.base}:${owner}:${suffix}`;
@@ -141,7 +147,7 @@ export class ApiService implements StudentService {
     const timer = setTimeout(() => controller.abort(), 15000);
     try {
       const response = await this.fetcher(
-        `${this.base}/api/v1/student${path}`,
+        `${this.transportBase}/api/v1/student${path}`,
         {
           method: body === undefined ? "GET" : method,
           signal: controller.signal,
@@ -297,13 +303,12 @@ export class ApiService implements StudentService {
     return result;
   }
   async snapshot(auth: Auth): Promise<Snapshot> {
-    const rows = await this.pages<RaceDto>("/races", auth);
-    const history = await this.pages<RunDto>("/runs", auth);
-    const current = await this.request<{ run: RunDto | null }>(
-      "/current-run",
-      undefined,
-      auth,
-    );
+    // These reads are independent; preserve all-or-nothing snapshot publication.
+    const [rows, history, current] = await Promise.all([
+      this.pages<RaceDto>("/races", auth),
+      this.pages<RunDto>("/runs", auth),
+      this.request<{ run: RunDto | null }>("/current-run", undefined, auth),
+    ]);
     const byId = new Map(history.map((r) => [r.run_id, r]));
     if (current.run) byId.set(current.run.run_id, current.run);
     for (const run of byId.values())
@@ -388,17 +393,11 @@ export class ApiService implements StudentService {
       const key = this.key(auth.student.id, r.run_id);
       let detail = this.details.get(key);
       if (!detail || detail.revision !== r.revision) {
-        detail = {
-          revision: r.revision,
-          laps: await this.pages<LapDto>(
-            `/runs/${segment(r.run_id)}/laps`,
-            auth,
-          ),
-          track: await this.pages<TrackDto>(
-            `/runs/${segment(r.run_id)}/track`,
-            auth,
-          ),
-        };
+        const [laps, track] = await Promise.all([
+          this.pages<LapDto>(`/runs/${segment(r.run_id)}/laps`, auth),
+          this.pages<TrackDto>(`/runs/${segment(r.run_id)}/track`, auth),
+        ]);
+        detail = { revision: r.revision, laps, track };
         this.details.set(key, detail);
       }
       const status =
@@ -593,7 +592,31 @@ export class ApiService implements StudentService {
         `/runs/${segment(runId)}/gps-batches`,
         { batch_id: batch.batch_id, samples: batch.samples },
         auth,
-      );
+      ).catch(async (error: unknown) => {
+        if (!(error instanceof ServiceError) || error.code !== "RUN_NOT_ACTIVE")
+          throw error;
+        // The server replays received batches before rejecting a new batch for
+        // an externally completed run. Confirm terminal state; never mark these
+        // samples accepted or discard them on a transient/ambiguous failure.
+        const run = await this.request<RunDto>(
+          `/runs/${segment(runId)}`,
+          undefined,
+          auth,
+        );
+        if (
+          run.run_id !== runId ||
+          !["COMPLETED", "ABANDONED", "CANCELLED"].includes(run.status)
+        )
+          throw error;
+        return {
+          items: batch!.samples.map((sample) => ({
+            sample_id: sample.sample_id,
+            accepted: false,
+            status: "REJECTED",
+            reason_code: "RUN_NOT_ACTIVE",
+          })),
+        };
+      });
       if (
         !Array.isArray(result.items) ||
         result.items.length !== batch.samples.length ||

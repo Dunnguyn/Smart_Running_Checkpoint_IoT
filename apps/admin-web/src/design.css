@@ -1733,3 +1733,14 @@ form.form-grid {
  .race-directory .race-table { overflow-x: auto; padding-bottom: 4px; }
  .race-result-count { margin-left: 0; }
 }
+
+/* Shared app logo and supplied full brand artwork. */
+.brand .brand-symbol { display: none; width: 42px; height: 42px; object-fit: contain; flex-shrink: 0; }
+.brand .brand-full { display: block; width: 170px; max-width: 100%; height: auto; object-fit: contain; }
+.access-brand-image { display: block; width: 360px; max-width: 100%; height: auto; margin: 0 auto; }
+.sidebar-collapsed .brand .brand-full { display: none; }
+.sidebar-collapsed .brand .brand-symbol { display: block; }
+@media (max-width: 900px) {
+  .sidebar .brand .brand-full { display: none; }
+  .sidebar .brand .brand-symbol { display: block; }
+}

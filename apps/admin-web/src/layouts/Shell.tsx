@@ -53,12 +53,8 @@ export function Shell() {
       <aside className="sidebar">
         <div className="sidebar-brand-row">
           <NavLink to="/" className="brand" aria-label="NEU RUN trang chủ">
-            <span className="brand-icon">
-              <span>NR</span>
-            </span>
-            <span className="brand-name">
-              NEU RUN<small>TRUNG TÂM ĐIỀU HÀNH</small>
-            </span>
+            <img className="brand-symbol" src="/neu-run-logo.png" alt="" />
+            <img className="brand-full" src="/neu-run-brand.png" alt="NEU RUN — Hệ thống quản lý giải chạy sinh viên Đại học Kinh tế Quốc dân" />
           </NavLink>
           <button
             className="button collapse-control"

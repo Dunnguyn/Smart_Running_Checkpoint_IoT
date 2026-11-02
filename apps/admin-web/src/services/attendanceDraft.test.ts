@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  attendancePayload,
   emptyAttendanceDraft,
   validateAttendanceDraft,
   vietnamToUtc,
@@ -88,4 +89,21 @@ describe("attendance preparation matches existing PUT schema without inferring a
         ).max_accuracy_m,
       ).toBeTruthy();
   });
+});
+
+it("serializes explicit create/update versions and Vietnam times without changing the draft", () => {
+  const before = { ...draft };
+  expect(attendancePayload(draft, 0)).toEqual({
+    expected_version: 0,
+    check_in_checkpoint_id: "cp",
+    check_out_checkpoint_id: "cp",
+    check_in_open_at: "2026-10-28T01:00:00.000Z",
+    check_in_close_at: "2026-10-28T02:00:00.000Z",
+    check_out_open_at: "2026-10-28T01:30:00.000Z",
+    check_out_close_at: "2026-10-28T03:00:00.000Z",
+    max_position_age_seconds: 5,
+    max_accuracy_m: 5.5,
+  });
+  expect(attendancePayload(draft, 3).expected_version).toBe(3);
+  expect(draft).toEqual(before);
 });

@@ -104,13 +104,13 @@ try {
   await page.getByRole("button", { name: "Kết nối", exact: true }).click();
   const panel = page.locator(".attendance-settings");
   await expect(
-    panel.getByText("Chưa thể đọc cấu hình hiện tại", { exact: true }),
+    panel.locator("strong").getByText("Tạo cấu hình điểm danh mới", { exact: true }),
   ).toBeVisible();
   await expect(
     panel.getByText("Chưa có trạm thuộc giải", { exact: true }),
   ).toBeVisible();
   await expect(
-    panel.getByRole("button", { name: "Lưu cấu hình điểm danh" }),
+    panel.getByRole("button", { name: "Tạo cấu hình điểm danh mới" }),
   ).toBeDisabled();
   await expect(
     panel.getByLabel("Trạm check-in", { exact: true }),
@@ -181,8 +181,8 @@ try {
     panel.getByText("Bản nháp hợp lệ theo schema hiện tại.", { exact: false }),
   ).toBeVisible();
   await expect(
-    panel.getByRole("button", { name: "Lưu cấu hình điểm danh" }),
-  ).toBeDisabled();
+    panel.getByRole("button", { name: "Tạo cấu hình điểm danh mới" }),
+  ).toBeEnabled();
   await page.evaluate(() => {
     document.activeElement?.blur();
     window.scrollTo(0, 0);

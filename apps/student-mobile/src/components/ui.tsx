@@ -13,24 +13,12 @@ import { c, s } from "./theme";
 
 export function Brand({ compact = false }: { compact?: boolean }) {
   return (
-    <View style={s.row}>
-      <Image
-        accessibilityLabel="Logo NEU RUN"
-        source={require("../../assets/neu-run-logo.png")}
-        style={{ width: compact ? 44 : 74, height: compact ? 44 : 74 }}
-        resizeMode="contain"
-      />
-      {!compact && (
-        <View>
-          <Text style={[s.title, { fontSize: 23 }]}>
-            NEU<Text style={{ color: c.red }}>★</Text>RUN
-          </Text>
-          <Text style={[s.small, { fontSize: 11 }]}>
-            Chinh phục từng vòng chạy
-          </Text>
-        </View>
-      )}
-    </View>
+    <Image
+      accessibilityLabel="NEU RUN — Hệ thống quản lý giải chạy sinh viên Đại học Kinh tế Quốc dân"
+      source={compact ? require("../../assets/neu-run-logo.png") : require("../../assets/neu-run-brand.png")}
+      style={compact ? { width: 44, height: 44 } : { width: 300, maxWidth: "100%", aspectRatio: 460 / 199 }}
+      resizeMode="contain"
+    />
   );
 }
 export function Button({

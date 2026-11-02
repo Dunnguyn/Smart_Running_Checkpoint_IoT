@@ -2,6 +2,8 @@
 // no business write reaches the real backend and no runtime fallback is added.
 import { chromium, expect } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
+const UI_BASE = process.env.UI_BASE_URL || "http://localhost:5173";
+let extraCheckpoints = [];
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const race = "editor-fixture",
@@ -75,7 +77,7 @@ const dashboard = () => ({
   recent_checkpoint_events: [],
   server_time: new Date().toISOString(),
   route: route(),
-  checkpoints: [checkpoint],
+  checkpoints: [checkpoint, ...extraCheckpoints],
 });
 await page.route("https://*.tile.openstreetmap.org/**", (r) => r.abort());
 await page.routeWebSocket("**/ws/v1/**", (ws) => ws.close());
@@ -92,6 +94,13 @@ await page.route("**/api/v1/**", async (r) => {
     });
   if (method === "POST" && path.endsWith("/auth/admin-key"))
     return json({ authenticated: true, role: "ADMIN" });
+  if (method === "POST" && path.endsWith("/checkpoints")) {
+    const body = req.postDataJSON();
+    writes.push({ method, path, body });
+    const created = { checkpoint_id: "new-checkpoint", ...body };
+    extraCheckpoints.push(created);
+    return json(created, 201);
+  }
   if (method === "GET") {
     if (path.endsWith("/races"))
       return json({
@@ -187,7 +196,7 @@ const rejectNext = () => {
   );
 };
 try {
-  await page.goto("http://localhost:5173/live");
+  await page.goto(`${UI_BASE}/live`);
   await login();
   await expect(
     page.getByRole("button", { name: "Chỉnh sửa bản đồ", exact: true }),
@@ -283,7 +292,7 @@ try {
     .click();
   await expect(page.getByLabel("Điểm / đoạn đang chọn")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Xóa điểm thường", exact: true }),
+    page.getByRole("button", { name: "Xóa điểm tuyến", exact: true }),
   ).toBeDisabled();
   await page.getByLabel("Điểm / đoạn đang chọn").selectOption("1");
   await page.getByLabel("Vĩ độ điểm").fill("21.00096");
@@ -300,7 +309,7 @@ try {
   await page.getByLabel("Kinh độ điểm").fill("105.0005");
   await expect(save()).toBeEnabled();
   await page
-    .getByRole("button", { name: "Xóa điểm thường", exact: true })
+    .getByRole("button", { name: "Xóa điểm tuyến", exact: true })
     .click();
   await expect(save()).toBeEnabled();
   for (const [width, height] of [
@@ -409,15 +418,62 @@ try {
     .click();
   await page.getByLabel("Vĩ độ điểm").fill("21");
   await page.getByLabel("Kinh độ điểm").fill("105");
-  await page.getByLabel("Neo checkpoint").selectOption(cp);
+  await page.getByLabel("Checkpoint gắn tại điểm tuyến").selectOption(cp);
   await expect(
-    page.getByRole("button", { name: "Xóa điểm thường", exact: true }),
+    page.getByRole("button", { name: "Xóa điểm tuyến", exact: true }),
   ).toBeDisabled();
   await expect(save()).toBeDisabled();
   checks.push(
     "empty route starts empty; keyboard creation and real fixture checkpoint anchor assignment; no automatic default route or implicit closing segment",
   );
 
+  await page
+    .getByRole("button", { name: "Thêm điểm bằng tọa độ", exact: true })
+    .click();
+  await page.getByLabel("Vĩ độ điểm").fill("21.0005");
+  await page.getByLabel("Kinh độ điểm").fill("105");
+  const retainedLatitude = await page.getByLabel("Vĩ độ điểm").inputValue();
+  await page
+    .getByRole("button", {
+      name: "Tạo checkpoint tại điểm đang chọn",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Tạo và gắn checkpoint", exact: true }),
+  ).toBeDisabled();
+  await page.getByLabel("Mã checkpoint", { exact: true }).fill("CP02");
+  await page.getByLabel("Tên checkpoint", { exact: true }).fill("Trạm mới");
+  await page
+    .getByLabel("Loại checkpoint")
+    .selectOption("CHECKPOINT");
+  const beforeCreate = writes.length;
+  await page
+    .getByRole("button", { name: "Tạo và gắn checkpoint", exact: true })
+    .click();
+  await expect(page.getByLabel("Checkpoint gắn tại điểm tuyến")).toHaveValue(
+    "new-checkpoint",
+  );
+  await expect(page.getByLabel("Vĩ độ điểm")).toHaveValue(retainedLatitude);
+  expect(writes.length).toBe(beforeCreate + 1);
+  expect(writes.at(-1).method).toBe("POST");
+  expect(writes.at(-1).body).toMatchObject({
+    code: "CP02",
+    kind: "CHECKPOINT",
+    sequence_no: 2,
+  });
+  await expect(
+    page.getByText("Đã tạo checkpoint và gắn vào điểm tuyến.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "test-results/ux/editor-create-checkpoint.png",
+    fullPage: true,
+  });
+  checks.push(
+    "create checkpoint at selected vertex, single POST, auto anchor, retain unsaved draft, no implicit route save",
+  );
   expect(errors).toEqual([]);
   await writeFile(
     "test-results/ux/editor-isolated-report.json",

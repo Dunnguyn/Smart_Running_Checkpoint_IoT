@@ -1,7 +1,7 @@
 import type { Checkpoint } from "../types/domain";
 
-// Preparation only: the backend currently exposes PUT but no read contract.
-// Never infer expected_version=0 from a missing endpoint or an empty roster.
+// No GET contract exists. Version 0 is an explicit create-only precondition,
+// never evidence that the race has no configuration.
 export const attendanceFields = [
   "check_in_checkpoint_id",
   "check_out_checkpoint_id",
@@ -80,4 +80,18 @@ export function validateAttendanceDraft(
   )
     errors.max_accuracy_m = "Nhập số từ 5 đến 100 mét.";
   return errors;
+}
+
+export function attendancePayload(d: AttendanceDraft, expectedVersion: number) {
+  return {
+    expected_version: expectedVersion,
+    check_in_checkpoint_id: d.check_in_checkpoint_id,
+    check_out_checkpoint_id: d.check_out_checkpoint_id,
+    check_in_open_at: vietnamToUtc(d.check_in_open_at),
+    check_in_close_at: vietnamToUtc(d.check_in_close_at),
+    check_out_open_at: vietnamToUtc(d.check_out_open_at),
+    check_out_close_at: vietnamToUtc(d.check_out_close_at),
+    max_position_age_seconds: Number(d.max_position_age_seconds),
+    max_accuracy_m: Number(d.max_accuracy_m),
+  };
 }

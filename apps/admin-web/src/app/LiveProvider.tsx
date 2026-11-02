@@ -263,13 +263,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       {!ready ? (
         <main className="access-screen">
           <div className="access-brand">
-            <div className="brand-icon">NR</div>
-            <strong>NEU RUN</strong>
-            <p>
-              Nền tảng quản lý giải chạy sinh viên
-              <br />
-              Đại học Kinh tế Quốc dân
-            </p>
+            <img className="access-brand-image" src="/neu-run-brand.png" alt="NEU RUN — Hệ thống quản lý giải chạy sinh viên Đại học Kinh tế Quốc dân" />
           </div>
           <section className="panel auth-panel">
             <div className="access-icon">
