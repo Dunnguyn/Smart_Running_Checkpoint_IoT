@@ -16,3 +16,38 @@ __pycache__/
 *.sqlite3-wal
 .pytest_cache/
 .ruff_cache/
+
+# Local reports, audits and personal review notes
+/docs/product/
+/apps/admin-web/API_COVERAGE.md
+/apps/admin-web/INTEGRATION_REPORT.md
+/apps/student-mobile/docs/ANDROID_EMULATOR.md
+/apps/student-mobile/docs/DEPENDENCY_REVIEW.md
+/apps/student-mobile/docs/DESIGN_AUDIT.md
+/apps/student-mobile/docs/NATIVE_FOLLOWUP.md
+/apps/student-mobile/docs/TEST_REPORT.md
+/docs/BAO_CAO_BACKEND_NEU_RUN.docx
+/docs/BAO_CAO_BACKEND_VA_CHUC_NANG_HE_THONG.md
+/docs/FEEDBACK_BACKEND_RESPONSE.md
+/output/backend-review/Doi_chieu_backend_67927c1.md
+/output/backend-review/audit_results_67927c1.json
+/output/pdf/Bao_cao_bo_sung_backend_NEU_RUN.md
+/output/pdf/Bao_cao_bo_sung_backend_NEU_RUN.pdf
+/output/pdf/Bao_cao_loi_nghiem_trong_backend_67927c1.md
+/output/pdf/Bao_cao_loi_nghiem_trong_backend_67927c1.pdf
+
+# Additional local study notes and historical API proposals
+/docs/SELF_STUDY_GUIDE.md
+/apps/student-mobile/docs/API_GAPS.md
+
+# Technical documents retained locally by owner request
+/apps/student-mobile/docs/API_INTEGRATION.md
+/apps/student-mobile/docs/MAPS_SETUP.md
+/docs/ARDUINO_GATEWAY.md
+/docs/ARDUINO_GPS_MATCHING.md
+/docs/INTEGRATION_DEMOS.md
+/docs/STUDENT_APP_API.md
+/docs/STUDENT_MOBILE_API.md
+/docs/UML_DIAGRAMS.md
+/docs/PLANTUML_DIAGRAMS.puml
+/docs/USE_CASE_DIAGRAMS.puml
