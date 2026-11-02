@@ -1,4 +1,5 @@
 export const config = {
+  androidEmulator: process.env.EXPO_PUBLIC_ANDROID_EMULATOR === "true",
   mode: process.env.EXPO_PUBLIC_SERVICE_MODE ?? "mock",
   gps: process.env.EXPO_PUBLIC_GPS_MODE ?? "demo",
   baseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",

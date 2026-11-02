@@ -87,6 +87,14 @@ export function MapEditor({
   const controller = useRef<AbortController | null>(null),
     mounted = useRef(true),
     guard = useRef(false);
+  const [creatingCheckpoint, setCreatingCheckpoint] = useState(false);
+  const [newCheckpoint, setNewCheckpoint] = useState({
+    code: "",
+    name: "",
+    radius: "10",
+    kind: "LAP" as "LAP" | "CHECKPOINT",
+  });
+  const [creationUncertain, setCreationUncertain] = useState(false);
   const cp = base?.checkpoints.find((c) => c.checkpoint_id === cpId);
   const numeric: CheckpointDraft = {
     latitude: draft.latitude.trim() ? Number(draft.latitude) : NaN,
@@ -248,6 +256,111 @@ export function MapEditor({
     setMessage(
       mode === "route" ? "Đã cập nhật tuyến chạy" : "Đã cập nhật checkpoint",
     );
+  }
+  async function createCheckpointAtSelection() {
+    const point = points[selected];
+    if (
+      !base ||
+      !point ||
+      point.checkpoint_id ||
+      guard.current ||
+      blocked ||
+      changedOnServer ||
+      creationUncertain
+    )
+      return;
+    const code = newCheckpoint.code.trim(),
+      name = newCheckpoint.name.trim(),
+      radius = Number(newCheckpoint.radius);
+    if (
+      !code ||
+      !name ||
+      !Number.isFinite(radius) ||
+      radius <= 0 ||
+      !validPosition(point.latitude, point.longitude)
+    ) {
+      setError("Nhập mã, tên checkpoint, bán kính lớn hơn 0 và tọa độ hợp lệ.");
+      return;
+    }
+    guard.current = true;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    controller.current = new AbortController();
+    const signal = controller.current.signal;
+    let sent = false;
+    try {
+      const current = await readMap(raceId, signal);
+      if (routeAccess(current.route, hasRuns(current.dashboard)).blocked) {
+        setLocked(true);
+        setError(lockedMessage);
+        return;
+      }
+      if (fingerprint(current) !== fingerprint(base)) {
+        setConflict(true);
+        setError(
+          "Dữ liệu server đã thay đổi. Kiểm tra trước khi tạo checkpoint.",
+        );
+        return;
+      }
+      if (current.checkpoints.some((c) => c.code === code)) {
+        setError(
+          "Mã checkpoint đã tồn tại. Chọn checkpoint có sẵn hoặc dùng mã khác.",
+        );
+        return;
+      }
+      sent = true;
+      const created = await mapEditorService.createCheckpoint(
+        raceId,
+        {
+          code,
+          name,
+          latitude: point.latitude,
+          longitude: point.longitude,
+          radius_m: radius,
+          sequence_no:
+            Math.max(0, ...current.checkpoints.map((c) => c.sequence_no)) + 1,
+          kind: newCheckpoint.kind,
+        },
+        signal,
+      );
+      const latest = await readMap(raceId, signal);
+      if (
+        !latest.checkpoints.some(
+          (c) => c.checkpoint_id === created.checkpoint_id,
+        )
+      )
+        throw new Error("Chưa đọc lại được checkpoint vừa tạo.");
+      if (signal.aborted || !mounted.current) return;
+      // Refresh metadata without replacing the unsaved route draft.
+      setBase(latest);
+      update(
+        points.map((p, i) =>
+          i === selected ? { ...p, checkpoint_id: created.checkpoint_id } : p,
+        ),
+      );
+      setCreatingCheckpoint(false);
+      setMessage(
+        "Đã tạo checkpoint và gắn vào điểm tuyến. Nhấn Lưu thay đổi để lưu tuyến. Checkpoint đã tạo vẫn tồn tại nếu bạn hủy tuyến.",
+      );
+      refreshData();
+    } catch (e) {
+      if (!signal.aborted && mounted.current) {
+        if (
+          sent &&
+          (!(e instanceof RequestError) || e.status === 0 || e.status >= 500)
+        )
+          setCreationUncertain(true);
+        setError(
+          e instanceof RequestError
+            ? mapFailure(e)
+            : "Chưa xác nhận được checkpoint. Không tạo lại; kiểm tra danh sách trạm để tránh trùng.",
+        );
+      }
+    } finally {
+      guard.current = false;
+      if (mounted.current) setBusy(false);
+    }
   }
   async function save() {
     if (
@@ -448,7 +561,7 @@ export function MapEditor({
                           key={i}
                           position={[p.latitude, p.longitude]}
                           draggable={!blocked && !busy}
-                          title={`Điểm ${i + 1}${p.checkpoint_id ? " · Neo checkpoint" : ""}`}
+                          title={`Điểm tuyến ${i + 1}${p.checkpoint_id ? " · Neo checkpoint" : ""}`}
                           icon={divIcon({
                             className: `vertex-marker ${p.checkpoint_id ? "anchor" : ""} ${i === selected ? "selected" : ""}`,
                             html: `<span>${i === 0 ? "Đ" : i === points.length - 1 ? "C" : i + 1}${p.checkpoint_id ? "⚑" : ""}</span>`,
@@ -470,7 +583,8 @@ export function MapEditor({
                                 : ""}
                             {base.checkpoints.find(
                               (c) => c.checkpoint_id === p.checkpoint_id,
-                            )?.name ?? `Điểm ${i + 1}`}
+                            )?.name ??
+                              `Điểm tuyến ${i + 1} — không phải checkpoint`}
                           </Popup>
                         </Marker>
                       ),
@@ -524,8 +638,8 @@ export function MapEditor({
                       })}
                     />
                   ))}
-              <MapResize />
-        </MapContainer>
+                <MapResize />
+              </MapContainer>
               {tileError && (
                 <p className="map-warning" role="status">
                   Không tải được nền bản đồ. Draft và tọa độ vẫn hoạt động.
@@ -624,7 +738,7 @@ export function MapEditor({
                                 ? " · Kết thúc"
                                 : ""}
                             {p.checkpoint_id
-                              ? ` · Neo ${base.checkpoints.find((c) => c.checkpoint_id === p.checkpoint_id)?.code ?? p.checkpoint_id}`
+                              ? ` · Checkpoint ${base.checkpoints.find((c) => c.checkpoint_id === p.checkpoint_id)?.code ?? p.checkpoint_id}`
                               : ""}
                           </option>
                         ))}
@@ -676,7 +790,7 @@ export function MapEditor({
                           />
                         </label>
                         <label>
-                          Neo checkpoint
+                          Checkpoint gắn tại điểm tuyến
                           <select
                             value={points[selected].checkpoint_id ?? ""}
                             onChange={(e) =>
@@ -692,7 +806,9 @@ export function MapEditor({
                               )
                             }
                           >
-                            <option value="">Điểm thường</option>
+                            <option value="">
+                              Chỉ là điểm tuyến — không phải checkpoint
+                            </option>
                             {base.checkpoints.map((c) => (
                               <option
                                 key={c.checkpoint_id}
@@ -708,6 +824,123 @@ export function MapEditor({
                             ))}
                           </select>
                         </label>
+                        <p>
+                          Điểm tuyến chỉ định hình đường chạy. Checkpoint là
+                          trạm ghi nhận lượt đi qua, ký hiệu ⚑. Điểm cuối khép
+                          vòng không cần gắn lại checkpoint đầu.
+                        </p>
+                        {!points[selected].checkpoint_id && (
+                          <button
+                            type="button"
+                            className="button"
+                            disabled={
+                              changedOnServer ||
+                              creationUncertain ||
+                              !validPosition(
+                                points[selected].latitude,
+                                points[selected].longitude,
+                              )
+                            }
+                            onClick={() =>
+                              setCreatingCheckpoint(!creatingCheckpoint)
+                            }
+                          >
+                            {creatingCheckpoint
+                              ? "Đóng phần tạo checkpoint"
+                              : "Tạo checkpoint tại điểm đang chọn"}
+                          </button>
+                        )}
+                        {creatingCheckpoint &&
+                          !points[selected].checkpoint_id && (
+                            <section aria-label="Tạo checkpoint tại điểm tuyến">
+                              <p>
+                                Checkpoint được lưu ngay khi tạo; tuyến vẫn là
+                                bản nháp. Trạm mới được thêm cuối thứ tự
+                                checkpoint. Với demo một trạm, chọn loại tính
+                                vòng.
+                              </p>
+                              <label>
+                                Mã checkpoint
+                                <input
+                                  value={newCheckpoint.code}
+                                  onChange={(e) =>
+                                    setNewCheckpoint({
+                                      ...newCheckpoint,
+                                      code: e.target.value,
+                                    })
+                                  }
+                                />
+                              </label>
+                              <label>
+                                Tên checkpoint
+                                <input
+                                  value={newCheckpoint.name}
+                                  onChange={(e) =>
+                                    setNewCheckpoint({
+                                      ...newCheckpoint,
+                                      name: e.target.value,
+                                    })
+                                  }
+                                />
+                              </label>
+                              <label>
+                                Bán kính checkpoint (m)
+                                <input
+                                  type="number"
+                                  min="0.1"
+                                  step="any"
+                                  value={newCheckpoint.radius}
+                                  onChange={(e) =>
+                                    setNewCheckpoint({
+                                      ...newCheckpoint,
+                                      radius: e.target.value,
+                                    })
+                                  }
+                                />
+                              </label>
+                              <label>
+                                Loại checkpoint
+                                <select
+                                  value={newCheckpoint.kind}
+                                  onChange={(e) =>
+                                    setNewCheckpoint({
+                                      ...newCheckpoint,
+                                      kind: e.target.value as
+                                        "LAP" | "CHECKPOINT",
+                                    })
+                                  }
+                                >
+                                  <option value="LAP">
+                                    Trạm tính vòng (không tự bật check-in)
+                                  </option>
+                                  <option value="CHECKPOINT">
+                                    Trạm trung gian
+                                  </option>
+                                </select>
+                              </label>
+                              <button
+                                type="button"
+                                className="button primary"
+                                disabled={
+                                  changedOnServer ||
+                                  creationUncertain ||
+                                  !newCheckpoint.code.trim() ||
+                                  !newCheckpoint.name.trim() ||
+                                  !(Number(newCheckpoint.radius) > 0)
+                                }
+                                onClick={createCheckpointAtSelection}
+                              >
+                                Tạo và gắn checkpoint
+                              </button>
+                            </section>
+                          )}
+                        {creationUncertain && (
+                          <p role="alert">
+                            Chưa xác nhận thao tác tạo. Không gửi lại để tránh
+                            tạo trùng; giữ bản nháp và kiểm tra danh sách trạm ở
+                            tab khác.
+                          </p>
+                        )}
                         <button
                           className="button"
                           disabled={!!points[selected].checkpoint_id}
@@ -716,7 +949,7 @@ export function MapEditor({
                             setSelected(Math.max(0, selected - 1));
                           }}
                         >
-                          Xóa điểm thường
+                          Xóa điểm tuyến
                         </button>
                       </>
                     )}

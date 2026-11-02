@@ -486,3 +486,123 @@ it("refreshes attendance configuration and permissions without using device time
   expect(canCheckIn(await read())).toBe(false);
   expect(fetcher.mock.calls.every((c) => c[1]?.method === "GET")).toBe(true);
 });
+
+it("records a rejected batch after confirmed external completion and replays that decision", async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      json({ detail: { code: "RUN_NOT_ACTIVE", message: "Ended" } }, 409),
+    )
+    .mockResolvedValueOnce(json({ run_id: "run", status: "COMPLETED" }));
+  const api = new ApiService(
+    "http://backend",
+    store,
+    credentials,
+    "ANDROID",
+    fetcher,
+  );
+  const expected = {
+    accepted: [],
+    rejected: [{ id: sample.id, reason: "RUN_NOT_ACTIVE" }],
+  };
+  expect(await api.upload(auth, [sample])).toEqual(expected);
+  const restarted = new ApiService(
+    "http://backend",
+    store,
+    credentials,
+    "ANDROID",
+    fetcher,
+  );
+  expect(await restarted.upload(auth, [sample])).toEqual(expected);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it.each(["ACTIVE", "PAUSED"])(
+  "preserves the batch when RUN_NOT_ACTIVE is not confirmed terminal (%s)",
+  async (status) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        json({ detail: { code: "RUN_NOT_ACTIVE", message: "Ended" } }, 409),
+      )
+      .mockResolvedValueOnce(json({ run_id: "run", status }));
+    const api = new ApiService(
+      "http://backend",
+      store,
+      credentials,
+      "ANDROID",
+      fetcher,
+    );
+    await expect(api.upload(auth, [sample])).rejects.toMatchObject({
+      code: "RUN_NOT_ACTIVE",
+    });
+    const originalBody = fetcher.mock.calls[0][1]?.body;
+    fetcher.mockResolvedValueOnce(
+      json({
+        items: [{ sample_id: sample.id, accepted: true, status: "DUPLICATE" }],
+      }),
+    );
+    expect(await api.upload(auth, [sample])).toEqual({
+      accepted: [sample.id],
+      rejected: [],
+    });
+    expect(fetcher.mock.calls[2][1]?.body).toBe(originalBody);
+  },
+);
+
+it("keeps the original GPS batch when terminal-state verification loses connection", async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(json({ detail: { code: "RUN_NOT_ACTIVE" } }, 409))
+    .mockRejectedValueOnce(new Error("offline"));
+  const api = new ApiService(
+    "http://backend",
+    store,
+    credentials,
+    "ANDROID",
+    fetcher,
+  );
+  await expect(api.upload(auth, [sample])).rejects.toMatchObject({
+    code: "NETWORK",
+  });
+  const originalBody = fetcher.mock.calls[0][1]?.body;
+  fetcher.mockResolvedValueOnce(
+    json({
+      items: [{ sample_id: sample.id, accepted: true, status: "DUPLICATE" }],
+    }),
+  );
+  expect(await api.upload(auth, [sample])).toEqual({
+    accepted: [sample.id],
+    rejected: [],
+  });
+  expect(fetcher.mock.calls[2][1]?.body).toBe(originalBody);
+});
+
+it("uses emulator transport without changing persisted installation identity", async () => {
+ store.write("student-api:http://localhost:8000:device:installation", "existing-installation");
+ const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({access_token:"a",refresh_token:"r",expires_in:900,profile:{student_id:"student",student_code:"11223344"}}));
+ const api = new ApiService("http://localhost:8000", store, credentials, "ANDROID", fetcher, true);
+ await api.login("11223344", "password");
+ expect(fetcher.mock.calls[0][0]).toBe("http://10.0.2.2:8000/api/v1/student/auth/login");
+ expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string).installation_id).toBe("existing-installation");
+ expect([...store.data.keys()].some(key=>key.includes("10.0.2.2"))).toBe(false);
+});
+
+it("starts independent snapshot reads concurrently without publishing partial failures", async () => {
+  const started: string[] = [];
+  const releases: Array<() => void> = [];
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    started.push(String(input));
+    return new Promise<Response>((resolve) => releases.push(() => resolve(json({ detail: { code: "FAIL" } }, 500))));
+  });
+  const api = new ApiService("http://localhost:8000", store, credentials, "ANDROID", fetcher);
+  const result = api.snapshot(auth);
+  const rejected = expect(result).rejects.toThrow();
+  await vi.waitFor(() => expect(started).toHaveLength(3));
+  expect(started.every(url => url.startsWith("http://127.0.0.1:8000/"))).toBe(true);
+  expect(started.map(url => new URL(url).pathname).sort()).toEqual([
+    "/api/v1/student/current-run", "/api/v1/student/races", "/api/v1/student/runs",
+  ]);
+  releases.forEach(release => release());
+  await rejected;
+});

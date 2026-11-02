@@ -224,6 +224,23 @@ export const fingerprint = (data: MapData) =>
     data.checkpoints,
   ]);
 export const mapEditorService = {
+  createCheckpoint: (
+    raceId: string,
+    body: {
+      code: string;
+      name: string;
+      sequence_no: number;
+      kind: "LAP" | "CHECKPOINT";
+      latitude: number;
+      longitude: number;
+      radius_m: number;
+    },
+    signal?: AbortSignal,
+  ) =>
+    request<{ checkpoint_id: string }>(
+      `/races/${encodeURIComponent(raceId)}/checkpoints`,
+      { method: "POST", body, signal },
+    ),
   read: readMap,
   patch: (id: string, body: Partial<CheckpointDraft>, signal?: AbortSignal) =>
     request(`/checkpoints/${encodeURIComponent(id)}`, {

@@ -1,14 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useLive } from "../../app/LiveProvider";
 import { Panel } from "../../components/ui";
 import {
+  attendancePayload,
   emptyAttendanceDraft,
   validateAttendanceDraft,
   validAttendanceCheckpoint,
   type AttendanceField,
 } from "../../services/attendanceDraft";
 import "./attendance.css";
+import { request, RequestError } from "../../services/client";
 
 const labels: Record<AttendanceField, string> = {
   check_in_checkpoint_id: "Trạm check-in",
@@ -22,8 +24,16 @@ const labels: Record<AttendanceField, string> = {
 };
 
 export function AttendanceSettings({ raceId }: { raceId: string }) {
-  const { snapshot, setDirty } = useLive();
+  const { snapshot, setDirty, refreshData } = useLive();
   const [draft, setDraft] = useState(emptyAttendanceDraft);
+  const [version, setVersion] = useState<number | null>(null);
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [notice, setNotice] = useState("");
+  const pending = useRef(false);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
   const [checked, setChecked] = useState(false);
   const [touched, setTouched] = useState<
     Partial<Record<AttendanceField, boolean>>
@@ -31,12 +41,14 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
   const cps = (snapshot?.checkpoints ?? []).filter(
     (cp) => cp.race_id === raceId,
   );
-  const dirty = Object.values(draft).some(Boolean);
+  const dirty = saved
+    ? JSON.stringify(draft) !== saved
+    : Object.values(draft).some(Boolean);
   const errors = validateAttendanceDraft(draft, cps, raceId);
   useEffect(() => {
-    setDirty(dirty);
+    setDirty(dirty || busy);
     return () => setDirty(false);
-  }, [dirty, setDirty]);
+  }, [dirty, busy, setDirty]);
   const change = (key: AttendanceField, value: string) => {
     setDraft((d) => ({ ...d, [key]: value }));
     setChecked(false);
@@ -57,6 +69,71 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
         {error(key)}
       </small>
     );
+  async function save() {
+    setChecked(true);
+    if (Object.keys(errors).length || pending.current || blocked || !dirty)
+      return;
+    pending.current = true;
+    setBusy(true);
+    setNotice("");
+    const submitted = { ...draft };
+    const c = new AbortController();
+    controller.current = c;
+    try {
+      const result = await request<{
+        config: { race_id: string; version: number; locked_at: string | null };
+      }>(`/admin/races/${encodeURIComponent(raceId)}/attendance-config`, {
+        method: "PUT",
+        body: attendancePayload(submitted, version ?? 0),
+        signal: c.signal,
+      });
+      if (c.signal.aborted) return;
+      if (
+        result.config.race_id !== raceId ||
+        !Number.isInteger(result.config.version) ||
+        result.config.version <= (version ?? 0)
+      ) {
+        setBlocked(true);
+        setNotice(
+          "Phản hồi chưa xác nhận đúng phiên bản. Giữ bản nháp; không gửi lại để tránh ghi đè.",
+        );
+        return;
+      }
+      setChecked(false);
+      setVersion(result.config.version);
+      setSaved(JSON.stringify(submitted));
+      setBlocked(!!result.config.locked_at);
+      setNotice(
+        "Đã lưu cấu hình điểm danh. Sinh viên có thể làm mới quyền điểm danh trên app.",
+      );
+      refreshData();
+    } catch (e) {
+      if (c.signal.aborted) return;
+      if (e instanceof RequestError && e.code === "VERSION_CONFLICT") {
+        setBlocked(true);
+        setNotice(
+          "Giải đã có cấu hình hoặc phiên bản đã thay đổi. Không ghi đè dữ liệu cũ. Backend chưa hỗ trợ đọc lại cấu hình; cần bổ sung API đọc để chỉnh sửa an toàn.",
+        );
+      } else if (e instanceof RequestError && e.code === "CONFIG_LOCKED") {
+        setBlocked(true);
+        setNotice(
+          "Cấu hình đã khóa sau check-in đầu tiên. Không thể chỉnh sửa.",
+        );
+      } else if (
+        !(e instanceof RequestError) ||
+        e.status === 0 ||
+        e.status >= 500
+      ) {
+        setBlocked(true);
+        setNotice(
+          "Chưa nhận được xác nhận lưu. Giữ bản nháp và không gửi lại: cấu hình có thể đã được lưu.",
+        );
+      } else setNotice(e.message);
+    } finally {
+      pending.current = false;
+      if (!c.signal.aborted) setBusy(false);
+    }
+  }
   const route = `/races/${encodeURIComponent(raceId)}?setup=route`;
   return (
     <Panel
@@ -65,14 +142,19 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
       className="attendance-settings"
     >
       <div className="attendance-notice" role="status">
-        <strong>Chưa thể đọc cấu hình hiện tại</strong>
+        <strong>
+          {version === null
+            ? "Tạo cấu hình điểm danh mới"
+            : `Đã lưu phiên bản ${version}`}
+        </strong>
         <p>
-          Hệ thống chưa hỗ trợ đọc cấu hình điểm danh. Chưa thể xác định giải đã
-          cấu hình, đang mở hay đã khóa. Chức năng lưu tạm thời chưa khả dụng.
+          Chọn checkpoint dùng cho check-in và check-out; có thể dùng cùng trạm
+          001 cho cả hai. Loại trạm tính vòng không tự bật điểm danh.
         </p>
         <p>
-          Bạn có thể chuẩn bị bản nháp bên dưới để kiểm tra thông tin. Bản nháp
-          chỉ nằm trên trang này, không thay đổi cấu hình của giải.
+          Backend chưa hỗ trợ đọc cấu hình cũ. Khi tạo mới, server chỉ chấp nhận
+          nếu giải chưa có cấu hình; nếu đã có, thao tác sẽ bị từ chối và không
+          ghi đè. Sau khi tải lại trang, chưa thể mở lại cấu hình đã lưu.
         </p>
       </div>
       <p>
@@ -90,6 +172,7 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
           </Link>
         </div>
       )}
+      {notice && <p role="status">{notice}</p>}
       <form
         className="editor-fields"
         noValidate
@@ -106,8 +189,14 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
         }}
       >
         <p>
-          <strong>Bản nháp chuẩn bị · Chưa lưu</strong> — Tất cả thời gian theo
-          giờ Việt Nam (Asia/Ho_Chi_Minh, UTC+7).
+          <strong>
+            {dirty
+              ? "Bản nháp · Chưa lưu"
+              : saved
+                ? "Đã lưu cấu hình"
+                : "Chưa nhập cấu hình"}
+          </strong>{" "}
+          — Tất cả thời gian theo giờ Việt Nam (Asia/Ho_Chi_Minh, UTC+7).
         </p>
         {(
           [
@@ -122,7 +211,7 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
           const key = `${prefix}_checkpoint_id` as const;
           const cp = cps.find((c) => c.checkpoint_id === draft[key]);
           return (
-            <fieldset key={prefix}>
+            <fieldset key={prefix} disabled={busy || blocked}>
               <legend>{title}</legend>
               <p>{help}</p>
               <label htmlFor={`attendance-${key}`}>
@@ -181,7 +270,7 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
             </fieldset>
           );
         })}
-        <fieldset>
+        <fieldset disabled={busy || blocked}>
           <legend>3. Điều kiện GPS</legend>
           <div className="attendance-grid">
             <label htmlFor="attendance-max_position_age_seconds">
@@ -253,21 +342,28 @@ export function AttendanceSettings({ raceId }: { raceId: string }) {
           </p>
         )}
         <div className="action-row">
-          <button className="button" type="submit">
+          <button className="button" type="submit" disabled={busy}>
             Kiểm tra bản nháp
           </button>
           <button
             className="button primary"
             type="button"
-            disabled
+            disabled={
+              busy || blocked || !dirty || Object.keys(errors).length > 0
+            }
+            onClick={save}
             aria-describedby="attendance-save-unavailable"
           >
-            Lưu cấu hình điểm danh
+            {busy
+              ? "Đang lưu…"
+              : version === null
+                ? "Tạo cấu hình điểm danh mới"
+                : "Lưu cấu hình điểm danh"}
           </button>
         </div>
         <p id="attendance-save-unavailable">
-          Cần đọc được cấu hình, phiên bản và trạng thái khóa từ máy chủ trước
-          khi cho phép lưu.
+          Chỉ lưu khi đủ trường hợp lệ. Server kiểm tra phiên bản và trạng thái
+          khóa trước khi chấp nhận.
         </p>
       </form>
     </Panel>
