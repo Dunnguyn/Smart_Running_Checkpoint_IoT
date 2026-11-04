@@ -327,7 +327,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
               {error}
             </div>
           )}
-          {listed && !races.length && location.pathname !== "/races" ? (
+          {listed && !races.length && !["/races", "/demos"].includes(location.pathname) ? (
             <div className="empty">
               <h2>Chưa có giải chạy</h2>
               <p>

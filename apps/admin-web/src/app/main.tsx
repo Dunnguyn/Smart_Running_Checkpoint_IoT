@@ -14,6 +14,7 @@ import { Dashboard } from "../features/dashboard/Dashboard";
 import { People } from "../features/runners/People";
 import { RunDetail } from "../features/runners/RunDetail";
 import { SimulationPanel } from "../features/races/SimulationPanel";
+import { KitDemoPage } from "../features/races/KitDemoPage";
 import { Races } from "../features/races/Races";
 import { Checkpoints } from "../features/checkpoints/Checkpoints";
 import { Empty } from "../components/ui";
@@ -60,6 +61,7 @@ const router = createBrowserRouter(
       <Route path="runners/:studentId/runs/:runId" element={<RunDetail />} />
       <Route path="races" element={<Races />} />
       <Route path="races/:raceId" element={<Races />} />
+      <Route path="demos" element={<KitDemoPage />} />
       <Route
         path="simulation"
         element={

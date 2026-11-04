@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Image, ScrollView, Text, View } from "react-native";
+import { ImageBackground, ScrollView, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   Badge,
@@ -56,12 +56,16 @@ export default function RaceDetail() {
     <View style={s.page}>
       <Header title="Chi tiết giải" back={back} />
       <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
-        <View style={{ backgroundColor: c.white }}>
-          <Image source={require("../../assets/neu-run-brand.png")}
-            accessibilityLabel="NEU RUN — Đại học Kinh tế Quốc dân"
-            style={{ width: "100%", aspectRatio: 460 / 199 }} resizeMode="contain" />
+        <ImageBackground
+          source={require("../../assets/neu-run-brand.png")}
+          resizeMode="cover"
+          blurRadius={1}
+          imageStyle={{ opacity: 0.5 }}
+          style={{ backgroundColor: c.navy, overflow: "hidden" }}
+          accessible={false}
+        >
           <LinearGradient
-            colors={["rgba(8,27,58,.22)", "rgba(8,27,58,.9)"]}
+            colors={["rgba(8,27,58,.18)", "rgba(8,27,58,.88)"]}
             style={{
               minHeight: 240,
               justifyContent: "flex-end",
@@ -82,7 +86,7 @@ export default function RaceDetail() {
               Run your campus. Own your pace.
             </Text>
           </LinearGradient>
-        </View>
+        </ImageBackground>
         <View style={s.body}>
           <View style={s.wrap}>
             <View

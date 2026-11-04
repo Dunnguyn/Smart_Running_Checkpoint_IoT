@@ -15,6 +15,7 @@ const navigation = [
   { to: "/races", label: "Giải chạy", icon: "flag", group: "QUẢN LÝ CHUNG" },
   { to: "/runners", label: "Sinh viên", icon: "users" },
   { to: "/simulation", label: "Mô phỏng", icon: "flask" },
+  { to: "/demos", label: "Demo kit C04", icon: "checkpoint" },
   { to: "/", label: "Tổng quan", icon: "grid", group: "VẬN HÀNH GIẢI" },
   { to: "/live", label: "Bản đồ trực tiếp", icon: "map" },
   { to: "/checkpoints", label: "Trạm kiểm soát", icon: "checkpoint" },
@@ -28,7 +29,7 @@ const navigation = [
 export function Shell() {
   const location = useLocation();
   const globalPage =
-    location.pathname === "/races" || location.pathname === "/simulation";
+    ["/races", "/simulation", "/demos"].includes(location.pathname);
   const [refreshing, setRefreshing] = useState(false);
   const refreshGuard = useRef(false);
   const [refreshError, setRefreshError] = useState("");
@@ -144,7 +145,7 @@ export function Shell() {
             </label>
           ) : (
             <strong className="global-context">
-              {location.pathname === "/simulation"
+              {location.pathname === "/demos" ? "Demo kit C04" : location.pathname === "/simulation"
                 ? "Mô phỏng"
                 : "Quản lý giải"}
             </strong>
