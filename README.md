@@ -6,9 +6,9 @@ NEU RUN là hệ thống hỗ trợ tổ chức và theo dõi giải chạy sinh
 
 ### Web quản trị
 
-Màn hình demo bộ kit C04 với khu vực kết nối, hướng dẫn lượt chạy và thông số hai vòng.
+Trang Tổng quan hiển thị tình hình giải chạy, các chỉ số tham gia, bản đồ tuyến chạy và tiến độ của người tham gia.
 
-![Web quản trị — kết nối và hướng dẫn demo kit C04](docs/images/admin-kit-demo.png)
+![Web quản trị — trang Tổng quan giải chạy với dữ liệu minh họa](docs/images/admin-overview.png)
 
 ### Ứng dụng sinh viên
 
@@ -105,21 +105,149 @@ Mỗi vòng yêu cầu tối thiểu 60 giây. Tuyến GPS mô phỏng dài kho�
 | Giao tiếp | REST API, WebSocket, Serial |
 | Kiểm tra chất lượng | TypeScript, ESLint, Vitest, Playwright |
 
-## Thiết lập môi trường
+## Môi trường phát triển
 
-Các thành phần được cấu hình độc lập bằng biến môi trường. Quy trình chuẩn bị gồm:
+| Công cụ | Mục đích | Môi trường tham chiếu |
+| --- | --- | --- |
+| Git | Quản lý mã nguồn | Git CLI |
+| Node.js và npm | Cài đặt, chạy và dựng các ứng dụng frontend | Node.js 24.13, npm 11.6 |
+| Python | Chạy backend và bộ mô phỏng | Python 3.14 |
+| SQLite | Lưu dữ liệu phát triển và demo | Không cần cài dịch vụ riêng |
+| Microsoft Edge | Chạy các script kiểm thử giao diện hiện có | Cần khi kiểm thử bằng Playwright |
 
-1. Cài đặt môi trường JavaScript và Python cùng các phụ thuộc của từng thành phần.
-2. Thiết lập cơ sở dữ liệu, thông tin xác thực và cấu hình kết nối.
-3. Khởi động backend trước khi sử dụng các tính năng cần API.
-4. Chọn chế độ dữ liệu phù hợp trên giao diện.
-5. Chuẩn bị thiết bị và quyền truy cập vị trí khi kiểm thử phần cứng hoặc ứng dụng di động.
+Các phiên bản trên là môi trường tham chiếu, không phải cam kết tương thích với mọi phiên bản khác. Dùng các tệp khóa phụ thuộc có sẵn để cài đặt frontend nhất quán.
 
-Các giá trị cấu hình phụ thuộc môi trường triển khai. Thông tin xác thực phải được cấp riêng và quản lý ngoài mã nguồn.
+Để chạy Android native, cần Android Studio, Android SDK, JDK phù hợp và máy ảo hoặc thiết bị đã bật chế độ phát triển. Chạy iOS native cần macOS và Xcode. Demo phần cứng cần Arduino, cảm biến HC-SR04, cáp USB truyền dữ liệu và chương trình trên kit tương thích với tín hiệu START/LAP.
+
+SQL Server là tùy chọn; nếu sử dụng cần chuẩn bị cơ sở dữ liệu và ODBC Driver phù hợp. Các bước dưới đây dùng SQLite.
+
+## Cài đặt và chạy
+
+Các lệnh bên dưới sử dụng **PowerShell trên Windows**, bắt đầu từ thư mục gốc của bản sao repository. Mỗi thành phần chạy trong một terminal riêng. Các đường dẫn đều tương đối trong repository; địa chỉ kết nối chỉ là ví dụ trên máy phát triển.
+
+### 1. Backend
+
+```powershell
+cd services/backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Trước khi khởi động, chỉnh cấu hình trong tệp môi trường vừa tạo:
+
+| Biến môi trường | Cách cấu hình |
+| --- | --- |
+| `DATABASE_URL` | Giữ cấu hình SQLite trong mẫu để chạy thử |
+| `ADMIN_API_KEY` | Khóa riêng cho quản trị viên |
+| `SIMULATOR_API_KEY` | Khóa riêng cho bộ mô phỏng |
+| `WEARABLE_API_KEY` | Khóa riêng cho thiết bị đeo |
+| `GATEWAY_API_KEY` | Khóa riêng cho gateway |
+| `STUDENT_JWT_SECRET` | Bí mật ký token của ứng dụng sinh viên |
+| `CORS_ORIGINS` | Danh sách nguồn web được phép, khớp với địa chỉ frontend |
+| `SIMULATOR_BASE_URL` | Địa chỉ backend mà bộ mô phỏng có thể truy cập |
+
+Thay toàn bộ giá trị khóa mẫu bằng các giá trị ngẫu nhiên riêng biệt. Có thể chạy lệnh sau cho từng khóa rồi lưu kết quả vào cấu hình cục bộ:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Khởi động backend trong cùng terminal:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Backend cung cấp kiểm tra trạng thái tại `http://127.0.0.1:8000/health` và tài liệu API tại `http://127.0.0.1:8000/docs`. Cơ sở dữ liệu SQLite được tạo khi ứng dụng khởi tạo; dữ liệu mới có thể được tạo bằng giao diện quản trị hoặc bộ mô phỏng.
+
+### 2. Web quản trị
+
+Trong terminal mới, bắt đầu từ thư mục gốc repository:
+
+```powershell
+cd apps/admin-web
+npm ci
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Thiết lập cấu hình kết nối:
+
+```dotenv
+VITE_DATA_MODE=api
+VITE_API_BASE_URL=http://localhost:8000/api/v1
+VITE_WS_BASE_URL=ws://localhost:8000
+```
+
+```powershell
+npm run dev
+```
+
+Mở địa chỉ do Vite hiển thị, mặc định là `http://localhost:5173`, rồi nhập khóa quản trị đã thiết lập ở backend. Khóa chỉ được giữ trong bộ nhớ giao diện; không đưa khóa vào biến `VITE_*`.
+
+- **Tổng quan:** theo dõi giải đang chọn, bản đồ và tiến độ người chạy.
+- **Mô phỏng:** tạo dữ liệu chạy thử qua backend mà không cần kit thật.
+- **Demo kit C04:** chọn cổng COM, xác nhận thông tin người tham gia và kết nối bộ kit. Đóng Arduino Serial Monitor trước khi kết nối; nhấn START trên kit và thực hiện ba lượt qua theo hướng dẫn.
+
+Để xem trước giao diện độc lập, có thể đặt `VITE_DATA_MODE=mock` và khởi động lại Vite. Chế độ này không kết nối bộ kit thật.
+
+### 3. Ứng dụng sinh viên
+
+Trong terminal mới, bắt đầu từ thư mục gốc repository:
+
+```powershell
+cd apps/student-mobile
+npm ci
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Cấu hình xem trước bằng dữ liệu mẫu:
+
+```dotenv
+EXPO_PUBLIC_SERVICE_MODE=mock
+EXPO_PUBLIC_GPS_MODE=demo
+EXPO_PUBLIC_API_BASE_URL=
+EXPO_PUBLIC_BACKGROUND_GPS=false
+```
+
+```powershell
+npm run web
+```
+
+Bản xem trước mặc định chạy tại `http://localhost:8083`. Để kết nối backend, chuyển chế độ dịch vụ sang `api`, GPS sang `device` và đặt `EXPO_PUBLIC_API_BASE_URL` tới backend mà thiết bị có thể truy cập. Tài khoản sinh viên phải được cấp qua luồng quản trị; không sử dụng tài khoản mẫu để xác minh tích hợp thật.
+
+Nếu dùng bản web ở chế độ API, bổ sung nguồn web tương ứng vào `CORS_ORIGINS` của backend. Bản đồ native trên Android có thể cần `ANDROID_MAPS_API_KEY` được giới hạn theo ứng dụng và chứng thư ký; không dùng khóa dịch vụ phía máy chủ.
+
+Với Android, chạy `npm run android` sau khi chuẩn bị SDK và thiết bị. Trên macOS, dùng `npm run ios`. Lệnh `npm start` mở máy chủ phát triển cho development client. GPS nền yêu cầu bật cấu hình tương ứng, tạo lại bản dựng native và cấp quyền trên thiết bị. Chế độ API không chấp nhận GPS mô phỏng.
+
+Địa chỉ `localhost` trên điện thoại trỏ tới chính điện thoại. Khi thử trên thiết bị thật, cần cấu hình backend lắng nghe trên giao diện mạng phù hợp và cung cấp địa chỉ thiết bị có thể truy cập. Chỉ mở kết nối trong môi trường phát triển được kiểm soát.
+
+### Kiểm tra cấu hình
+
+| Tình huống | Nội dung cần kiểm tra |
+| --- | --- |
+| Web không kết nối backend | Backend đã chạy, địa chỉ REST có tiền tố API, khóa quản trị và CORS |
+| Đổi cổng backend | Cập nhật kết nối REST, WebSocket, bộ mô phỏng và ứng dụng sinh viên |
+| Thay đổi biến môi trường chưa có hiệu lực | Khởi động lại thành phần tương ứng; kiểm tra cấu hình môi trường cục bộ ghi đè |
+| Không tìm thấy cổng COM | Cáp USB, driver thiết bị, cổng được hệ điều hành nhận và tiến trình khác đang giữ cổng |
+| Không ghi được GPS | Quyền vị trí, chế độ GPS, cấu hình bản dựng và kết nối tới backend |
+
+Không commit tệp cấu hình riêng, khóa truy cập hoặc cơ sở dữ liệu phát sinh khi chạy thử.
 
 ## Kiểm thử và phạm vi sử dụng
 
 Dự án có kiểm tra kiểu dữ liệu, quy tắc mã nguồn, kiểm thử tự động và các kịch bản kiểm thử giao diện. Kiểm thử bằng dữ liệu giả lập phục vụ xác minh hành vi phần mềm; kiểm thử thiết bị thật cần được thực hiện riêng.
+
+Sau khi cài đặt phụ thuộc, chạy các lệnh sau trong thư mục của từng ứng dụng frontend:
+
+```powershell
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+Bản dựng web quản trị tạo tài nguyên phục vụ triển khai. Lệnh build của ứng dụng sinh viên xuất bundle; không tạo gói cài đặt APK hoặc IPA. Các script kiểm thử giao diện có thể có yêu cầu dữ liệu riêng, cần kiểm tra trước khi chạy trên môi trường dùng chung.
 
 Phiên bản hiện tại phục vụ phát triển, nghiên cứu và trình diễn. Việc triển khai vận hành cần đánh giá thêm về bảo mật, phân quyền, bảo vệ dữ liệu vị trí, độ ổn định GPS, sao lưu và khả năng mở rộng.
 
