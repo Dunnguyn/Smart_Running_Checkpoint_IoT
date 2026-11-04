@@ -6,9 +6,9 @@ NEU RUN là hệ thống hỗ trợ tổ chức và theo dõi giải chạy sinh
 
 ### Web quản trị
 
-Màn hình demo bộ kit C04 với khu vực kết nối, hướng dẫn lượt chạy và thông số hai vòng.
+Trang Tổng quan hiển thị tình hình giải chạy, các chỉ số tham gia, bản đồ tuyến chạy và tiến độ của người tham gia.
 
-![Web quản trị — kết nối và hướng dẫn demo kit C04](docs/images/admin-kit-demo.png)
+![Web quản trị — trang Tổng quan giải chạy với dữ liệu minh họa](docs/images/admin-overview.png)
 
 ### Ứng dụng sinh viên
 

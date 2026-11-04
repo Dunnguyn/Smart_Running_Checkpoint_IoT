@@ -4,9 +4,9 @@ Web quản trị hỗ trợ ban tổ chức cấu hình giải chạy, quản l�
 
 ## Giao diện
 
-![Giao diện demo bộ kit C04 với dữ liệu minh họa](../../docs/images/admin-kit-demo.png)
+![Trang Tổng quan giải chạy với dữ liệu minh họa](../../docs/images/admin-overview.png)
 
-Màn hình kết nối bộ kit và hướng dẫn hoàn thành hai vòng. Thông tin người tham gia trong ảnh là dữ liệu minh họa.
+Trang Tổng quan tập hợp các chỉ số giải chạy, bản đồ tuyến, tiến độ người tham gia và sự kiện gần nhất. Thông tin trong ảnh là dữ liệu minh họa đã ẩn danh.
 
 ## Chức năng
 
