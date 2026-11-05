@@ -236,49 +236,78 @@ def _serial_reader(demo_id: str, port: str, loop: asyncio.AbstractEventLoop) -> 
 
 
 async def _emit_kit_gps(demo_id: str) -> None:
+    """Move the demo runner on the map; Arduino passages re-anchor it at C04."""
     with core.SessionLocal() as db:
         demo = db.get(KitDemoSession, demo_id)
         if not demo or not demo.run_id:
             return
-        cp = db.get(core.Checkpoint, demo.checkpoint_id)
-        run_id, race_id = demo.run_id, demo.race_id
-        route = _kit_route_samples()
-        if not cp:
+        checkpoint = db.get(core.Checkpoint, demo.checkpoint_id)
+        run = db.get(core.RunSession, demo.run_id)
+        if not checkpoint or not run:
             return
-        start_lat, start_lon = cp.latitude, cp.longitude
-    last_lat, last_lon, steps, sequence = start_lat, start_lon, 0, 1
+        run_id, race_id = run.id, demo.race_id
+        start_lat, start_lon = checkpoint.latitude, checkpoint.longitude
+        route = _kit_route_samples(spacing_m=2.0)
+        observed_pass = demo.last_lap_number
+        steps = run.total_steps
+
+    last_lat, last_lon = start_lat, start_lon
+    route_index = 1
+    sequence = 2
+    loop = asyncio.get_running_loop()
+    hold_until = 0.0
     while True:
-        for lat, lon in route[1:]:
-            delta = core.haversine_m(last_lat, last_lon, lat, lon)
-            # The mock wearable advances at a steady, plausible jogging pace.
-            sample_interval = max(0.25, delta / 3.2)
-            await asyncio.sleep(sample_interval)
-            now = core.now_utc()
+        if route_index >= len(route):
+            route_index = 1
+        target_lat, target_lon = route[route_index]
+        delta = core.haversine_m(last_lat, last_lon, target_lat, target_lon)
+        sample_interval = max(0.25, delta / 3.2)
+        await asyncio.sleep(sample_interval)
+        if loop.time() < hold_until:
+            continue
+
+        now = core.now_utc()
+        with core.SessionLocal() as db:
+            demo = db.get(KitDemoSession, demo_id)
+            run = db.get(core.RunSession, run_id)
+            checkpoint = db.get(core.Checkpoint, demo.checkpoint_id) if demo else None
+            if (not demo or not run or not checkpoint or demo.status != "RUNNING"
+                    or run.status != "ACTIVE"):
+                return
+            if demo.last_lap_number != observed_pass:
+                # A physical HC-SR04 passage is authoritative: snap to C04 and
+                # restart the visual track from that same point. Hold there long
+                # enough for the map's live marker to visibly acknowledge it.
+                observed_pass = demo.last_lap_number
+                last_lat, last_lon = checkpoint.latitude, checkpoint.longitude
+                route_index = 1
+                hold_until = loop.time() + 1.25
+                continue
+
+            # Count only the GPS-simulated segment since the previous sample.
+            # The C04 snap itself does not invent distance or steps.
+            delta = core.haversine_m(last_lat, last_lon, target_lat, target_lon)
             steps += max(1, round(delta / 0.70))
-            with core.SessionLocal() as db:
-                demo = db.get(KitDemoSession, demo_id)
-                run = db.get(core.RunSession, run_id)
-                if not demo or not run or demo.status not in {"RUNNING", "FINISH_REQUESTED"} or run.status != "ACTIVE":
-                    return
-                db.add(core.GpsPoint(run_id=run.id, wearable_device_id=demo.wearable_id,
-                    latitude=lat, longitude=lon, recorded_at=now, received_at=now,
-                    accuracy_m=4.0, speed_mps=delta / sample_interval, total_steps=steps,
-                    source="SIMULATED_GPS", idempotency_key=f"kit-demo:{demo_id}:{sequence}",
-                    sample_id=core.new_id(), sequence=sequence, segment_id=1))
-                run.distance_total_m += delta
-                run.total_steps = steps
-                run.last_latitude, run.last_longitude = lat, lon
-                run.last_seen_at = run.last_gps_recorded_at = now
-                run.revision += 1
-                wearable = db.get(core.RunnerWearable, demo.wearable_id)
-                if wearable:
-                    wearable.last_seen_at = now
-                db.commit()
-                snapshot = core.run_dict(db, run)
-            await core.hub.publish(race_id, {"event_id": core.new_id(), "type": "runner.updated",
-                "race_id": race_id, "occurred_at": now.isoformat(), "data": snapshot})
-            last_lat, last_lon = lat, lon
-            sequence += 1
+            db.add(core.GpsPoint(run_id=run.id, wearable_device_id=demo.wearable_id,
+                latitude=target_lat, longitude=target_lon, recorded_at=now, received_at=now,
+                accuracy_m=4.0, speed_mps=delta / sample_interval, total_steps=steps,
+                source="SIMULATED_GPS", idempotency_key=f"kit-demo:{demo_id}:{sequence}",
+                sample_id=core.new_id(), sequence=sequence, segment_id=1))
+            run.distance_total_m += delta
+            run.total_steps = steps
+            run.last_latitude, run.last_longitude = target_lat, target_lon
+            run.last_seen_at = run.last_gps_recorded_at = now
+            run.revision += 1
+            wearable = db.get(core.RunnerWearable, demo.wearable_id)
+            if wearable:
+                wearable.last_seen_at = now
+            db.commit()
+            snapshot = core.run_dict(db, run)
+        await core.hub.publish(race_id, {"event_id": core.new_id(), "type": "runner.updated",
+            "race_id": race_id, "occurred_at": now.isoformat(), "data": snapshot})
+        last_lat, last_lon = target_lat, target_lon
+        route_index += 1
+        sequence += 1
 
 
 async def _process_kit_passage(demo_id: str, lap_number: int) -> None:
@@ -298,7 +327,7 @@ async def _process_kit_passage(demo_id: str, lap_number: int) -> None:
             db.flush()
             demo.last_lap_number = lap_number
             demo.run_id, demo.started_at, demo.status = run.id, now, "RUNNING"
-            demo.last_message = "Kit xác nhận xuất phát. GPS và bước mô phỏng đã chạy; cần hoàn tất 2 vòng, mỗi vòng kết thúc tại C04."
+            demo.last_message = "Kit xác nhận xuất phát. GPS và bước mô phỏng bắt đầu; lượt qua C04 thứ hai ghi vòng 1, lượt thứ ba ghi vòng 2 và kết thúc."
             cp = db.get(core.Checkpoint, demo.checkpoint_id)
             point = core.GpsPoint(run_id=run.id, wearable_device_id=demo.wearable_id,
                 latitude=cp.latitude, longitude=cp.longitude, recorded_at=now, received_at=now,
@@ -341,17 +370,9 @@ async def _process_kit_passage(demo_id: str, lap_number: int) -> None:
         run = db.get(core.RunSession, demo.run_id)
         if not run or run.status != "ACTIVE":
             return
+        # Each new Arduino counter value represents one real checkpoint passage.
+        # This kit demo does not require GPS to complete the physical 400-450 m loop.
         demo.last_lap_number = lap_number
-        race = db.get(core.Race, demo.race_id)
-        min_lap_seconds = race.min_lap_interval_seconds if race else 60
-        elapsed = (now - core.aware(run.last_lap_at or run.started_at)).total_seconds()
-        if elapsed < min_lap_seconds:
-            demo.last_message = (
-                f"Chưa đủ thời gian cho vòng mới ({elapsed:.0f}/{min_lap_seconds} giây). "
-                "Tiếp tục chạy hết một vòng rồi đi qua C04."
-            )
-            db.commit()
-            return
         cp = db.get(core.Checkpoint, demo.checkpoint_id)
         # The physical kit is authoritative for the crossing time/location.
         # Re-anchor the simulated GPS stream at C04 so small timing differences
@@ -381,21 +402,30 @@ async def _process_kit_passage(demo_id: str, lap_number: int) -> None:
         db.flush()
         event.passage_id = passage.id
         passage.consumed_by_event_id = event.id
-        counted, duration = core.record_lap(db, run, cp, now, "ARDUINO_KIT_DEMO", lap_source_id)
-        lap = db.scalar(select(core.LapEvent).where(core.LapEvent.source_event_id == lap_source_id))
-        if counted:
-            event.lap_status, event.lap_event_id = "COUNTED", lap.id if lap else None
-            event.lap_number = run.lap_count
-            event.lap_duration_ms = duration * 1000 if duration is not None else None
-            event.reason_code = "KIT_DEMO_LAP_COUNTED"
-            if run.status == "COMPLETED":
-                demo.status, demo.ended_at = "COMPLETED", now
-                demo.last_message = "Kit xác nhận hoàn thành vòng 2/2 tại C04; thời gian, quãng đường và bước chân đã chốt."
-            else:
-                demo.last_message = "Kit xác nhận vòng 1/2 tại C04; số liệu đã lưu. Tiếp tục thêm một vòng để kết thúc giải."
+        race = db.get(core.Race, demo.race_id)
+        if run.lap_count >= (race.total_laps if race else 2):
+            return
+        duration = max(0, int((now - core.aware(run.last_lap_at or run.started_at)).total_seconds()))
+        run.lap_count += 1
+        run.last_lap_duration_s = duration
+        run.last_lap_at = now
+        run.revision += 1
+        lap = core.LapEvent(run_id=run.id, checkpoint_id=cp.id, occurred_at=now,
+            lap_no=run.lap_count, duration_s=duration, source="ARDUINO_KIT_DEMO",
+            source_event_id=lap_source_id)
+        db.add(lap)
+        db.flush()
+        core.maybe_complete_run(db, run, now)
+        event.lap_status, event.lap_event_id = "COUNTED", lap.id
+        event.lap_number = run.lap_count
+        event.lap_duration_ms = duration * 1000
+        event.reason_code = "KIT_DEMO_LAP_COUNTED"
+        event.method = "KIT_DEMO_DIRECT"
+        if run.status == "COMPLETED":
+            demo.status, demo.ended_at = "COMPLETED", now
+            demo.last_message = "Lượt qua C04 thứ ba: vòng 2/2 hoàn tất. Đồng hồ đã dừng; GPS và bước chân được chốt."
         else:
-            demo.last_message = f"Chưa ghi nhận vòng; thời lượng vòng={duration} giây. Tiếp tục chạy và qua lại C04 sau khi đủ thời gian tối thiểu."
-            event.lap_status, event.reason_code = "NOT_COUNTED", "LAP_VALIDATION_FAILED"
+            demo.last_message = "Lượt qua C04 thứ hai: đã chốt vòng 1/2. Runner được neo tại C04; tiếp tục đến lượt qua thứ ba."
         db.commit()
         run_data, event_data, race_id = core.run_dict(db, run), core.checkpoint_event_dict(db, event), demo.race_id
         completed = demo.status == "COMPLETED"
@@ -428,7 +458,7 @@ async def start_kit_demo(data: KitDemoStart, db: Session = Depends(core.db_sessi
     race = core.Race(name=f"Demo kit C04 · {data.full_name} · {now:%Y%m%d-%H%M%S}",
         start_at=now, status="LIVE", route_name="Một vòng quanh giảng đường A1/A2 · demo kit C04",
         route_profile="NEU_DEMO", route_length_min_m=400, route_length_max_m=450,
-        total_laps=2, min_lap_interval_seconds=60,
+        total_laps=2, min_lap_interval_seconds=0,
         checkpoint_mode="GPS_AND_ARDUINO", inner_radius_m=8, outer_radius_m=14,
         match_window_seconds=1, late_grace_seconds=1, max_sample_gap_seconds=3)
     db.add(race)
@@ -446,6 +476,8 @@ async def start_kit_demo(data: KitDemoStart, db: Session = Depends(core.db_sessi
     for seq, (lat_i, lon_i, code) in enumerate(_scaled_route(), start=1):
         db.add(core.RaceRoutePoint(race_id=race.id, sequence_no=seq, latitude=lat_i,
             longitude=lon_i, checkpoint_id=cp.id if code == "NEU-C04" else None))
+    # Flush referenced parent rows before inserting the session so SQLite foreign-key checks are deterministic.
+    db.flush()
     demo = KitDemoSession(race_id=race.id, student_id=student.id, checkpoint_id=cp.id,
         device_id=device_id, wearable_id=wearable_id, serial_port=_port_name(data.serial_port))
     db.add(demo)
