@@ -11,9 +11,11 @@ export interface KitDemo {
   error: string | null;
   last_lap_number: number;
   run: {
+    run_id?: string;
     status: string;
     total_laps: number;
     lap_count: number;
+    last_lap_duration_s?: number | null;
     duration_total_s: number;
     distance_total_m: number;
     total_steps: number;
@@ -52,7 +54,7 @@ export function kitProgress(demo: KitDemo) {
       demo.status === "COMPLETED"
         ? `Đã hoàn thành ${laps}/${total} vòng tại C04.`
         : demo.run
-          ? `Đã ghi nhận ${laps}/${total} vòng. Tiếp tục chạy và qua C04 sau ít nhất 60 giây mỗi vòng.`
+          ? `Đã ghi nhận ${laps}/${total} vòng. Lượt qua C04 tiếp theo sẽ được backend xác nhận.`
           : "Nhấn START trên kit, sau đó đi qua C04 để bắt đầu đồng hồ.",
   };
 }
