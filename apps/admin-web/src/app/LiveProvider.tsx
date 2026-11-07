@@ -137,6 +137,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       };
     });
   }, []);
+  const refreshData = useCallback(() => refreshRaceLive(raceId), [raceId]);
   const retry = () => setRevision((n) => n + 1);
   useEffect(() => {
     if (!ready) return;
@@ -253,7 +254,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         retry,
         reloadRaces,
         forgetRace,
-        refreshData: () => refreshRaceLive(raceId),
+        refreshData,
         connection,
         start: dataMode === "mock" ? simulator.start : () => {},
         pause: dataMode === "mock" ? simulator.pause : () => {},

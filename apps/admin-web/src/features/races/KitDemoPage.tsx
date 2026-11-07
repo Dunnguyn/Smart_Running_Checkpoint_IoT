@@ -24,7 +24,7 @@ function restore() {
   }
 }
 export function KitDemoPage() {
-  const { reloadRaces } = useLive();
+  const { reloadRaces, selectRace, raceId, snapshot, refreshData } = useLive();
   const [id, setId] = useState(restore);
   const [demo, setDemo] = useState<KitDemo | null>(null);
   const [port, setPort] = useState("COM03");
@@ -40,6 +40,8 @@ export function KitDemoPage() {
   const [portsLoading, setPortsLoading] = useState(false);
   const [portsError, setPortsError] = useState("");
   const guard = useRef(false);
+  const refreshedRun = useRef("");
+  const hasSnapshot = snapshot !== null;
   const enabled = dataMode !== "mock";
 
   useEffect(() => {
@@ -53,6 +55,36 @@ export function KitDemoPage() {
     });
     return () => controller.abort();
   }, [demo?.race_id, reloadRaces]);
+
+  useEffect(() => {
+    if (demo?.race_id) selectRace(demo.race_id);
+  }, [demo?.race_id, selectRace]);
+
+  useEffect(() => {
+    refreshedRun.current = "";
+  }, [id]);
+
+  useEffect(() => {
+    const runId = demo?.run?.run_id;
+    if (!runId || raceId !== demo?.race_id || !hasSnapshot) return;
+    const key = `${id}:${runId}`;
+    if (refreshedRun.current === key) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function sync() {
+      try {
+        await refreshData();
+        if (!disposed) refreshedRun.current = key;
+      } catch {
+        if (!disposed) timer = setTimeout(sync, 3000);
+      }
+    }
+    void sync();
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+    };
+  }, [id, demo?.run?.run_id, demo?.race_id, raceId, hasSnapshot, refreshData]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -147,11 +179,11 @@ export function KitDemoPage() {
         </span>
         <span>
           <ReferenceIcon name="route" />
-          <strong>400–450 m</strong> mỗi vòng
+          <strong>GPS và bước chân</strong> mô phỏng
         </span>
         <span>
           <ReferenceIcon name="clock" />
-          <strong>≥ 60 giây</strong> mỗi vòng
+          <strong>3 lượt qua</strong> C04
         </span>
         <span>
           <ReferenceIcon name="checkpoint" />
@@ -306,11 +338,11 @@ export function KitDemoPage() {
               ["Xuất phát", "Lượt qua đầu tiên mở phiên và bắt đầu đồng hồ."],
               [
                 "Hoàn thành vòng 1",
-                "Qua C04 sau ít nhất 60 giây. Tiếp tục chạy vòng thứ hai.",
+                "Lượt qua thứ hai ghi nhận vòng 1/2, rồi tiếp tục mô phỏng.",
               ],
               [
                 "Về đích",
-                "Qua C04 sau vòng 2 hợp lệ. Kết quả và đồng hồ tự chốt.",
+                "Lượt qua thứ ba ghi nhận vòng 2/2 và kết thúc. Kết quả và đồng hồ tự chốt.",
               ],
             ].map(([title, description], index) => (
               <li
@@ -336,7 +368,7 @@ export function KitDemoPage() {
             <ReferenceIcon name="walk" />
             <p>
               Cảm biến ghi nhận lượt qua thực tế. GPS và bước chân được mô phỏng
-              ở tốc độ khoảng <strong>3,2 m/s</strong>.
+              bởi backend trên tuyến A1/A2. Vị trí runner được neo về C04 khi kit xác nhận.
             </p>
           </div>
         </Panel>
@@ -377,6 +409,10 @@ export function KitDemoPage() {
                 <div>
                   <dt>Thời gian</dt>
                   <dd>{duration(demo.run?.duration_total_s ?? 0)}</dd>
+                </div>
+                <div>
+                  <dt>Thời gian vòng vừa rồi</dt>
+                  <dd>{demo.run?.last_lap_duration_s == null ? "—" : duration(demo.run.last_lap_duration_s)}</dd>
                 </div>
                 <div>
                   <dt>Quãng đường mô phỏng</dt>
